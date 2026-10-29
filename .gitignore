@@ -18,7 +18,8 @@ node_modules
 /out/
 
 # production
-/build
+/build/*
+!build/icon.ico
 
 # misc
 .DS_Store

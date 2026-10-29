@@ -52,14 +52,31 @@ cargo tauri dev
 This runs `npm run dev` (`beforeDevCommand`) and opens the webview at
 `http://localhost:3000`.
 
-### Release installer
+### Release installer (one command)
 
 ```powershell
-cargo tauri build
+npm run desktop:build        # regenerates icons, then cargo tauri build (msi + exe)
+npm run desktop:build:exe    # NSIS .exe installer only (faster)
 ```
 
-Output: `src-tauri/target/release/bundle/msi/Nook-0.2.1.msi` (and/or
-`nsis/Nook-0.2.1-setup.exe` depending on targets installed).
+Output: `src-tauri/target/release/bundle/msi/Nook-0.2.1.msi` and/or
+`src-tauri/target/release/bundle/nsis/Nook-0.2.1-setup.exe`.
+
+### CI: GitHub Actions workflow (`.github/workflows/build-exe.yml`)
+
+The same pipeline runs on GitHub — no local Rust/Node needed:
+
+1. `windows-latest` runner → checkout → Node 20 + stable Rust (+ cargo cache)
+2. `npm ci` → `npx prisma generate` (pulls the **win32** query engine)
+3. `node scripts/gen-icon.mjs` → fresh PNG set + multi-res `icon.ico`
+4. `npm run build` → Next.js standalone server (static + public copied in)
+5. `npx tauri build --bundles msi,nsis` → bundles the installers
+6. Uploads `Nook-windows-installers` artifact; on `v*` tags also publishes a
+   GitHub Release with the `.exe`/`.msi` attached.
+
+Trigger it manually from **Actions → Build Windows EXE → Run workflow**, or
+push a tag: `git tag v0.2.1 && git push --tags`. Download the built `.exe`
+from the run's **Artifacts** section (or the Release page for tags).
 
 ### What ships next to `Nook.exe`
 
@@ -166,8 +183,21 @@ the live URL, live tool list, per-agent config snippets (Claude Code, Cursor,
 Codex CLI, OpenCode) with copy-to-clipboard using the live URL, a bearer-token
 lock, and a "Test connection" button.
 
-## Apple-style icon
+## App icon (generated)
 
-Replaced the logo mark with a proper Apple-style icon: rounded squircle, lime
-gradient, drop shadow, and a centered pixel pet face. `icon.png` (512 & 1024),
-`tray-icon.png`, `icon.ico` (multi-res), plus 16–1024 PNGs in `src-tauri/icons/`.
+One deterministic script draws the whole icon set — no image assets to hand-edit:
+
+```powershell
+npm run icon    # node scripts/gen-icon.mjs
+```
+
+It renders a cozy dusk-squircle mark (gradient sky, crescent moon, twinkles,
+warm lamp dot, lime pixel bean with a face) at every size and writes:
+
+- `src-tauri/icons/{16,32,48,64,128,128x128,256,512,1024}.png` + `icon.png` + `tray-icon.png`
+- `src-tauri/icons/icon.ico` — multi-res (16–256) **Windows icon used by tauri-bundler** for `Nook.exe`, MSI and NSIS
+- `build/icon.ico` — same ICO (legacy location)
+- `public/icon-{192,512}.png` — PWA / web art
+
+`npm run desktop:build*` regenerates icons automatically before bundling, and
+the CI workflow does the same, so the exe always ships the latest icon.
