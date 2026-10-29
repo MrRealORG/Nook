@@ -34,6 +34,16 @@ const MAIN_LABEL: &str = "main";
 const DATA_SUBDIR: &str = "Nook";
 const SEED_DB_RESOURCE: &str = "resources/db/custom.db";
 
+// Node runtime shipped INSIDE the installer (CI stages node.exe here), so the
+// app no longer depends on Node.js being installed on the user's machine.
+#[cfg(windows)]
+const NODE_RUNTIME_REL: &str = "resources/node-runtime/node.exe";
+#[cfg(not(windows))]
+const NODE_RUNTIME_REL: &str = "resources/node-runtime/node";
+
+/// Where the Next.js standalone build is staged inside the bundle.
+const APP_STAGE_REL: &str = "resources/app";
+
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static SERVER_CHILD: OnceLock<Mutex<Option<std::process::Child>>> = OnceLock::new();
 static WINDOW_STATE: OnceLock<Mutex<Option<WindowState>>> = OnceLock::new();
@@ -144,9 +154,48 @@ fn toggle_maximize(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn close_window(app: AppHandle) -> Result<(), String> {
+    // With "minimize to tray" enabled, the [X] button parks Nook in the
+    // notification area instead of quitting (standard Windows tray-app
+    // behaviour). Quit lives in the appearance menu / Ctrl+Q with tray off.
+    let to_tray = MINIMIZE_TO_TRAY
+        .get()
+        .map(|s| s.lock().map(|g| *g).unwrap_or(false))
+        .unwrap_or(false);
+    if to_tray {
+        if let Some(w) = app.get_webview_window(MAIN_LABEL) {
+            let _ = w.hide();
+            return Ok(());
+        }
+    }
     stop_server();
     app.exit(0);
     Ok(())
+}
+
+/// Open the Nook data folder (%LOCALAPPDATA%\Nook) in the file explorer —
+/// used by the boot screen's "Open logs folder" button.
+#[tauri::command]
+fn open_data_folder() -> Result<(), String> {
+    let dir = data_dir_path()?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut c = Command::new("explorer");
+        c.arg(&dir).creation_flags(0x00000008); // CREATE_NO_WINDOW
+        c.spawn().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
 }
 
 #[tauri::command]
@@ -349,24 +398,91 @@ fn resource_path(name: &str) -> Result<PathBuf, String> {
         .map_err(|_| format!("resource {name} not found"))
 }
 
-/// Where the installable app lives: next to the exe (Windows MSI layout) or in
-/// the bundle resource dir (macOS). Ship `.next/`, `public/` and prod
-/// `node_modules/` alongside `Nook.exe` — see docs/DESKTOP.md.
+/// Resolve the Node.js runtime that runs the embedded Next.js server.
+/// Prefers the copy bundled inside the app (works on machines without Node),
+/// then the resource dir, and finally whatever `node` is on PATH.
+fn node_exe() -> String {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(NODE_RUNTIME_REL));
+        }
+    }
+    if let Ok(handle) = app_handle() {
+        if let Ok(rd) = handle.path().resource_dir() {
+            if !rd.as_os_str().is_empty() {
+                candidates.push(rd.join(NODE_RUNTIME_REL));
+                // Some layouts strip the "resources/" prefix when installing.
+                let alt = rd
+                    .join("node-runtime")
+                    .join(Path::new(NODE_RUNTIME_REL).file_name().unwrap_or_default());
+                candidates.push(alt);
+            }
+        }
+    }
+    for c in &candidates {
+        if c.exists() {
+            return c.to_string_lossy().into_owned();
+        }
+    }
+    "node".to_string()
+}
+
+/// Push a message onto the boot splash (public/splash.html).
+fn boot_state(text: &str) {
+    if let Ok(js) = serde_json::to_string(text) {
+        if let Some(w) = APP_HANDLE.get().and_then(|h| h.get_webview_window(MAIN_LABEL)) {
+            let _ = w.eval(&format!(
+                "window.__NOOK_BOOT__ && window.__NOOK_BOOT__.state({js}, true);"
+            ));
+        }
+    }
+}
+
+/// Engine healthy — fade the splash out and load the real app.
+fn boot_done(port: u16) {
+    if let Some(w) = APP_HANDLE.get().and_then(|h| h.get_webview_window(MAIN_LABEL)) {
+        let _ = w.eval(&format!(
+            "window.__NOOK_BOOT__ && window.__NOOK_BOOT__.done({port});"
+        ));
+    }
+}
+
+/// Engine failed after every retry — show the friendly error card.
+fn boot_fail(text: &str, hint: Option<&str>) {
+    let msg = serde_json::to_string(text).unwrap_or_else(|_| "\"Nook could not start\"".into());
+    let hint_js = hint
+        .and_then(|h| serde_json::to_string(h).ok())
+        .unwrap_or_else(|| "null".to_string());
+    if let Some(w) = APP_HANDLE.get().and_then(|h| h.get_webview_window(MAIN_LABEL)) {
+        let _ = w.eval(&format!(
+            "window.__NOOK_BOOT__ && window.__NOOK_BOOT__.fail({msg}, {hint_js});"
+        ));
+    }
+}
+
+/// Where the embedded Next.js server lives. The installer now stages the whole
+/// standalone build under `resources/app/` (see scripts/copy-standalone.mjs),
+/// so the normal layout is `<install>/resources/app/.next/standalone/server.js`.
 fn install_dir() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut candidates: Vec<PathBuf> = vec![
-        exe_dir.join(".next/standalone/server.js"),
-        exe_dir.join("resources/app/.next/standalone/server.js"),
+        // staged bundle resources (the normal case)
+        exe_dir.join(APP_STAGE_REL).join(".next/standalone/server.js"),
+        exe_dir.join(".next/standalone/server.js"), // dev layout: files beside the exe
     ];
-    if let Ok(Ok(resource_dir)) = app_handle()
-        .map(|a| a.path().resource_dir())
-    {
+    if let Ok(Ok(resource_dir)) = app_handle().map(|a| a.path().resource_dir()) {
         if !resource_dir.as_os_str().is_empty() {
+            candidates.push(resource_dir.join(APP_STAGE_REL).join(".next/standalone/server.js"));
             candidates.push(resource_dir.join(".next/standalone/server.js"));
+            candidates.push(resource_dir.parent().map(|p| p.join(APP_STAGE_REL).join(".next/standalone/server.js")).unwrap_or_default());
         }
     }
     for c in &candidates {
+        if c.as_os_str().is_empty() {
+            continue;
+        }
         if c.exists() {
             return Ok(c.parent().unwrap().to_path_buf());
         }
@@ -404,7 +520,16 @@ fn spawn_server(port: u16) -> Result<(), String> {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
 
-    let mut cmd = Command::new("node");
+    // keep server.log from growing forever
+    let log_path = data_dir.join("server.log");
+    if let Ok(meta) = fs::metadata(&log_path) {
+        if meta.len() > 2_000_000 {
+            let _ = fs::write(&log_path, b"");
+        }
+    }
+
+    let node = node_exe();
+    let mut cmd = Command::new(&node);
     cmd.arg(".next/standalone/server.js")
         .current_dir(&dir)
         .env("DATABASE_URL", &database_url)
@@ -420,9 +545,14 @@ fn spawn_server(port: u16) -> Result<(), String> {
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("could not start Nook server — is Node.js installed and on PATH? ({e})"))?;
+        .map_err(|e| {
+            if node == "node" {
+                format!("could not start the embedded Node runtime (`node` not found on PATH): {e}")
+            } else {
+                format!("could not start the bundled Node runtime at {node}: {e}")
+            }
+        })?;
 
-    let log_path = data_dir.join("server.log");
     if let (Some(mut out), Some(mut err)) = (child.stdout.take(), child.stderr.take()) {
         let out_log = log_path.clone();
         thread::spawn(move || -> std::io::Result<()> {
@@ -473,14 +603,57 @@ fn health_ok(port: u16) -> bool {
     }
 }
 
-fn wait_for_server(port: u16) {
+fn wait_for_server(port: u16) -> bool {
     for _ in 0..300 {
-        // ~30 seconds
+        // ~30 seconds per attempt
         if health_ok(port) {
-            return;
+            return true;
         }
         thread::sleep(Duration::from_millis(100));
     }
+    false
+}
+
+/// Full boot sequence with automatic retries: start the embedded server,
+/// wait for /api/health, then hand the webview from the splash to the app.
+/// If the engine dies or never comes up, the splash shows a friendly error
+/// card (with retry + open-logs buttons) instead of a raw WebView error page.
+fn boot_sequence(mut port: u16) {
+    for attempt in 1..=3u32 {
+        boot_state("Warming up your cozy corner");
+        match spawn_server(port) {
+            Ok(()) => {
+                if wait_for_server(port) {
+                    if let Some(slot) = SERVER_PORT.get() {
+                        if let Ok(mut g) = slot.lock() {
+                            *g = port;
+                        }
+                    }
+                    boot_done(port);
+                    if let Some(handle) = APP_HANDLE.get() {
+                        let _ = handle.emit("nook:ready", serde_json::json!({ "port": port }));
+                    }
+                    return;
+                }
+                // server never became healthy — kill it and retry
+                boot_state("The engine is taking longer than usual — retrying");
+            }
+            Err(e) => {
+                boot_state(&format!("Engine hiccup ({e}) — retrying"));
+            }
+        }
+        stop_server();
+        if attempt < 3 {
+            thread::sleep(Duration::from_millis(900));
+            // ports can end up in a weird TIME_WAIT state after a crash —
+            // grab a fresh free port for the next attempt
+            port = find_free_port();
+        }
+    }
+    boot_fail(
+        "Nook's engine didn't start after 3 attempts. Your notes are safe — try again, or open the logs folder to see what happened.",
+        None,
+    );
 }
 
 fn show_main_window() {
@@ -529,6 +702,7 @@ fn main() {
             restore_window,
             toggle_maximize,
             close_window,
+            open_data_folder,
             open_external,
             get_desktop_prefs,
             save_desktop_prefs,
@@ -590,23 +764,31 @@ fn main() {
                 }
             }
 
-            // Embedded Next.js server on a free localhost port.
+            // Embedded Next.js server on a free localhost port. The webview
+            // loads a branded splash first (public/splash.html, embedded via
+            // frontendDist) and is handed over to the real app once the server
+            // answers /api/health — see boot_sequence().
             let port = find_free_port();
             let _ = SERVER_PORT.get().unwrap().lock().map(|mut g| *g = port);
-            spawn_server(port)?;
 
-            let url = Url::parse(&format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?;
+            // In dev (`cargo tauri dev`) load the Next dev server directly;
+            // in release builds load the splash so the window shows instantly.
+            let boot_url = if cfg!(debug_assertions) {
+                WebviewUrl::External(Url::parse("http://localhost:3000").map_err(|e| e.to_string())?)
+            } else {
+                WebviewUrl::App("splash.html".into())
+            };
 
             // The builder's returned handle is managed by the app runtime; the
-            // window is shown later via show_main_window() once /api/health
-            // answers, so the local binding is intentionally not used here.
-            WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::External(url))
+            // local binding is intentionally not used here.
+            WebviewWindowBuilder::new(app, MAIN_LABEL, boot_url)
                 .title("Nook")
+                .decorations(false) // the in-app title bar IS the window chrome now
                 .inner_size(state.width as f64, state.height as f64)
                 .min_inner_size(960.0, 640.0)
                 .maximized(state.maximized)
                 .resizable(true)
-                .visible(false) // hidden until /api/health answers
+                .visible(true)
                 .build()?;
 
             // Tray icon (Windows notification area / minimize-to-tray).
@@ -626,11 +808,8 @@ fn main() {
                 })
                 .build(app)?;
 
-            let handle = app.handle().clone();
             thread::spawn(move || {
-                wait_for_server(port);
-                show_main_window();
-                let _ = handle.emit("nook:ready", serde_json::json!({ "port": port }));
+                boot_sequence(port);
             });
 
             Ok(())

@@ -60,6 +60,28 @@ export async function desktopIsMaximized(): Promise<boolean> {
   return Boolean(await invoke("is_maximized"));
 }
 
+/**
+ * Listen for desktop window resize events (Tauri core event). Used by the
+ * in-app title bar to keep the maximize/restore button in sync when the
+ * window is snapped, dragged to edges, etc. Returns an unlisten function.
+ */
+export function onWindowResize(cb: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const t = (window as unknown as { __TAURI__?: { event?: { listen?: unknown } } }).__TAURI__;
+  const listen = t?.event?.listen;
+  if (typeof listen !== "function") return () => {};
+  const fn = listen as (name: string, cb: () => void) => Promise<() => void>;
+  let unlisten: (() => void) | null = null;
+  fn("tauri://resize", () => cb())
+    .then((f) => {
+      unlisten = f;
+    })
+    .catch(() => {});
+  return () => {
+    unlisten?.();
+  };
+}
+
 export async function desktopMinimize(): Promise<void> {
   await invoke("minimize_window");
 }

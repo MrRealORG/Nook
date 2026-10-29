@@ -7,12 +7,75 @@ import type { IconName } from "@/components/icons";
 import { useStore } from "@/lib/store";
 import { THEME_IDS, THEMES, isPremiumTheme } from "@/lib/themes";
 import { UI_STYLES, UI_STYLE_IDS } from "@/lib/uiStyles";
-import { isDesktop, desktopQuit, getMinimizeToTray, setMinimizeToTray } from "@/lib/tauri";
+import { isDesktop, desktopQuit, desktopMinimize, desktopToggleMaximize, desktopIsMaximized, onWindowResize, getMinimizeToTray, setMinimizeToTray } from "@/lib/tauri";
 
 const LABEL = { notes: "Notes", graph: "Graph", canvas: "Canvas", den: "Den", focus: "Focus", arcade: "Arcade", team: "Team room", market: "Marketplace", tasks: "Tasks", activity: "Activity", rules: "Rules", settings: "Settings" } as const;
 
 function fmt(s: number) {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Window chrome (desktop) — the in-app title bar IS the window's title bar.
+// The Tauri window is created with decorations(false), so these controls
+// replace the native Windows min/max/close and the bar itself is a drag
+// region (data-tauri-drag-region + double-click to maximize).
+// ---------------------------------------------------------------------------
+
+function SvgMin() {
+  return (<svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M1 5.5h9" stroke="currentColor" strokeWidth="1.2" fill="none" /></svg>);
+}
+function SvgMax() {
+  return (<svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><rect x="1.2" y="1.2" width="8.6" height="8.6" rx="1.2" stroke="currentColor" strokeWidth="1.2" fill="none" /></svg>);
+}
+function SvgRestore() {
+  return (<svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><rect x="1.2" y="3.4" width="6.4" height="6.4" rx="1" stroke="currentColor" strokeWidth="1.1" fill="none" /><path d="M3.6 3.4V2.2a1 1 0 0 1 1-1h3.2a1 1 0 0 1 1 1v3.2a1 1 0 0 1-1 1H7.6" stroke="currentColor" strokeWidth="1.1" fill="none" /></svg>);
+}
+function SvgClose() {
+  return (<svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M1.6 1.6l7.8 7.8M9.4 1.6l-7.8 7.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>);
+}
+
+/** Keep maximize/restore icon in sync even when the window is snapped via drag. */
+function useMaximized() {
+  const [max, setMax] = useState(false);
+  useEffect(() => {
+    if (!isDesktop) return;
+    let alive = true;
+    const refresh = () => {
+      desktopIsMaximized()
+        .then((v) => alive && setMax(v))
+        .catch(() => {});
+    };
+    refresh();
+    const off = onWindowResize(refresh);
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+  return max;
+}
+
+function WindowControls() {
+  const maximized = useMaximized();
+  return (
+    <div className="flex items-center">
+      <button className="win-btn" title="Minimize" aria-label="Minimize Nook" onClick={() => void desktopMinimize().catch(() => {})}>
+        <SvgMin />
+      </button>
+      <button
+        className="win-btn"
+        title={maximized ? "Restore size" : "Maximize"}
+        aria-label={maximized ? "Restore window size" : "Maximize window"}
+        onClick={() => void desktopToggleMaximize().catch(() => {})}
+      >
+        {maximized ? <SvgRestore /> : <SvgMax />}
+      </button>
+      <button className="win-btn win-close" title="Close Nook" aria-label="Close Nook" onClick={() => void desktopQuit().catch(() => {})}>
+        <SvgClose />
+      </button>
+    </div>
+  );
 }
 
 function Toggle({ on, onClick, label, icon }: { on: boolean; onClick: () => void; label: string; icon: IconName }) {
@@ -92,13 +155,21 @@ export function TitleBar() {
   const music = useStore((s) => s.music);
   const obsLight = useStore((s) => s.obsLight);
   const appScale = useStore((s) => s.appScale);
+  const zen = useStore((s) => s.zen);
   const title = useStore((s) => s.notes.find((n) => n.id === s.activeId)?.title);
   const owned = useStore((s) => s.pet.owned);
   const [menu, setMenu] = useState(false);
   const [layout, setLayout] = useState(false);
   const [grain, setGrain] = useState(true);
+  const [fs, setFs] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const layoutBox = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const h = () => setFs(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", h);
+    return () => document.removeEventListener("fullscreenchange", h);
+  }, []);
 
   useEffect(() => {
     if (!menu) return;
@@ -130,9 +201,22 @@ export function TitleBar() {
   const showSide = (p: Partial<{ sidebar: boolean; notesList: boolean; rightOpen: boolean }>) =>
     st().set({ ...p, ...(cleanMode ? { cleanMode: false } : {}) });
 
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen?.();
+  };
+
   return (
-    <header className="panel flex h-12 flex-none items-center gap-2.5 rounded-[16px] pl-1.5 pr-1.5">
-      {/* THE big clean button — first thing on the top bar, toggles every side panel at once */}
+    <header
+      data-tauri-drag-region
+      onDoubleClick={(e) => {
+        // native feel: double-click on empty bar toggles maximize (desktop only)
+        if (isDesktop && (e.target as HTMLElement).hasAttribute("data-tauri-drag-region")) {
+          void desktopToggleMaximize().catch(() => {});
+        }
+      }}
+      className="panel flex h-12 flex-none items-center gap-2.5 rounded-[16px] pl-1.5 pr-1.5"
+    >      {/* THE big clean button — first thing on the top bar, toggles every side panel at once */}
       <button
         className="clean-toggle"
         data-on={cleanMode}
@@ -185,7 +269,7 @@ export function TitleBar() {
         <Image src="/art/logo.webp" alt="" width={28} height={28} className="pixelated rounded-[8px]" priority />
         <span className="pixel-font text-[19px] font-semibold tracking-wide">Nook</span>
       </button>
-      <div className="pixel-font hidden items-center gap-1.5 text-[14px] text-faint md:flex">
+      <div data-tauri-drag-region className="pixel-font hidden min-w-0 items-center gap-1.5 text-[14px] text-faint md:flex">
         <span>/</span>
         <span className="text-dim">{LABEL[view]}</span>
         {view === "notes" && title && (
@@ -296,45 +380,44 @@ export function TitleBar() {
             </div>
             <Toggle on={!muted} onClick={() => st().set({ muted: !muted })} label="Sound effects" icon="coins" />
             <Toggle on={music} onClick={() => st().set({ music: !music })} label="Ambient music" icon="gamepad" />
+            <Toggle on={zen} onClick={() => useStore.setState((s) => ({ zen: !s.zen }))} label="Zen mode (Alt+Z)" icon="moon" />
+            <Toggle on={fs} onClick={toggleFullscreen} label="Fullscreen" icon="expand" />
             <DesktopTrayToggle />
             <div className="my-1 h-px bg-line" />
             <Toggle on={grain} onClick={toggleGrain} label="Film grain & textures" icon="sparkle" />
             <Toggle on={roam} onClick={() => st().set({ roam: !roam })} label="Desktop pet" icon="dog" />
             <Toggle on={follow} onClick={() => st().set({ follow: !follow })} label="Pet follows cursor" icon="mouse" />
+            {isDesktop && (
+              <>
+                <div className="my-1 h-px bg-line" />
+                <button
+                  onClick={() => void desktopQuit().catch(() => {})}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-panel2"
+                  title="Quit Nook completely"
+                >
+                  <Icon name="close" size={16} className="text-dim" />
+                  <span className="pixel-font flex-1 text-[14px]">Quit Nook</span>
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
 
-      <div className="mx-0.5 h-5 w-px bg-line" />
-      <div className="flex items-center">
-        <button className="icon-btn" title="Zen mode (Alt+Z)" onClick={() => useStore.setState((s) => ({ zen: !s.zen }))} style={{ borderRadius: 8, width: 36 }}>
-          <Icon name="minus" size={15} />
-        </button>
-        <button
-          className="icon-btn"
-          title="Fullscreen"
-          style={{ borderRadius: 8, width: 36 }}
-          onClick={() => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.())}
-        >
-          <Icon name="expand" size={14} />
-        </button>
-        <button
-          className="icon-btn hover:!bg-[#a5594f] hover:!text-white"
-          title="Close"
-          style={{ borderRadius: 8, width: 36 }}
-          onClick={() => {
-            if (isDesktop) {
-              void desktopQuit();
-            } else {
-              st().say("Nooo, don't close me! I'll be lonely.");
-              st().doAct("sad", 2600);
-              st().toast("Nook never really closes — your pet won't let you", "heart");
-            }
-          }}
-        >
-          <Icon name="close" size={15} />
-        </button>
-      </div>
+      <div className="mx-0.5 h-5 w-px bg-line" data-tauri-drag-region />
+      {isDesktop ? (
+        /* real window chrome: min / max / close (window is frameless) */
+        <WindowControls />
+      ) : (
+        <div className="flex items-center">
+          <button className="icon-btn" title="Zen mode (Alt+Z)" onClick={() => useStore.setState((s) => ({ zen: !s.zen }))} style={{ borderRadius: 8, width: 36 }}>
+            <Icon name="minus" size={15} />
+          </button>
+          <button className="icon-btn" title="Fullscreen" style={{ borderRadius: 8, width: 36 }} onClick={toggleFullscreen}>
+            <Icon name="expand" size={14} />
+          </button>
+        </div>
+      )}
     </header>
   );
 }

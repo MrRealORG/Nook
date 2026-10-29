@@ -59,6 +59,18 @@ jobs:
       - name: Build Next.js standalone server
         run: npm run build
 
+      # Stage the Node runtime INSIDE the installer so Nook is fully
+      # self-contained: the app runs even on machines without Node.js.
+      # scripts/copy-standalone.mjs (run by npm run build) already staged the
+      # Next.js standalone server into src-tauri/resources/app.
+      - name: Stage embedded Node runtime into Tauri resources
+        shell: pwsh
+        run: |
+          $node = (Get-Command node).Source
+          New-Item -ItemType Directory -Force "src-tauri\resources\node-runtime" | Out-Null
+          Copy-Item $node "src-tauri\resources\node-runtime\node.exe" -Force
+          Write-Host "staged node.exe ($([math]::Round((Get-Item 'src-tauri\resources\node-runtime\node.exe').Length/1MB,1)) MB) from $node"
+
       - name: Build Tauri bundle (MSI + NSIS exe)
         run: npx tauri build --bundles msi,nsis
 
