@@ -887,3 +887,38 @@ Work Log:
 - ai/route.ts: cloud() has 6s hard timeout → falls back to offline local agent
   fast when no network.
 - docs/DESKTOP.md: documented offline writes, local AI backend, MCP, icon.
+
+---
+Task ID: 9
+Agent: main orchestrator
+Task: v0.3.0 — fix "127.0.0.1 refused to connect" + native title bar
+
+Work Log:
+- ROOT CAUSE: installer shipped only Nook.exe + seed db — no embedded server,
+  no Node. On user machines the webview hit a dead localhost port.
+- Self-contained bundle: copy-standalone.mjs now stages .next/standalone into
+  src-tauri/resources/app; CI stages node.exe into resources/node-runtime;
+  tauri.conf.json bundles "resources/app" (plain dir — the "app/**" glob is
+  rejected by tauri-build) + "resources/node-runtime/*". Setup grew 1.6MB→38MB.
+- node_exe() resolver (bundled → resource dir → PATH), install_dir() covers all
+  layouts, server auto-retry 3x with fresh port, server.log rotation (2MB).
+- Boot splash: public/splash.html embedded via frontendDist; window now loads
+  it instantly (no 30s blank), Rust polls /api/health then evals hand-off to
+  the real URL; on 3 failures shows branded error card with Try again +
+  Open logs (new open_data_folder command).
+- Capabilities: added remote.urls (http://127.0.0.1:*, http://localhost:*) —
+  the desktop IPC bridge was silently blocked for the embedded origin before;
+  + explicit window perms (start-dragging, minimize, toggle-maximize).
+- Prisma on Windows: next tracing does NOT include the query engine (works on
+  Linux) and the Windows engine has NO "lib" prefix — copy-standalone.mjs now
+  matches /^(lib)?query_engine-/ and copies it into the standalone client dir.
+- page.tsx: DB failure no longer hard-500s; boots empty + localStorage restore.
+- Title bar: window is frameless (decorations false) — in-app TitleBar is the
+  real chrome: drag region, double-click maximize, Windows-style min/max/
+  restore/close (live state via tauri://resize), red close hover; zen/fullscreen
+  moved to the appearance menu; [X] hides to tray when minimize-to-tray on;
+  Quit Nook entry added.
+- Validated: tsc 0, eslint 0, next build ok, standalone smoke test (fresh DB)
+  root=200 health=200 splash=200. CI run #11 green; release v0.3.0 published
+  (Nook_0.3.0_x64-setup.exe 38.1 MB, MSI 71 MB) with query_engine-windows.dll.node
+  verified in bundle.
