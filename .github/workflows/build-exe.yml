@@ -36,13 +36,16 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # Tauri CLI is not vendored in package.json; install the v2 CLI so we can
-      # call `tauri build` directly (equivalent to `cargo tauri build`).
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
-
       - name: Install dependencies
         run: npm ci
+
+      # Tauri CLI is not vendored in package.json; install the v2 CLI so we can
+      # call `tauri build` directly (equivalent to `cargo tauri build`).
+      # NOTE: this MUST run AFTER `npm ci` — npm ci wipes node_modules, which
+      # would remove the --no-save install and make `npx tauri` fail with
+      # "could not determine executable to run".
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
 
       - name: Generate Prisma client (Windows query engine)
         run: npx prisma generate
