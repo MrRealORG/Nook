@@ -124,6 +124,25 @@ let wordBank = 0;
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Desktop-shell preferences (Tauri). Persisted to localStorage (nook:prefs)
+ * and, for desktop-only keys, to <dataDir>/desktop-prefs.json via Tauri commands. */
+export interface DesktopPrefs {
+  /** show the companion pet on the desktop (normal windows only) */
+  petOnDesktop: boolean;
+  /** hide the pet while arcade games are running */
+  petHideGames: boolean;
+  /** hide the pet while the window is fullscreen */
+  petHideFullscreen: boolean;
+  /** ultra optimization: "balanced" | "max" (max cuts pet FPS + effects) */
+  perfMode: "balanced" | "max";
+  /** keep the Nook window always on top of other windows */
+  alwaysOnTop: boolean;
+  /** minimize hides Nook to the tray instead of the taskbar */
+  minimizeToTray: boolean;
+  /** launch Nook on Windows startup (HKCU Run key) */
+  autoStart: boolean;
+}
+
 interface S {
   notes: Note[];
   canvases: Canvas[];
@@ -269,6 +288,8 @@ interface S {
   railFloat: { x: number; y: number };
   /** master feature switches — turn the pet or any tab on/off (Settings → Features) */
   petEnabled: boolean;
+  /** desktop-shell preferences (pet on desktop, perf mode, tray, autostart) */
+  desktopPrefs: DesktopPrefs;
   /** whole-app wallpaper */
   wallpaper: Wallpaper;
   /** custom nook-games created/imported in the arcade */
@@ -279,6 +300,7 @@ interface S {
   setRailPos: (p: RailPos) => void;
   setRailFloat: (x: number, y: number) => void;
   setPetEnabled: (on: boolean) => void;
+  setDesktopPrefs: (p: Partial<DesktopPrefs>) => void;
   setWallpaper: (w: Partial<Wallpaper>) => void;
   loadCustomGames: () => Promise<void>;
   addCustomGames: (defs: CustomGameDef[]) => Promise<void>;
@@ -562,6 +584,15 @@ export const useStore = create<S>()((set, get) => {
     railPos: "left",
     railFloat: { x: 84, y: 120 },
     petEnabled: true,
+    desktopPrefs: {
+      petOnDesktop: true,
+      petHideGames: true,
+      petHideFullscreen: true,
+      perfMode: "balanced",
+      alwaysOnTop: false,
+      minimizeToTray: false,
+      autoStart: false,
+    },
     wallpaper: { id: "none", dim: 0.55, blur: 2 },
     customGames: [],
     packStudio: null,
@@ -649,6 +680,17 @@ export const useStore = create<S>()((set, get) => {
           petNag: p.petNag ?? true,
           railFloat: p.railFloat && typeof p.railFloat.x === "number" ? (p.railFloat as { x: number; y: number }) : { x: 84, y: 120 },
           petEnabled: p.petEnabled ?? true,
+          desktopPrefs: {
+            petOnDesktop: p.desktopPrefs?.petOnDesktop ?? true,
+            petHideGames: p.desktopPrefs?.petHideGames ?? true,
+            petHideFullscreen: p.desktopPrefs?.petHideFullscreen ?? true,
+            perfMode: ["balanced", "max"].includes(p.desktopPrefs?.perfMode)
+              ? (p.desktopPrefs.perfMode as "balanced" | "max")
+              : "balanced",
+            alwaysOnTop: p.desktopPrefs?.alwaysOnTop ?? false,
+            minimizeToTray: p.desktopPrefs?.minimizeToTray ?? false,
+            autoStart: p.desktopPrefs?.autoStart ?? false,
+          },
           wallpaper: p.wallpaper && typeof p.wallpaper === "object" && typeof p.wallpaper.id === "string" ? { id: p.wallpaper.id, img: typeof p.wallpaper.img === "string" ? p.wallpaper.img : undefined, dim: typeof p.wallpaper.dim === "number" ? p.wallpaper.dim : 0.55, blur: typeof p.wallpaper.blur === "number" ? p.wallpaper.blur : 2 } : { id: "none", dim: 0.55, blur: 2 },
         });
         loadPacksFromLocal();
@@ -690,7 +732,7 @@ export const useStore = create<S>()((set, get) => {
             rules: s.rules, font: s.font, appScale: s.appScale, profile: s.profile, customDock: s.customDock, blockedAttempts: s.blockedAttempts, blockedDay: todayKey(),
             dnd: s.dnd, notifKinds: s.notifKinds, voiceModel: s.voiceModel,
             railIcons: s.railIcons, railOrder: s.railOrder, railHidden: s.railHidden,
-            railPos: s.railPos, railFloat: s.railFloat, petEnabled: s.petEnabled, wallpaper: s.wallpaper, iconPackPref: true, fontPackPref: true,
+            railPos: s.railPos, railFloat: s.railFloat, petEnabled: s.petEnabled, desktopPrefs: s.desktopPrefs, wallpaper: s.wallpaper, iconPackPref: true, fontPackPref: true,
             openTabs: s.openTabs, tabPins: s.tabPins, obsLight: s.obsLight, petNag: s.petNag,
           }),
         );
@@ -1290,6 +1332,21 @@ export const useStore = create<S>()((set, get) => {
       sfx(on ? "happy" : "close");
       get().toast(on ? `${get().pet.name} is back!` : `${get().pet.name} is resting — re-enable in Settings → Features`, "heart");
       get().notify(on ? `${get().pet.name} woke up and stretched` : `${get().pet.name} curled up for a long nap`, "heart", "pet");
+    },
+    setDesktopPrefs: (p) => {
+      const prev = get().desktopPrefs;
+      const next = { ...prev, ...p };
+      get().set({ desktopPrefs: next });
+      sfx("pop");
+      // persist desktop-only keys to the Rust shell (window-state / desktop-prefs.json)
+      if (typeof window !== "undefined" && (window as any).__TAURI__) {
+        void import("@/lib/tauri").then(({ saveDesktopPrefs, setAlwaysOnTop, setMinimizeToTray, setAutoStart }) => {
+          void saveDesktopPrefs(next);
+          if (next.alwaysOnTop !== prev.alwaysOnTop) void setAlwaysOnTop(next.alwaysOnTop);
+          if (next.minimizeToTray !== prev.minimizeToTray) void setMinimizeToTray(next.minimizeToTray);
+          if (next.autoStart !== prev.autoStart) void setAutoStart(next.autoStart);
+        });
+      }
     },
     setWallpaper: (w) => {
       get().set({ wallpaper: { ...get().wallpaper, ...w } });

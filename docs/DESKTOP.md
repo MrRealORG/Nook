@@ -112,3 +112,25 @@ on first launch; user notes and pet state live there thereafter. Logs:
   server). Tighten it before public release.
 - `sharp` and other optional native deps resolve from `node_modules` next to
   the exe — ship a production `node_modules` generated on Windows.
+
+## Desktop preferences (runtime)
+
+Toggled in Settings → Companion / Desktop shell (Windows) and persisted to
+`<dataDir>\desktop-prefs.json` (synced via Tauri commands):
+
+- **Pet on the desktop** — companion appears on normal windows; hidden during
+  Arcade games, fullscreen, zen and ultra-clean mode.
+- **Hide pet during games** — steps aside while you play in the Arcade.
+- **Ultra performance** — "Balanced" (12 FPS pet) or "Max" (6 FPS + fewer
+  effects) for zero-lag desktop play.
+- **Always on top** — keeps Nook above every other window.
+- **Minimize to tray** — parks Nook in the Windows notification area.
+- **Open Nook on startup** — HKCU Run key, launches at sign-in.
+
+## MCP (connect your AI agents)
+
+The workspace MCP server runs at `<window.origin>/api/mcp` (JSON-RPC 2.0). On
+desktop that's `http://127.0.0.1:<free-port>/api/mcp`. Settings → MCP & AI
+agents shows the live URL, tool list, per-agent config snippets (Claude Code,
+Cursor, Codex CLI, OpenCode) with copy-to-clipboard, and a "Test connection"
+button. Set a bearer token to lock down tool calls for external agents.

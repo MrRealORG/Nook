@@ -99,3 +99,56 @@ export async function setMinimizeToTray(on: boolean): Promise<void> {
 export async function getMinimizeToTray(): Promise<boolean> {
   return Boolean(await invoke("get_minimize_to_tray"));
 }
+
+/** Desktop preferences (pet on desktop, perf mode, tray, autostart). */
+export interface DesktopPrefs {
+  petOnDesktop: boolean;
+  petHideGames: boolean;
+  petHideFullscreen: boolean;
+  perfMode: "balanced" | "max";
+  alwaysOnTop: boolean;
+  minimizeToTray: boolean;
+  autoStart: boolean;
+}
+
+export async function getDesktopPrefs(): Promise<DesktopPrefs> {
+  return (await invoke("get_desktop_prefs")) as DesktopPrefs;
+}
+
+export async function saveDesktopPrefs(prefs: Partial<DesktopPrefs>): Promise<void> {
+  await invoke("save_desktop_prefs", { prefs });
+}
+
+/** Keep the Nook window always on top (Windows). */
+export async function setAlwaysOnTop(on: boolean): Promise<void> {
+  await invoke("set_always_on_top", { on });
+}
+
+export async function getAlwaysOnTop(): Promise<boolean> {
+  return Boolean(await invoke("get_always_on_top"));
+}
+
+/** MCP connection info for the embedded server (external agents: Claude, Cursor, Codex…). */
+export interface McpInfo {
+  port: number;
+  url: string;
+  tokenSet: boolean;
+}
+
+export async function getMcpInfo(): Promise<McpInfo> {
+  return (await invoke("get_mcp_info")) as McpInfo;
+}
+
+/** Test the MCP endpoint responds. */
+export async function testMcpConnection(): Promise<boolean> {
+  const info = await getMcpInfo();
+  try {
+    const res = await fetch(`${info.url}`, {
+      method: "GET",
+      headers: { accept: "application/json" },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

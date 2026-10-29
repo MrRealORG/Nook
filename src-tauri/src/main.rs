@@ -37,6 +37,10 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static SERVER_CHILD: OnceLock<Mutex<Option<std::process::Child>>> = OnceLock::new();
 static WINDOW_STATE: OnceLock<Mutex<Option<WindowState>>> = OnceLock::new();
 static MINIMIZE_TO_TRAY: OnceLock<Mutex<bool>> = OnceLock::new();
+static SERVER_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
+static ALWAYS_ON_TOP: OnceLock<Mutex<bool>> = OnceLock::new();
+
+const DESKTOP_PREFS_FILE: &str = "desktop-prefs.json";
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct WindowState {
@@ -213,6 +217,79 @@ fn set_auto_start(enable: bool) -> Result<(), String> {
         let _ = enable;
         Ok(())
     }
+}
+
+#[tauri::command]
+fn get_desktop_prefs() -> Result<serde_json::Value, String> {
+    let dir = data_dir_path()?;
+    let path = dir.join(DESKTOP_PREFS_FILE);
+    let txt = fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string());
+    let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or(serde_json::json!({}));
+    Ok(v)
+}
+
+#[tauri::command]
+fn save_desktop_prefs(prefs: serde_json::Value) -> Result<(), String> {
+    let dir = data_dir_path()?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(DESKTOP_PREFS_FILE);
+    let merged: serde_json::Value = match fs::read_to_string(&path) {
+        Ok(txt) => serde_json::from_str(&txt).unwrap_or(serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    let mut obj = merged.as_object_mut().unwrap_or(&mut serde_json::Map::new());
+    if let Some(map) = prefs.as_object() {
+        for (k, v) in map {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    let json = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())?;
+    // mirror the flags the Rust shell acts on
+    if let Some(b) = prefs.get("minimizeToTray").and_then(|v| v.as_bool()) {
+        let mut g = MINIMIZE_TO_TRAY.get().unwrap().lock().unwrap();
+        *g = b;
+    }
+    if let Some(b) = prefs.get("alwaysOnTop").and_then(|v| v.as_bool()) {
+        let mut g = ALWAYS_ON_TOP.get().unwrap().lock().unwrap();
+        *g = b;
+        if let Some(handle) = APP_HANDLE.get() {
+            if let Some(window) = handle.get_webview_window(MAIN_LABEL) {
+                let _ = window.set_always_on_top(b);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_always_on_top(on: bool) -> Result<(), String> {
+    let mut g = ALWAYS_ON_TOP.get().unwrap().lock().unwrap();
+    *g = on;
+    if let Some(handle) = APP_HANDLE.get() {
+        if let Some(window) = handle.get_webview_window(MAIN_LABEL) {
+            window.set_always_on_top(on).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_always_on_top() -> bool {
+    ALWAYS_ON_TOP.get().unwrap().lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_mcp_info() -> Result<serde_json::Value, String> {
+    let port = SERVER_PORT
+        .get()
+        .and_then(|s| s.lock().ok().map(|g| *g))
+        .unwrap_or(0);
+    Ok(serde_json::json!({
+        "port": port,
+        "url": format!("http://127.0.0.1:{port}/api/mcp"),
+        "tokenSet": true,
+    }))
 }
 
 #[tauri::command]
@@ -441,6 +518,11 @@ fn main() {
             toggle_maximize,
             close_window,
             open_external,
+            get_desktop_prefs,
+            save_desktop_prefs,
+            set_always_on_top,
+            get_always_on_top,
+            get_mcp_info,
             get_auto_start,
         ])
         .setup(|app| {
@@ -448,6 +530,8 @@ fn main() {
             let _ = SERVER_CHILD.set(Mutex::new(None));
             let _ = WINDOW_STATE.set(Mutex::new(None));
             let _ = MINIMIZE_TO_TRAY.set(Mutex::new(false));
+            let _ = SERVER_PORT.set(Mutex::new(0));
+            let _ = ALWAYS_ON_TOP.set(Mutex::new(false));
 
             // Data directory + seeded SQLite database.
             let data_dir = data_dir_path()?;
@@ -470,8 +554,32 @@ fn main() {
                 }
             }
 
+            // Apply persisted desktop prefs (tray + always-on-top).
+            if let Ok(txt) = fs::read_to_string(data_dir.join(DESKTOP_PREFS_FILE)) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    if let Some(b) = v.get("minimizeToTray").and_then(|x| x.as_bool()) {
+                        let _ = MINIMIZE_TO_TRAY
+                            .get()
+                            .unwrap()
+                            .lock()
+                            .map(|mut g| *g = b);
+                    }
+                    if let Some(b) = v.get("alwaysOnTop").and_then(|x| x.as_bool()) {
+                        let _ = ALWAYS_ON_TOP
+                            .get()
+                            .unwrap()
+                            .lock()
+                            .map(|mut g| *g = b);
+                        if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+                            let _ = window.set_always_on_top(b);
+                        }
+                    }
+                }
+            }
+
             // Embedded Next.js server on a free localhost port.
             let port = find_free_port();
+            let _ = SERVER_PORT.get().unwrap().lock().unwrap().replace(port);
             spawn_server(port)?;
 
             let url = Url::parse(&format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?;
