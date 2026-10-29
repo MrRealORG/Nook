@@ -1,31 +1,27 @@
 [package]
 name = "nook"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-description = "Nook — pixel notes with a tiny friend (Tauri desktop shell)"
-authors = ["Nook"]
+description = "Nook — a cozy little notes desk for your PC. 100% local, offline-first."
+authors = ["Mr Real"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# Tauri v2 desktop shell. `tray-icon` enables the system tray (minimize-to-tray),
-# `image-png` lets us decode icons/icon.png for the tray icon.
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-
-# JSON payloads for commands / window state
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Needed to parse the localhost URL the embedded Next.js server runs on
-url = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rfd = "0.15"
 
 [profile.release]
-# Smaller, faster installer. Strip debug symbols.
 strip = true
-opt-level = "z"
+opt-level = "s"
 lto = true
 panic = "abort"
+codegen-units = 1
 
 [[bin]]
 name = "Nook"

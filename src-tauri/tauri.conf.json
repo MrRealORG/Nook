@@ -1,35 +1,51 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nook",
-  "version": "0.3.0",
-  "identifier": "com.nook.desktop",
+  "version": "0.4.0",
+  "identifier": "com.mrreal.nook",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:3000",
-    "frontendDist": "../public"
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Nook",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 920,
+        "minHeight": 600,
+        "center": true,
+        "decorations": false,
+        "visible": false,
+        "resizable": true
+      }
+    ],
     "security": {
-      "csp": "default-src * 'unsafe-inline' 'unsafe-eval' data: blob: ws://* wss://* http://localhost:* http://127.0.0.1:*; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * ws://* wss://* http://localhost:* http://127.0.0.1:*; img-src * data: blob:; style-src * 'unsafe-inline'; font-src *; frame-src *;"
+      "csp": null,
+      "capabilities": ["default"]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "category": "Productivity",
+    "shortDescription": "A cozy little notes desk — 100% local, offline-first",
+    "longDescription": "Nook is a real, native desktop notes app. Notes, folders and tasks live in a local SQLite database on your PC. No servers, no accounts, no internet required.",
+    "targets": ["nsis", "msi"],
     "icon": [
       "icons/32.png",
-      "icons/128.png",
       "icons/128x128.png",
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/db/custom.db",
-      "resources/app",
-      "resources/node-runtime/*"
-    ]
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

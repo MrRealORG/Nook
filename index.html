@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nook</title>
+  <link rel="icon" href="./favicon.svg" />
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ======= custom titlebar ======= -->
+    <header id="titlebar">
+      <div class="tb-zone tb-left" data-tauri-drag-region>
+        <span class="tb-logo"></span>
+        <span class="tb-name">Nook</span>
+        <span class="tb-ver">v0.4</span>
+      </div>
+
+      <div class="tb-search">
+        <span class="tb-search-icon"></span>
+        <input id="search-input" type="text" placeholder="Search notes…" spellcheck="false" autocomplete="off" />
+        <button id="search-clear" class="hidden" title="Clear search (Esc)">&times;</button>
+      </div>
+
+      <div class="tb-zone tb-right" data-tauri-drag-region>
+        <div class="tb-winbtns">
+          <button class="tb-btn" id="win-min" aria-label="Minimize" title="Minimize">
+            <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5h10v-1H0z" fill="currentColor"/></svg>
+          </button>
+          <button class="tb-btn" id="win-max" aria-label="Maximize" title="Maximize / Restore">
+            <svg class="ico-max" width="10" height="10" viewBox="0 0 10 10"><path d="M0 0h10v10H0zm1 1v8h8V1z" fill="currentColor" fill-rule="evenodd"/></svg>
+            <svg class="ico-restore hidden" width="10" height="10" viewBox="0 0 10 10"><path d="M2 0h8v8H8V2H2zM0 2h8v8H0zm1 1v6h6V3z" fill="currentColor" fill-rule="evenodd"/></svg>
+          </button>
+          <button class="tb-btn tb-close" id="win-close" aria-label="Close" title="Close">
+            <svg width="10" height="10" viewBox="0 0 10 10"><path d="M.7.7l8.6 8.6M9.3.7L.7 9.3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ======= main shell ======= -->
+    <div id="shell">
+      <div class="stars" aria-hidden="true"></div>
+
+      <aside id="sidebar">
+        <div class="sb-scroll">
+          <div class="sb-label">Library</div>
+          <nav id="sb-views"></nav>
+          <div class="sb-label sb-folders-label">
+            <span>Folders</span>
+            <button id="btn-new-folder" title="New folder">+</button>
+          </div>
+          <nav id="sb-folders"></nav>
+        </div>
+        <div class="sb-bottom">
+          <button class="sb-row" id="btn-settings">
+            <span class="sb-ico" data-ico="settings"></span>
+            <span class="sb-name">Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      <section id="note-list">
+        <div class="nl-head">
+          <div class="nl-title-row">
+            <h1 id="nl-title">All Notes</h1>
+            <span class="nl-count" id="nl-count"></span>
+            <span class="nl-spacer"></span>
+            <select id="nl-sort" title="Sort notes">
+              <option value="updated">Recently edited</option>
+              <option value="created">Recently created</option>
+              <option value="alpha">A → Z</option>
+            </select>
+          </div>
+        </div>
+        <div class="nl-scroll" id="nl-items"></div>
+      </section>
+
+      <main id="editor">
+        <div id="ed-empty"></div>
+        <div id="ed-pane" class="hidden">
+          <div id="ed-trash-banner" class="hidden">
+            <span>This note is in the Trash</span>
+            <span class="tb-spacer"></span>
+            <button class="btn ghost small" id="btn-restore">Restore</button>
+            <button class="btn danger small" id="btn-purge">Delete forever</button>
+          </div>
+          <input id="ed-title" type="text" placeholder="Untitled note" spellcheck="false" autocomplete="off" />
+          <div id="ed-toolbar">
+            <label class="ed-folder-wrap" title="Move to folder">
+              <span class="sb-ico" data-ico="folder"></span>
+              <select id="ed-folder"></select>
+            </label>
+            <span class="tb-spacer"></span>
+            <button class="ed-btn" id="btn-pin" title="Pin to top"></button>
+            <button class="ed-btn" id="btn-fav" title="Favorite"></button>
+            <span class="ed-sep"></span>
+            <button class="ed-btn" id="btn-preview" title="Markdown preview (Ctrl+E)"></button>
+            <button class="ed-btn" id="btn-export" title="Export as Markdown"></button>
+            <button class="ed-btn ed-danger" id="btn-trash" title="Move to trash"></button>
+          </div>
+          <div id="ed-body">
+            <textarea id="ed-text" placeholder="Start writing… everything saves itself as you type." spellcheck="false"></textarea>
+            <div id="ed-preview" class="md hidden"></div>
+          </div>
+        </div>
+      </main>
+
+      <section id="tasks-view" class="hidden">
+        <div class="tv-col">
+          <div class="tv-head">
+            <h1>Tasks</h1>
+            <span id="tv-progress-label"></span>
+          </div>
+          <div class="tv-progress"><div id="tv-progress-bar"></div></div>
+          <form id="tv-add">
+            <input id="tv-input" type="text" placeholder="Add a task and press Enter…" spellcheck="false" autocomplete="off" maxlength="200" />
+            <button class="btn primary" type="submit">Add</button>
+          </form>
+          <ul id="tv-list"></ul>
+          <div class="tv-foot">
+            <button class="linklike hidden" id="btn-clear-done">Clear completed</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ======= status bar ======= -->
+    <footer id="statusbar">
+      <span id="save-state"><span class="dot"></span><span id="save-text">Ready</span></span>
+      <span class="tb-spacer"></span>
+      <span id="stats-right"></span>
+    </footer>
+  </div>
+
+  <div id="overlay-root"></div>
+  <div id="toast-root"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
