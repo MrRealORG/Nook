@@ -33,11 +33,14 @@ for (const [src, dest] of pairs) {
 const engineDir = join(root, ".next/standalone/node_modules/.prisma/client");
 const engineSources = [
   join(root, "node_modules/.prisma/client"),
+  join(root, "node_modules/@prisma/client"),
   join(root, "node_modules/@prisma/engines"),
 ];
 function findEngines(dir) {
   try {
-    return readdirSync(dir).filter((f) => f.startsWith("libquery_engine-")).map((f) => join(dir, f));
+    // Windows engine is "query_engine-windows.dll.node" (no "lib" prefix),
+    // Linux/macOS are "libquery_engine-*" — match both.
+    return readdirSync(dir).filter((f) => /^(lib)?query_engine-/.test(f)).map((f) => join(dir, f));
   } catch {
     return [];
   }
