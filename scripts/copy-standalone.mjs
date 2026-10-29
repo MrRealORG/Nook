@@ -8,7 +8,7 @@
  * Mirrors: cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/
  * Then:    robocopy .next/standalone src-tauri/resources/app /MIR (cross-platform)
  */
-import { cpSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -28,16 +28,37 @@ for (const [src, dest] of pairs) {
 }
 
 // --- sanity: the Prisma query engine must be in the standalone trace ---
+// NOTE: on Windows CI, Next.js output file tracing does NOT pick up the
+// engine .node file (it works on Linux), so we copy it in explicitly.
 const engineDir = join(root, ".next/standalone/node_modules/.prisma/client");
-if (existsSync(engineDir)) {
-  const engines = readdirSync(engineDir).filter((f) => f.startsWith("libquery_engine"));
-  if (engines.length === 0) {
-    console.warn("[copy-standalone] WARNING: no Prisma query engine found in standalone output — DB will fail at runtime!");
-  } else {
-    console.log(`[copy-standalone] prisma engine ok: ${engines.join(", ")}`);
+const engineSources = [
+  join(root, "node_modules/.prisma/client"),
+  join(root, "node_modules/@prisma/engines"),
+];
+function findEngines(dir) {
+  try {
+    return readdirSync(dir).filter((f) => f.startsWith("libquery_engine-")).map((f) => join(dir, f));
+  } catch {
+    return [];
   }
+}
+let engines = findEngines(engineDir);
+if (engines.length === 0) {
+  // copy from the root install into the standalone client dir
+  const found = engineSources.flatMap(findEngines);
+  if (found.length > 0) {
+    mkdirSync(engineDir, { recursive: true });
+    for (const f of found) {
+      cpSync(f, join(engineDir, f.split(/[\\/]/).pop()));
+    }
+    engines = findEngines(engineDir);
+    console.log(`[copy-standalone] copied missing prisma engine into standalone: ${engines.map((f) => f.split(/[\\/]/).pop()).join(", ")}`);
+  }
+}
+if (engines.length === 0) {
+  console.warn("[copy-standalone] WARNING: no Prisma query engine in standalone output — DB will fail at runtime!");
 } else {
-  console.warn("[copy-standalone] WARNING: node_modules/.prisma missing from standalone output");
+  console.log(`[copy-standalone] prisma engine ok: ${engines.map((f) => f.split(/[\\/]/).pop()).join(", ")}`);
 }
 
 // --- stage the standalone server into the Tauri bundle resources ---

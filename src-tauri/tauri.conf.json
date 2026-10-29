@@ -28,7 +28,7 @@
     ],
     "resources": [
       "resources/db/custom.db",
-      "resources/app/**",
+      "resources/app",
       "resources/node-runtime/*"
     ]
   }
