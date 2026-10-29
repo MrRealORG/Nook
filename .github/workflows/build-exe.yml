@@ -1,0 +1,83 @@
+name: Build Windows EXE (Tauri)
+
+# Builds Nook.exe + the NSIS installer (Nook-<version>-setup.exe) and an MSI,
+# then uploads them as workflow artifacts. On git tags (v*) it also attaches
+# the installers to a GitHub Release.
+#
+# Pipeline:
+#   checkout -> setup node/rust -> npm ci -> prisma generate (windows engine)
+#   -> regenerate app icons (scripts/gen-icon.mjs)
+#   -> next build (standalone) + copy static/public into .next/standalone
+#   -> tauri build --bundles msi,nsis
+#   -> upload artifacts / publish release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache (speeds up rebuilds)
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Tauri CLI is not vendored in package.json; install the v2 CLI so we can
+      # call `tauri build` directly (equivalent to `cargo tauri build`).
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client (Windows query engine)
+        run: npx prisma generate
+
+      - name: Regenerate app icons (png set + multi-res icon.ico)
+        run: node scripts/gen-icon.mjs
+
+      - name: Build Next.js standalone server
+        run: npm run build
+
+      - name: Build Tauri bundle (MSI + NSIS exe)
+        run: npx tauri build --bundles msi,nsis
+
+      - name: Locate bundle outputs
+        id: find
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse "src-tauri\target\release\bundle" -Include *.exe,*.msi
+          $files | ForEach-Object { Write-Host "found: $($_.FullName)" }
+
+      - name: Upload installers (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nook-windows-installers
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          draft: false
+          prerelease: false
