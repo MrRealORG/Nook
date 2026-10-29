@@ -5,14 +5,13 @@ edition = "2021"
 description = "Nook — pixel notes with a tiny friend (Tauri desktop shell)"
 authors = ["Nook"]
 
-[dependencies]
-# Tauri v2 desktop shell. `api-all` enables the IPC/feature surface we use
-# (window, shell, tray, dialog, notification...). Pin to whatever `cargo tauri`
-# reports as compatible on your machine.
-tauri = { version = "2", features = ["api-all"] }
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
 
-# Structured logging to src-tauri/nook.log (and the data dir on Windows)
-tauri-plugin-log = { version = "5", features = ["all"] }
+[dependencies]
+# Tauri v2 desktop shell. `tray-icon` enables the system tray (minimize-to-tray),
+# `image-png` lets us decode icons/icon.png for the tray icon.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 
 # JSON payloads for commands / window state
 serde = { version = "1", features = ["derive"] }

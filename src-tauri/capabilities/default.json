@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Nook main window",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

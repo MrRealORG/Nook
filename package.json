@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node scripts/run-with-log.mjs dev.log -- next dev -p 3000",
-    "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
+    "build": "next build && node scripts/copy-standalone.mjs",
     "start": "node scripts/run-with-log.mjs server.log NODE_ENV=production -- node .next/standalone/server.js",
     "postinstall": "prisma generate",
     "icon": "node scripts/gen-icon.mjs",

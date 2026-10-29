@@ -22,16 +22,17 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use tauri::{
-    generate_handler, Builder, Emitter, RunEvent, SystemTrayBuilder, SystemTrayEvent,
-    SystemTrayIcon, WebviewWindow, WebviewWindowBuilder, WindowEvent, WindowUrl, AppHandle,
+    generate_handler, Builder, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent, AppHandle,
 };
-use tauri_plugin_log::Builder as LogBuilder;
+use tauri::image::Image;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use url::Url;
 
 const SINGLE_INSTANCE_PORT: u16 = 17422;
 const MAIN_LABEL: &str = "main";
 const DATA_SUBDIR: &str = "Nook";
-const SEED_DB_RESOURCE: &str = "db/custom.db";
+const SEED_DB_RESOURCE: &str = "resources/db/custom.db";
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static SERVER_CHILD: OnceLock<Mutex<Option<std::process::Child>>> = OnceLock::new();
@@ -63,9 +64,9 @@ struct WindowStatePayload {
 #[tauri::command]
 fn get_data_dir(app: AppHandle) -> Result<String, String> {
     let dir = app
-        .path_resolver()
-        .data_dir()
-        .ok_or_else(|| "could not resolve data dir".to_string())?
+        .path()
+        .app_data_dir()
+        .map_err(|_| "could not resolve data dir".to_string())?
         .join(DATA_SUBDIR);
     Ok(dir.to_string_lossy().into_owned())
 }
@@ -323,17 +324,20 @@ fn app_handle() -> Result<AppHandle, String> {
 
 fn data_dir_path() -> Result<PathBuf, String> {
     app_handle()?
-        .path_resolver()
-        .data_dir()
-        .ok_or_else(|| "no data dir".to_string())
+        .path()
+        .app_data_dir()
+        .map_err(|_| "no data dir".to_string())
         .map(|d| d.join(DATA_SUBDIR))
 }
 
 fn resource_path(name: &str) -> Result<PathBuf, String> {
     app_handle()?
-        .path_resolver()
-        .resolve_resource(name)
-        .ok_or_else(|| format!("resource {name} not found"))
+        .path()
+        .resource_dir()
+        .map_err(|_| format!("resource {name} not found"))?
+        .join(name)
+        .canonicalize()
+        .map_err(|_| format!("resource {name} not found"))
 }
 
 /// Where the installable app lives: next to the exe (Windows MSI layout) or in
@@ -346,8 +350,8 @@ fn install_dir() -> Result<PathBuf, String> {
         exe_dir.join(".next/standalone/server.js"),
         exe_dir.join("resources/app/.next/standalone/server.js"),
     ];
-    if let Ok(resource_dir) = app_handle()
-        .and_then(|a| Ok(a.path_resolver().resource_dir().unwrap_or_default()))
+    if let Ok(Ok(resource_dir)) = app_handle()
+        .map(|a| a.path().resource_dir())
     {
         if !resource_dir.as_os_str().is_empty() {
             candidates.push(resource_dir.join(".next/standalone/server.js"));
@@ -474,7 +478,7 @@ fn show_main_window() {
     if let Some(handle) = APP_HANDLE.get() {
         if let Some(window) = handle.get_webview_window(MAIN_LABEL) {
             let _ = window.show();
-            let _ = window.set_minimized(false);
+            let _ = window.unminimize();
             let _ = window.set_focus();
         }
     }
@@ -504,7 +508,6 @@ fn main() {
     });
 
     Builder::default()
-        .plugin(LogBuilder::new().build())
         .invoke_handler(generate_handler![
             get_data_dir,
             app_version,
@@ -526,7 +529,7 @@ fn main() {
             get_auto_start,
         ])
         .setup(|app| {
-            let _ = APP_HANDLE.set(app.clone());
+            let _ = APP_HANDLE.set(app.handle().clone());
             let _ = SERVER_CHILD.set(Mutex::new(None));
             let _ = WINDOW_STATE.set(Mutex::new(None));
             let _ = MINIMIZE_TO_TRAY.set(Mutex::new(false));
@@ -584,9 +587,9 @@ fn main() {
 
             let url = Url::parse(&format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?;
 
-            let window = WebviewWindowBuilder::new(app, MAIN_LABEL, WindowUrl::External(url))
+            let window = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::External(url))
                 .title("Nook")
-                .inner_size(state.width as u32, state.height as u32)
+                .inner_size(state.width as f64, state.height as f64)
                 .min_inner_size(960, 640)
                 .maximized(state.maximized)
                 .resizable(true)
@@ -595,13 +598,22 @@ fn main() {
 
             // Tray icon (Windows notification area / minimize-to-tray).
             let tray_icon =
-                SystemTrayIcon::from_bytes(include_bytes!("../icons/icon.png"))
-                    .map_err(|e| e.to_string())?;
-            SystemTrayBuilder::new()
+                Image::from_bytes(include_bytes!("../icons/icon.png")).map_err(|e| e.to_string())?;
+            TrayIconBuilder::with_id("nook-tray")
                 .icon(tray_icon)
-                .build()?;
+                .on_tray_icon_event(|_tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window();
+                    }
+                })
+                .build(app)?;
 
-            let handle = app.clone();
+            let handle = app.handle().clone();
             thread::spawn(move || {
                 wait_for_server(port);
                 show_main_window();
@@ -610,12 +622,9 @@ fn main() {
 
             Ok(())
         })
-        .on_system_tray_event(|_app, event| {
-            if let SystemTrayEvent::IconClick { .. } = event {
-                show_main_window();
-            }
-        })
-        .build(move |_app, event| {
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app, event| {
             match event {
                 RunEvent::ExitRequested { .. } => {
                     stop_server();
@@ -624,15 +633,18 @@ fn main() {
                     if label == MAIN_LABEL =>
                 {
                     match event {
-                        WindowEvent::Minimized(true) => {
-                            if MINIMIZE_TO_TRAY
+                        // Hide to tray instead of keeping a minimized taskbar entry.
+                        WindowEvent::Resized(_) => {
+                            let to_tray = MINIMIZE_TO_TRAY
                                 .get()
-                                .map(|s| s.lock().unwrap().clone())
-                                .unwrap_or(false)
-                            {
-                                let _ = _app
-                                    .get_webview_window(MAIN_LABEL)
-                                    .and_then(|w| w.hide());
+                                .map(|s| s.lock().map(|g| *g).unwrap_or(false))
+                                .unwrap_or(false);
+                            if to_tray {
+                                if let Some(window) = _app.get_webview_window(MAIN_LABEL) {
+                                    if window.is_minimized().unwrap_or(false) {
+                                        let _ = window.hide();
+                                    }
+                                }
                             }
                         }
                         WindowEvent::Destroyed => {
