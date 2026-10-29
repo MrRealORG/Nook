@@ -29,6 +29,7 @@ import { activity } from "@/lib/activity";
 import { categorize } from "@/lib/store";
 import { DEFAULT_RULES, type RulesState } from "@/lib/rules";
 import { wallpaperCss } from "@/lib/wallpapers";
+import { isDesktop, desktopQuit, desktopIsMaximized, saveWindowState } from "@/lib/tauri";
 import type { InitialData } from "@/lib/types";
 
 const Loading = () => (
@@ -186,6 +187,37 @@ export function App({ initial }: { initial: InitialData }) {
   const wallpaper = useStore((s) => s.wallpaper);
   useAppTimeTracker();
   usePetNag();
+
+  /** Desktop shell niceties: Ctrl+Q quits Nook; window placement is remembered. */
+  useEffect(() => {
+    if (!isDesktop) return;
+    let saveId: ReturnType<typeof setTimeout> | null = null;
+    const rememberPlacement = () => {
+      if (saveId) clearTimeout(saveId);
+      saveId = setTimeout(async () => {
+        try {
+          await saveWindowState({
+            maximized: await desktopIsMaximized(),
+            width: window.innerWidth,
+            height: window.innerHeight,
+          });
+        } catch {}
+      }, 800);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key.toLowerCase() === "q") {
+        e.preventDefault();
+        void desktopQuit();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", rememberPlacement);
+    return () => {
+      if (saveId) clearTimeout(saveId);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", rememberPlacement);
+    };
+  }, []);
 
   /** public share links (?share=<id>) render as a full-screen reader overlay */
   const [shareId, setShareId] = useState<string | null>(null);

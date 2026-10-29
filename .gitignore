@@ -50,6 +50,11 @@ test
 prompt
 
 server.log
+# desktop (tauri)
+src-tauri/target/
+src-tauri/gen/
+src-tauri/*.log
+*.exe
 # Skills directory
 /skills/
 .vercel

@@ -1,0 +1,33 @@
+[package]
+name = "nook"
+version = "0.2.1"
+edition = "2021"
+description = "Nook — pixel notes with a tiny friend (Tauri desktop shell)"
+authors = ["Nook"]
+
+[dependencies]
+# Tauri v2 desktop shell. `api-all` enables the IPC/feature surface we use
+# (window, shell, tray, dialog, notification...). Pin to whatever `cargo tauri`
+# reports as compatible on your machine.
+tauri = { version = "2", features = ["api-all"] }
+
+# Structured logging to src-tauri/nook.log (and the data dir on Windows)
+tauri-plugin-log = { version = "5", features = ["all"] }
+
+# JSON payloads for commands / window state
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Needed to parse the localhost URL the embedded Next.js server runs on
+url = "2"
+
+[profile.release]
+# Smaller, faster installer. Strip debug symbols.
+strip = true
+opt-level = "z"
+lto = true
+panic = "abort"
+
+[[bin]]
+name = "Nook"
+path = "src/main.rs"

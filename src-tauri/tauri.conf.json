@@ -1,0 +1,58 @@
+{
+  "productName": "Nook",
+  "version": "0.2.1",
+  "identifier": "com.nook.desktop",
+  "description": "Nook — pixel notes with a tiny friend. Local-first desktop shell (Tauri + Rust) over the Next.js app.",
+  "author": {
+    "name": "Nook",
+    "email": "hello@nook.app",
+    "url": "https://nook.app"
+  },
+  "copyright": "© 2026 Nook",
+
+  "frontendDist": "../.next/standalone",
+  "distDir": "../.next/standalone",
+
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:3000",
+    "distDir": "../.next/standalone"
+  },
+
+  "package": {
+    "resources": [
+      { "path": "db/custom.db" }
+    ],
+    "externalBin": [],
+    "deb": {
+      "depends": ["libgtk-3-0", "libwebkit2gtk-4.0-37"]
+    },
+    "msi": {
+      "upgradeCode": "1B7C3A2E-4D90-4444-9A7B-123456789ABC",
+      "menuCategory": true,
+      "shortcuts": [
+        {
+          "name": "Nook",
+          "target": "$INSTDIR\\Nook.exe",
+          "icon": "$INSTDIR\\icons\\icon.ico"
+        }
+      ]
+    },
+    "nsis": {
+      "artifact": "${product_name}-${version}-setup.exe",
+      "displayLanguageSelector": true,
+      "menuCategory": true,
+      "createShortcut": true
+    },
+    "appimage": {}
+  },
+
+  "security": {
+    "csp": "default-src * 'unsafe-inline' 'unsafe-eval' data: blob: ws://* wss://* http://localhost:* http://127.0.0.1:*; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * ws://* wss://* http://localhost:* http://127.0.0.1:*; img-src * data: blob:; style-src * 'unsafe-inline'; font-src *; frame-src *;"
+  },
+
+  "tauri": {
+    "windows": []
+  }
+}
