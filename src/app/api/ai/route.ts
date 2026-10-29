@@ -32,7 +32,7 @@ type Body = {
 
 type ChatMsg = { role: "assistant" | "user"; content: string };
 
-async function cloud(messages: ChatMsg[]): Promise<string | null> {
+async function cloudFetch(messages: ChatMsg[]): Promise<string | null> {
   try {
     const { default: ZAI } = await import("z-ai-web-dev-sdk");
     const zai = await ZAI.create();
@@ -44,6 +44,13 @@ async function cloud(messages: ChatMsg[]): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Cloud call with a hard timeout so the desktop shell falls back to the
+ * offline local agent quickly when there's no network. */
+async function cloud(messages: ChatMsg[]): Promise<string | null> {
+  const timeout = new Promise<null>((res) => setTimeout(() => res(null), 6000));
+  return Promise.race([cloudFetch(messages), timeout]);
 }
 
 // ------------------------- the harness (tool-using agent) -------------------------

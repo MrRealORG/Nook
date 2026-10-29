@@ -23,6 +23,10 @@ export type AiMsg = { id: number; role: "user" | "ai"; text: string; res?: AiRes
 export type TimerMode = "focus" | "short" | "long";
 export const DURATIONS: Record<TimerMode, number> = { focus: 25 * 60, short: 5 * 60, long: 15 * 60 };
 export type Streak = { last: string; count: number; best: number };
+
+/** A write that failed because the server (embedded Next.js on desktop) was
+ * unreachable — persisted to localStorage and retried on a timer. */
+export type PendingWrite = { id: string; method: string; url: string; body: unknown; attempts: number; ts: number };
 /** per-game arcade stats, keyed by game id */
 export type GameStat = { plays: number; xp: number; last: number };
 /** recent run history per game (last 12 scores, oldest → newest) — feeds the trend sparklines */
@@ -83,14 +87,20 @@ export function pendingGiftDay(g: DailyGift): number | null {
 }
 
 // ---------- persistence queue ----------
-function api(method: string, url: string, body?: unknown) {
+
+/** Fetch wrapper that reports success/failure instead of swallowing errors.
+ * Used by all note/pet/canvas writes so the desktop shell can queue + retry
+ * while the embedded Next.js server is still booting. */
+function api(method: string, url: string, body?: unknown): Promise<{ ok: boolean }> {
   const json = body === undefined ? undefined : JSON.stringify(body);
   return fetch(url, {
     method,
     headers: { "content-type": "application/json" },
     body: json,
     keepalive: !!json && json.length < 60_000,
-  }).catch(() => null);
+  })
+    .then((r) => ({ ok: r.ok }))
+    .catch(() => ({ ok: false }));
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -290,6 +300,10 @@ interface S {
   petEnabled: boolean;
   /** desktop-shell preferences (pet on desktop, perf mode, tray, autostart) */
   desktopPrefs: DesktopPrefs;
+  /** writes that failed while the embedded server was unreachable — retried until they succeed */
+  pendingWrites: PendingWrite[];
+  /** whether the last write reached the server (false while desktop server is booting) */
+  isDesktopOnline: boolean;
   /** whole-app wallpaper */
   wallpaper: Wallpaper;
   /** custom nook-games created/imported in the arcade */
@@ -477,16 +491,69 @@ function applyUiChrome(style: UiStyleId, obsLight: boolean, scale: number) {
 export const useStore = create<S>()((set, get) => {
   savingSetter = (v) => set({ saving: v });
 
-  const savePet = () => schedule("pet", () => api("PUT", "/api/pet", get().pet), 1200);
+  /** Offline write queue — desktop-safe. When the embedded server is still
+   * booting (or briefly unreachable), failed writes are persisted to
+   * localStorage and retried on a timer so nothing is ever lost. */
+  const enqueueWrite = (method: string, url: string, body: unknown) => {
+    const id = uid();
+    const pending = [...get().pendingWrites, { id, method, url, body, attempts: 0, ts: Date.now() }];
+    set({ pendingWrites: pending.slice(0, 200) });
+    try {
+      const old = JSON.parse(localStorage.getItem("nook:prefs") ?? "{}");
+      localStorage.setItem(
+        "nook:prefs",
+        JSON.stringify({ ...old, pendingWrites: pending.slice(0, 200) }),
+      );
+    } catch {}
+    armRetry();
+  };
+
+  const processWriteQueue = async () => {
+    const pending = get().pendingWrites;
+    if (!pending.length) return;
+    const next: PendingWrite[] = [];
+    for (const w of pending) {
+      const res = await api(w.method, w.url, w.body);
+      if (res.ok) continue;
+      w.attempts += 1;
+      if (w.attempts < 10) next.push(w);
+    }
+    set({ pendingWrites: next, isDesktopOnline: next.length === 0 });
+    armRetry();
+    try {
+      const old = JSON.parse(localStorage.getItem("nook:prefs") ?? "{}");
+      localStorage.setItem("nook:prefs", JSON.stringify({ ...old, pendingWrites: next }));
+    } catch {}
+  };
+
+  let retryIv: ReturnType<typeof setInterval> | null = null;
+  const armRetry = () => {
+    if (retryIv) clearInterval(retryIv);
+    if (get().pendingWrites.length) retryIv = setInterval(() => void processWriteQueue(), 5000);
+    else if (retryIv) clearInterval(retryIv);
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", () => void processWriteQueue());
+    window.addEventListener("focus", () => void processWriteQueue());
+  }
+
+  const savePet = () => schedule("pet", async () => {
+    const res = await api("PUT", "/api/pet", get().pet);
+    if (!res.ok) enqueueWrite("PUT", "/api/pet", get().pet);
+  }, 1200);
   const saveNote = (id: string) =>
-    schedule(`note:${id}`, () => {
+    schedule(`note:${id}`, async () => {
       const n = get().notes.find((x) => x.id === id);
-      if (n) return api("PATCH", `/api/notes/${id}`, { title: n.title, content: n.content, cover: n.cover, pinned: n.pinned, folderId: n.folderId, tags: n.tags });
+      if (!n) return;
+      const res = await api("PATCH", `/api/notes/${id}`, { title: n.title, content: n.content, cover: n.cover, pinned: n.pinned, folderId: n.folderId, tags: n.tags });
+      if (!res.ok) enqueueWrite("PATCH", `/api/notes/${id}`, { title: n.title, content: n.content, cover: n.cover, pinned: n.pinned, folderId: n.folderId, tags: n.tags });
     });
   const saveCanvas = (id: string, name = false) =>
-    schedule(`canvas:${id}`, () => {
+    schedule(`canvas:${id}`, async () => {
       const c = get().canvases.find((x) => x.id === id);
-      if (c) return api("PATCH", `/api/canvases/${id}`, name ? { name: c.name, data: c.data } : { data: c.data });
+      if (!c) return;
+      const res = await api("PATCH", `/api/canvases/${id}`, name ? { name: c.name, data: c.data } : { data: c.data });
+      if (!res.ok) enqueueWrite("PATCH", `/api/canvases/${id}`, name ? { name: c.name, data: c.data } : { data: c.data });
     }, 900);
 
   return {
@@ -593,6 +660,8 @@ export const useStore = create<S>()((set, get) => {
       minimizeToTray: false,
       autoStart: false,
     },
+    pendingWrites: [],
+    isDesktopOnline: true,
     wallpaper: { id: "none", dim: 0.55, blur: 2 },
     customGames: [],
     packStudio: null,
@@ -664,6 +733,7 @@ export const useStore = create<S>()((set, get) => {
           appScale: typeof p.appScale === "number" && p.appScale >= 0.85 && p.appScale <= 1.3 ? p.appScale : 1,
           profile: p.profile && typeof p.profile === "object" ? { ...get().profile, ...(p.profile as Profile) } : get().profile,
           customDock: Array.isArray(p.customDock) ? (p.customDock as string[]).slice(0, 12) : [],
+          pendingWrites: Array.isArray(p.pendingWrites) ? (p.pendingWrites as PendingWrite[]).slice(0, 200) : [],
           grain: p.grain ?? true,
           effects: p.effects ?? true,
           tourDone: p.tourDone ?? false,
@@ -713,6 +783,21 @@ export const useStore = create<S>()((set, get) => {
           .catch(() => {});
         if (streak.count >= 3) get().unlock("streak-3", "Warming Up", "Visited 3 days in a row", "fire");
         if (streak.count >= 7) get().unlock("streak-7", "Week Streak", "Visited 7 days in a row", "fire");
+
+        // restore notes from local backup when the server came back empty (desktop safety net)
+        try {
+          if (get().notes.length === 0) {
+            const raw = localStorage.getItem("nook:notes-backup");
+            if (raw) {
+              const restored = JSON.parse(raw);
+              if (Array.isArray(restored) && restored.length) {
+                const now = Date.now();
+                get().set({ notes: restored.map((n: any) => ({ ...n, updatedAt: n.updatedAt ?? now, createdAt: n.createdAt ?? now })) });
+                get().toast(`Restored ${restored.length} note${restored.length > 1 ? "s" : ""} from local backup`, "note");
+              }
+            }
+          }
+        } catch {}
       } catch {
         if (narrow) set({ sidebar: false, notesList: false, rightOpen: false });
       }
@@ -720,6 +805,14 @@ export const useStore = create<S>()((set, get) => {
 
     set: (p) => {
       set(p);
+      // bounded safety backup of notes to localStorage (desktop data-loss net)
+      try {
+        const s = get();
+        const nb = s.notes.slice(0, 200).map(({ id, title, content, updatedAt, tags, folderId, pinned }) =>
+          ({ id, title, content, updatedAt, tags, folderId, pinned }));
+        const blob = JSON.stringify(nb);
+        if (blob.length < 900_000) localStorage.setItem("nook:notes-backup", blob);
+      } catch {}
       try {
         const s = get();
         const old = JSON.parse(localStorage.getItem("nook:prefs") ?? "{}");
@@ -915,7 +1008,9 @@ export const useStore = create<S>()((set, get) => {
       const now = Date.now();
       const note: Note = { id, title: init?.title ?? "Untitled", content: init?.content ?? "", cover: init?.cover ?? null, pinned: false, folderId: init?.folderId ?? get().activeFolder, tags: init?.tags ?? [], createdAt: now, updatedAt: now };
       set((s) => ({ notes: [note, ...s.notes], activeId: id, view: "notes", palette: false, openTabs: [...s.openTabs, id].slice(-14) }));
-      void api("POST", "/api/notes", { id, title: note.title, content: note.content, cover: note.cover, folderId: note.folderId, tags: note.tags });
+      void api("POST", "/api/notes", { id, title: note.title, content: note.content, cover: note.cover, folderId: note.folderId, tags: note.tags }).then((res) => {
+        if (!res.ok) enqueueWrite("POST", "/api/notes", { id, title: note.title, content: note.content, cover: note.cover, folderId: note.folderId, tags: note.tags });
+      });
       sfx("pop");
       return id;
     },
@@ -961,7 +1056,9 @@ export const useStore = create<S>()((set, get) => {
         }),
       }));
       canv.forEach((c) => saveCanvas(c));
-      void api("DELETE", `/api/notes/${id}`);
+      void api("DELETE", `/api/notes/${id}`).then((res) => {
+        if (!res.ok) enqueueWrite("DELETE", `/api/notes/${id}`, null);
+      });
       sfx("sad");
       get().toast("Note deleted", "trash");
     },
@@ -990,13 +1087,17 @@ export const useStore = create<S>()((set, get) => {
       const colors = ["#9db7d0", "#bccb92", "#cba5ba", "#e0b589", "#b59fd0", "#8fbfae"];
       const folder: Folder = { id, name: name.trim() || "New folder", icon: "folder", color: colors[position % colors.length], position };
       set((s) => ({ folders: [...s.folders, folder] }));
-      void api("POST", "/api/folders", folder);
+      void api("POST", "/api/folders", folder).then((res) => {
+        if (!res.ok) enqueueWrite("POST", "/api/folders", folder);
+      });
       sfx("pop");
     },
 
     renameFolder: (id, name) => {
       set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, name: name.trim() || f.name } : f)) }));
-      void api("PATCH", `/api/folders/${id}`, { name: name.trim() });
+      void api("PATCH", `/api/folders/${id}`, { name: name.trim() }).then((res) => {
+        if (!res.ok) enqueueWrite("PATCH", `/api/folders/${id}`, { name: name.trim() });
+      });
     },
 
     deleteFolder: (id) => {
@@ -1006,7 +1107,9 @@ export const useStore = create<S>()((set, get) => {
         activeFolder: s.activeFolder === id ? null : s.activeFolder,
       }));
       get().notes.filter((n) => n.folderId === null).forEach((n) => saveNote(n.id));
-      void api("DELETE", `/api/folders/${id}`);
+      void api("DELETE", `/api/folders/${id}`).then((res) => {
+        if (!res.ok) enqueueWrite("DELETE", `/api/folders/${id}`, null);
+      });
       sfx("close");
       get().toast("Folder removed — notes kept", "folder");
     },

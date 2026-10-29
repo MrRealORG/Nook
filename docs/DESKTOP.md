@@ -134,3 +134,40 @@ desktop that's `http://127.0.0.1:<free-port>/api/mcp`. Settings → MCP & AI
 agents shows the live URL, tool list, per-agent config snippets (Claude Code,
 Cursor, Codex CLI, OpenCode) with copy-to-clipboard, and a "Test connection"
 button. Set a bearer token to lock down tool calls for external agents.
+
+## Data safety on desktop (offline-first writes)
+
+Because the embedded Next.js server takes a few seconds to boot, Nook now queues
+any write that can't reach the server and retries it automatically:
+
+- **Offline write queue** — notes, pet, canvas, folder and task writes that fail
+  (server still starting, brief network hiccup) are persisted to
+  `nook:prefs` (`pendingWrites`) and retried every 5s, plus on `online`/window
+  focus. Nothing is silently dropped.
+- **isDesktopOnline** — flips to `false` while writes are pending; the UI keeps
+  working optimistically and syncs when the server is healthy.
+- **Notes backup** — the last 200 notes are mirrored to `nook:notes-backup` in
+  localStorage and restored if the server ever comes back empty.
+
+## Local AI backend (works fully offline)
+
+`src/app/api/ai/route.ts` + `src/lib/ai-local.ts` run the AI entirely on-device:
+TF-IDF summarization, keyword tags, title suggestions, rewrites, continue-text,
+and a tool-using agent (create/complete/list tasks, pet feed/status, vault stats,
+activity report). The cloud model (`z-ai-web-dev-sdk`) is only an enhancement
+with a 6s hard timeout — on a desktop with no network it falls back to the local
+agent in under a second.
+
+## MCP (connect your AI agents)
+
+Workspace MCP server at `<window.origin>/api/mcp` (JSON-RPC 2.0). On desktop
+that's `http://127.0.0.1:<free-port>/api/mcp`. Settings → MCP & AI agents shows
+the live URL, live tool list, per-agent config snippets (Claude Code, Cursor,
+Codex CLI, OpenCode) with copy-to-clipboard using the live URL, a bearer-token
+lock, and a "Test connection" button.
+
+## Apple-style icon
+
+Replaced the logo mark with a proper Apple-style icon: rounded squircle, lime
+gradient, drop shadow, and a centered pixel pet face. `icon.png` (512 & 1024),
+`tray-icon.png`, `icon.ico` (multi-res), plus 16–1024 PNGs in `src-tauri/icons/`.
