@@ -69,7 +69,10 @@ jobs:
           $files = Get-ChildItem -Recurse "src-tauri\target\release\bundle" -Include *.exe,*.msi
           $files | ForEach-Object { Write-Host "found: $($_.FullName)" }
 
+      # Artifact storage quota is currently exhausted account-wide; don't let
+      # this step block the Release publish below.
       - name: Upload installers (artifact)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: Nook-windows-installers
