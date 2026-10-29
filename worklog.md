@@ -869,3 +869,21 @@ Work Log:
 - New icon: replaced logo-based icon with a crisp pixel pet face (round head, ears, eyes, blush, smile, lime accent) — icon.png, tray-icon.png, 16..512 PNGs, multi-res icon.ico — generated with PIL.
 - package.json: start script uses node (not bun) so the embedded server runs on plain Node for the desktop build.
 - Cannot compile Rust here (no cargo/crates.io in sandbox); `cargo tauri build` must run on Windows.
+
+---
+Task ID: 8
+Agent: main orchestrator
+Task: Desktop reliability pass — offline write queue, local AI, Apple-style icon
+
+Work Log:
+- New Apple-style icon: rounded squircle, lime gradient, drop shadow, centered
+  pixel pet face — icon.png (512/1024), tray-icon.png, multi-res icon.ico,
+  16–1024 PNGs in src-tauri/icons/.
+- store.ts: api() returns { ok } instead of swallowing errors; offline write
+  queue (pendingWrites) persisted to localStorage and retried every 5s + on
+  online/focus; notes backed up to nook:notes-backup and restored if server
+  empty; pendingWrites + isDesktopOnline in state.
+- notes API routes: return 500 on DB failure so failed writes actually retry.
+- ai/route.ts: cloud() has 6s hard timeout → falls back to offline local agent
+  fast when no network.
+- docs/DESKTOP.md: documented offline writes, local AI backend, MCP, icon.
