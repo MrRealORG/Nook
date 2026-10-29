@@ -48,7 +48,7 @@ export interface WindowPlacement {
 }
 
 export async function saveWindowState(state: WindowPlacement): Promise<void> {
-  await invoke("save_window_state", state);
+  await invoke("save_window_state", { ...state });
 }
 
 export async function loadWindowState(): Promise<WindowPlacement | null> {

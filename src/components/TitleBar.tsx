@@ -323,7 +323,7 @@ export function TitleBar() {
           title="Close"
           style={{ borderRadius: 8, width: 36 }}
           onClick={() => {
-            if (isDesktop()) {
+            if (isDesktop) {
               void desktopQuit();
             } else {
               st().say("Nooo, don't close me! I'll be lonely.");

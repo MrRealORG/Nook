@@ -202,7 +202,7 @@ function SidebarSection() {
         />
         <div className="label mb-1 mt-2">Ultra performance</div>
         <div className="seg mb-2 w-full px-2 pb-2">
-          {["balanced", "max"] as const.map((mode) => (
+          {(["balanced", "max"] as const).map((mode) => (
             <button
               key={mode}
               className={`flex-1 justify-center text-[11px] rounded-lg px-2 py-1.5 border transition-colors ${
