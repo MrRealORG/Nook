@@ -189,10 +189,61 @@ function SidebarSection() {
           hint="Your companion wanders the screen — hover for the quick toolbar, right-click for the full menu"
         />
         <Toggle
+          on={useStore((s) => s.desktopPrefs.petOnDesktop)}
+          onChange={(v) => useStore.getState().setDesktopPrefs({ petOnDesktop: v })}
+          label="Pet on the desktop"
+          hint="The companion appears on normal windows — hidden during games, fullscreen and ultra-clean mode"
+        />
+        <Toggle
+          on={useStore((s) => s.desktopPrefs.petHideGames)}
+          onChange={(v) => useStore.getState().setDesktopPrefs({ petHideGames: v })}
+          label="Hide pet during games"
+          hint="The pet steps aside while you play in the Arcade"
+        />
+        <div className="label mb-1 mt-2">Ultra performance</div>
+        <div className="seg mb-2 w-full px-2 pb-2">
+          {["balanced", "max"] as const.map((mode) => (
+            <button
+              key={mode}
+              className={`flex-1 justify-center text-[11px] rounded-lg px-2 py-1.5 border transition-colors ${
+                useStore((s) => s.desktopPrefs.perfMode) === mode
+                  ? "bg-accent text-accent-ink border-accent"
+                  : "border-line text-dim hover:bg-panel2"
+              }`}
+              onClick={() => useStore.getState().setDesktopPrefs({ perfMode: mode })}
+              title={`Performance mode: ${mode === "max" ? "lower FPS + fewer effects" : "smooth"}`}
+            >
+              {mode === "max" ? "Max (no lag)" : "Balanced"}
+            </button>
+          ))}
+        </div>
+        <Toggle
           on={useStore((s) => s.follow)}
           onChange={(v) => useStore.getState().set({ follow: v })}
           label="Follow my cursor"
           hint="The pet trails behind your pointer as you work"
+        />
+      </div>
+
+      <div className="paper p-5">
+        <div className="label mb-2">Desktop shell (Windows)</div>
+        <Toggle
+          on={useStore((s) => s.desktopPrefs.alwaysOnTop)}
+          onChange={(v) => useStore.getState().setDesktopPrefs({ alwaysOnTop: v })}
+          label="Always on top"
+          hint="Keep Nook above every other window"
+        />
+        <Toggle
+          on={useStore((s) => s.desktopPrefs.minimizeToTray)}
+          onChange={(v) => useStore.getState().setDesktopPrefs({ minimizeToTray: v })}
+          label="Minimize to tray"
+          hint="Hiding the window parks Nook in the notification area"
+        />
+        <Toggle
+          on={useStore((s) => s.desktopPrefs.autoStart)}
+          onChange={(v) => useStore.getState().setDesktopPrefs({ autoStart: v })}
+          label="Open Nook on startup"
+          hint="Launch Nook automatically when you sign in to Windows"
         />
       </div>
     </div>
@@ -670,6 +721,8 @@ function McpSection() {
     const iv = setInterval(loadLog, 6000);
     return () => clearInterval(iv);
   }, []);
+  // the embedded server binds a free port on desktop; window.origin covers both web & desktop
+  const MCP_URL = `${window.location.origin}/api/mcp`;
   const runTest = async () => {
     setTesting(true);
     setTest(null);
@@ -715,7 +768,7 @@ function McpSection() {
           Let Claude Code, Cursor, Codex CLI or OpenCode read & work on your tasks and notes. They connect to the workspace MCP endpoint — your agent can literally tick off tasks for you.
         </div>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="kbd">POST http://localhost:3000/api/mcp</span>
+          <span className="kbd">POST {MCP_URL}</span>
           {tools.length > 0 && <span className="chip" data-on="true"><Icon name="check" size={11} /> {tools.length} tools live</span>}
           <span className="chip">JSON-RPC 2.0</span>
           <button className="btn btn-sm ml-auto" onClick={() => void runTest()} disabled={testing}>
@@ -752,11 +805,11 @@ function McpSection() {
               </button>
               {openAgent === a.id && (
                 <div className="border-t border-line px-3 py-2">
-                  <pre className="overflow-x-auto text-[11px] leading-relaxed text-dim">{a.cfg}</pre>
+                  <pre className="overflow-x-auto text-[11px] leading-relaxed text-dim">{a.cfg.replace("http://localhost:3000/api/mcp", MCP_URL)}</pre>
                   <button
                     className="btn btn-sm mt-2"
                     onClick={() => {
-                      void navigator.clipboard?.writeText(a.cfg).catch(() => {});
+                      void navigator.clipboard?.writeText(a.cfg.replace("http://localhost:3000/api/mcp", MCP_URL)).catch(() => {});
                       setCopied(a.id);
                       sfx("pop");
                       setTimeout(() => setCopied(""), 1600);

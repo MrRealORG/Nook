@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "node scripts/run-with-log.mjs dev.log -- next dev -p 3000",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
-    "start": "node scripts/run-with-log.mjs server.log NODE_ENV=production -- bun .next/standalone/server.js",
+    "start": "node scripts/run-with-log.mjs server.log NODE_ENV=production -- node .next/standalone/server.js",
+    "postinstall": "prisma generate",
+    "desktop:dev": "cargo tauri dev",
+    "desktop:build": "cargo tauri build",
     "lint": "eslint .",
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",

@@ -18,7 +18,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (Array.isArray(b.tags)) patch.tags = JSON.stringify(b.tags.filter((t) => typeof t === "string").map((t) => t.slice(0, 24)).slice(0, 12));
   try {
     await db.note.update({ where: { id }, data: patch });
-  } catch {}
+  } catch {
+    return Response.json({ ok: false, error: "db write failed" }, { status: 500 });
+  }
   return Response.json({ ok: true });
 }
 
@@ -27,6 +29,8 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
   try {
     await db.note.delete({ where: { id } });
-  } catch {}
+  } catch {
+    return Response.json({ ok: false, error: "db delete failed" }, { status: 500 });
+  }
   return Response.json({ ok: true });
 }

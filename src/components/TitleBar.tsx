@@ -7,6 +7,7 @@ import type { IconName } from "@/components/icons";
 import { useStore } from "@/lib/store";
 import { THEME_IDS, THEMES, isPremiumTheme } from "@/lib/themes";
 import { UI_STYLES, UI_STYLE_IDS } from "@/lib/uiStyles";
+import { isDesktop, desktopQuit, getMinimizeToTray, setMinimizeToTray } from "@/lib/tauri";
 
 const LABEL = { notes: "Notes", graph: "Graph", canvas: "Canvas", den: "Den", focus: "Focus", arcade: "Arcade", team: "Team room", market: "Marketplace", tasks: "Tasks", activity: "Activity", rules: "Rules", settings: "Settings" } as const;
 
@@ -45,6 +46,31 @@ function AvatarChip() {
       {displayName && <span className="pixel-font hidden text-[12.5px] text-dim sm:inline">{displayName}</span>}
       {hasAccount && <i className="absolute -right-0.5 -top-0.5 h-[7px] w-[7px] rounded-full" style={{ background: "#7fc48f" }} title="password set" />}
     </button>
+  );
+}
+
+function DesktopTrayToggle() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (!isDesktop) return;
+    (async () => {
+      try {
+        setOn(await getMinimizeToTray());
+      } catch {}
+    })();
+  }, []);
+  if (!isDesktop) return null;
+  return (
+    <Toggle
+      on={on}
+      onClick={async () => {
+        const next = !on;
+        setOn(next);
+        await setMinimizeToTray(next);
+      }}
+      label="Minimize to tray"
+      icon="monitor"
+    />
   );
 }
 
@@ -270,6 +296,7 @@ export function TitleBar() {
             </div>
             <Toggle on={!muted} onClick={() => st().set({ muted: !muted })} label="Sound effects" icon="coins" />
             <Toggle on={music} onClick={() => st().set({ music: !music })} label="Ambient music" icon="gamepad" />
+            <DesktopTrayToggle />
             <div className="my-1 h-px bg-line" />
             <Toggle on={grain} onClick={toggleGrain} label="Film grain & textures" icon="sparkle" />
             <Toggle on={roam} onClick={() => st().set({ roam: !roam })} label="Desktop pet" icon="dog" />
@@ -296,9 +323,13 @@ export function TitleBar() {
           title="Close"
           style={{ borderRadius: 8, width: 36 }}
           onClick={() => {
-            st().say("Nooo, don't close me! I'll be lonely.");
-            st().doAct("sad", 2600);
-            st().toast("Nook never really closes — your pet won't let you", "heart");
+            if (isDesktop()) {
+              void desktopQuit();
+            } else {
+              st().say("Nooo, don't close me! I'll be lonely.");
+              st().doAct("sad", 2600);
+              st().toast("Nook never really closes — your pet won't let you", "heart");
+            }
           }}
         >
           <Icon name="close" size={15} />

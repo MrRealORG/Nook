@@ -5,7 +5,7 @@ import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
 import { PetView } from "@/components/PetView";
 import { activity } from "@/lib/activity";
-import { FOODS, SPECIES } from "@/lib/pet";
+import { SPECIES } from "@/lib/pet";
 import { feedPet, napPet, trickPet } from "@/lib/petActions";
 import type { Mood } from "@/lib/sprite";
 import { clamp, parseNote } from "@/lib/util";
@@ -15,8 +15,6 @@ const SCALE = 2.5;
 const PW = 32 * SCALE;
 const PH = 38 * SCALE;
 const FLOOR = 5;
-
-type Mode = "idle" | "walk" | "sleep";
 
 /** actions surfaced by the hover toolbar + right-click menu */
 function WidgetActions({ onMenu }: { onMenu?: () => void }) {
@@ -28,14 +26,20 @@ function WidgetActions({ onMenu }: { onMenu?: () => void }) {
   return (
     <>
       {[
-        { icon: "message-text" as IconName, label: "Chat", run: () => st().openQuickChat("desktop") },
-        { icon: "sparkles" as IconName, label: "Trick", run: () => trickPet() },
-        { icon: "cake" as IconName, label: "Snack", run: feed },
-        { icon: "moon" as IconName, label: "Nap", run: () => napPet() },
-        { icon: "dog" as IconName, label: "Open den", run: () => st().setView("den") },
+        { icon: "message-text", label: "Chat", run: () => st().openQuickChat("desktop") },
+        { icon: "sparkles", label: "Trick", run: () => trickPet() },
+        { icon: "cake", label: "Snack", run: feed },
+        { icon: "moon", label: "Nap", run: () => napPet() },
+        { icon: "dog", label: "Open den", run: () => st().setView("den") },
       ].map((a) => (
-        <button key={a.label} className="icon-btn !h-7 !w-7" title={a.label} aria-label={a.label} onClick={() => { a.run(); onMenu?.(); }}>
-          <Icon name={a.icon} size={13} />
+        <button
+          key={a.label}
+          className="icon-btn !h-7 !w-7"
+          title={a.label}
+          aria-label={a.label}
+          onClick={() => { a.run(); onMenu?.(); }}
+        >
+          <Icon name={a.icon as IconName} size={13} />
         </button>
       ))}
     </>
@@ -45,18 +49,51 @@ function WidgetActions({ onMenu }: { onMenu?: () => void }) {
 export function DesktopPet() {
   const roam = useStore((s) => s.roam);
   const view = useStore((s) => s.view);
+  const zen = useStore((s) => s.zen);
+  const cleanMode = useStore((s) => s.cleanMode);
   const pet = useStore((s) => s.pet);
   const follow = useStore((s) => s.follow);
   const bubble = useStore((s) => s.bubble);
+  const prefs = useStore((s) => s.desktopPrefs);
   const wrap = useRef<HTMLDivElement>(null);
   const mood = useRef<Mood>("idle");
   const facing = useRef<1 | -1>(1);
   const look = useRef({ x: 0, y: 0 });
   const [menu, setMenu] = useState(false);
   const [hover, setHover] = useState(false);
-  const S = useRef({ x: 160, y: 0, vy: 0, mode: "idle" as Mode, until: 0, target: 160, held: false, moved: false, dx: 0, dy: 0, sx: 0, sy: 0, mx: -1, my: -1, lastClick: 0, facing: 1 as 1 | -1 });
+  const [fullscreen, setFullscreen] = useState(false);
+  const [rafRate, setRafRate] = useState(12);
+  const S = useRef({
+    x: 160,
+    y: 0,
+    vy: 0,
+    mode: "idle" as "idle" | "walk" | "sleep",
+    until: 0,
+    target: 160,
+    held: false,
+    moved: false,
+    dx: 0,
+    dy: 0,
+    sx: 0,
+    sy: 0,
+    mx: -1,
+    my: -1,
+    lastClick: 0,
+    facing: 1 as 1 | -1,
+    lastFrame: 0,
+    frameSkip: 0,
+  });
 
-  const hidden = !roam || view === "den";
+  // ---- desktop-only visibility: normal windows only, never on games / fullscreen ----
+  const onGame = view === "arcade";
+  const hidden =
+    !prefs.petOnDesktop ||
+    !roam ||
+    view === "den" ||
+    fullscreen ||
+    zen ||
+    cleanMode ||
+    (prefs.petHideGames && onGame);
 
   // close the widget context menu on outside click / Escape
   useEffect(() => {
@@ -65,7 +102,7 @@ export function DesktopPet() {
       if (!wrap.current?.contains(e.target as Node)) setMenu(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
-    window.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerdown", onDown, { passive: true });
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointerdown", onDown);
@@ -74,10 +111,22 @@ export function DesktopPet() {
   }, [menu]);
 
   useEffect(() => {
+    const onFs = () => setFullscreen(!!document.fullscreenElement);
+    window.addEventListener("fullscreenchange", onFs);
+    onFs();
+    return () => window.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  useEffect(() => {
     if (hidden) return;
     const s = S.current;
+    // ultra mode: drop the pet to 6 FPS when idle, 12 when active
+    s.frameSkip = prefs.perfMode === "max" ? 2 : 0;
+    setRafRate(prefs.perfMode === "max" ? 6 : 12);
+
     let raf = 0;
     let last = performance.now();
+    let frames = 0;
 
     const onMove = (e: PointerEvent) => {
       s.mx = e.clientX;
@@ -93,6 +142,8 @@ export function DesktopPet() {
       raf = requestAnimationFrame(loop);
       const el = wrap.current;
       if (!el || document.hidden) return;
+      frames += 1;
+      if (s.frameSkip > 0 && frames % (s.frameSkip + 1) !== 0) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const st = useStore.getState();
@@ -123,8 +174,10 @@ export function DesktopPet() {
           if (Math.abs(dx) < 3) { s.mode = "idle"; s.until = t + 2500 + Math.random() * 5000; }
           else { s.x += Math.sign(dx) * 44 * dt; s.facing = dx > 0 ? 1 : -1; m = "walk"; }
         } else {
-          if (st.follow && s.mx >= 0 && Math.abs(s.mx - PW / 2 - s.x) > 90) { s.target = s.mx - PW / 2 + (s.mx > s.x ? -70 : 70); s.mode = "walk"; }
-          else if (t > s.until && !focusing) {
+          if (st.follow && s.mx >= 0 && Math.abs(s.mx - PW / 2 - s.x) > 90) {
+            s.target = s.mx - PW / 2 + (s.mx > s.x ? -70 : 70);
+            s.mode = "walk";
+          } else if (t > s.until && !focusing) {
             const r = Math.random();
             if (r < 0.62) { s.target = 30 + Math.random() * (W - PW - 60); s.mode = "walk"; }
             else s.until = t + 2500 + Math.random() * 4500;
@@ -144,7 +197,6 @@ export function DesktopPet() {
       el.style.transform = `translate3d(${s.x}px, ${-s.y}px, 0)`;
       el.style.setProperty("--bl", `${clamp(s.x + PW / 2 - 118, 8, W - 244) - s.x}px`);
       el.style.setProperty("--tl", `${s.x + PW / 2 - clamp(s.x + PW / 2 - 118, 8, W - 244) - 6}px`);
-      // popover anchor: horizontally centered over the pet, clamped to the viewport
       el.style.setProperty("--popx", `${clamp(s.x + PW / 2, 104, W - 104)}px`);
     };
     raf = requestAnimationFrame(loop);
@@ -169,7 +221,7 @@ export function DesktopPet() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("keydown", onKey);
     };
-  }, [hidden]);
+  }, [hidden, prefs.perfMode]);
 
   if (hidden) return null;
   const s = S.current;
@@ -177,8 +229,14 @@ export function DesktopPet() {
   return (
     <div
       ref={wrap}
-      className="pointer-events-none fixed left-0 z-[70]"
-      style={{ bottom: FLOOR, width: PW, height: PH, willChange: "transform" }}
+      className="pointer-events-none fixed left-0 bottom-[5px] z-[70]"
+      style={{
+        width: PW,
+        height: PH,
+        willChange: "transform",
+        contain: "strict",
+        transform: "translate3d(0,0,0)",
+      }}
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => { setHover(false); }}
     >
@@ -186,17 +244,32 @@ export function DesktopPet() {
       {hover && !menu && (
         <div
           className="panel panel-solid pointer-events-auto absolute flex items-center gap-0.5 rounded-xl px-1 py-1"
-          style={{ bottom: PH + 6, left: "var(--popx, 100px)", transform: "translateX(-50%)", animation: "pop .18s var(--ease-soft) both", filter: "drop-shadow(0 8px 14px rgba(0,0,0,.35))" }}
+          style={{
+            bottom: PH + 6,
+            left: "var(--popx, 100px)",
+            transform: "translateX(-50%)",
+            animation: "pop .18s var(--ease-soft) both",
+            filter: "drop-shadow(0 8px 14px rgba(0,0,0,.35))",
+            contain: "strict",
+          }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <WidgetActions />
-          <button className="icon-btn !h-7 !w-7" title={follow ? "Stop following my cursor" : "Follow my cursor"} aria-label="Toggle follow" onClick={() => { useStore.setState({ follow: !follow }); }}>
+          <button
+            className="icon-btn !h-7 !w-7"
+            title={follow ? "Stop following my cursor" : "Follow my cursor"}
+            aria-label="Toggle follow"
+            onClick={() => { useStore.setState({ follow: !follow }); }}
+          >
             <Icon name="pointer" size={13} style={follow ? { color: "var(--accent)" } : undefined} />
           </button>
           <button
             className="icon-btn !h-7 !w-7"
             title="Hide the desktop widget (bring it back from the Den)"
-            onClick={() => { useStore.setState({ roam: false }); useStore.getState().toast("Widget hidden — open the Den to bring it back", "dog"); }}
+            onClick={() => {
+              useStore.setState({ roam: false });
+              useStore.getState().toast("Widget hidden — open the Den to bring it back", "dog");
+            }}
           >
             <Icon name="close" size={13} />
           </button>
@@ -207,7 +280,14 @@ export function DesktopPet() {
       {menu && (
         <div
           className="panel panel-solid pointer-events-auto absolute z-10 w-[190px] rounded-xl p-1.5"
-          style={{ bottom: PH + 6, left: "var(--popx, 104px)", transform: "translateX(-50%)", animation: "pop .18s var(--ease-soft) both", filter: "drop-shadow(0 8px 14px rgba(0,0,0,.35))" }}
+          style={{
+            bottom: PH + 6,
+            left: "var(--popx, 104px)",
+            transform: "translateX(-50%)",
+            animation: "pop .18s var(--ease-soft) both",
+            filter: "drop-shadow(0 8px 14px rgba(0,0,0,.35))",
+            contain: "strict",
+          }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-2 px-1.5 pb-1.5">
@@ -217,27 +297,45 @@ export function DesktopPet() {
           <div className="flex items-center gap-0.5 px-0.5 pb-1"><WidgetActions onMenu={() => setMenu(false)} /></div>
           <div className="my-0.5 h-px bg-line" />
           {[
-            { icon: "pointer" as IconName, label: follow ? "Stop following me" : "Follow my cursor", run: () => useStore.setState({ follow: !follow }) },
-            { icon: "home" as IconName, label: "Go to the den", run: () => useStore.getState().setView("den") },
+            { icon: "pointer", label: follow ? "Stop following me" : "Follow my cursor", run: () => useStore.setState({ follow: !follow }) },
+            { icon: "home", label: "Go to the den", run: () => useStore.getState().setView("den") },
             {
-              icon: "close" as IconName,
+              icon: "close",
               label: "Hide desktop widget",
               run: () => { useStore.setState({ roam: false }); useStore.getState().toast("Widget hidden — open the Den to bring it back", "dog"); },
             },
           ].map((a) => (
-            <button key={a.label} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] hover:bg-panel2" onClick={() => { a.run(); setMenu(false); }}>
-              <Icon name={a.icon} size={12} className="text-accent" /> {a.label}
+            <button
+              key={a.label}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] hover:bg-panel2"
+              onClick={() => { a.run(); setMenu(false); }}
+            >
+              <Icon name={a.icon as IconName} size={12} className="text-accent" /> {a.label}
             </button>
           ))}
         </div>
       )}
 
       {bubble && (
-        <div key={bubble.id} className="px-clip px-frame pixel-font pointer-events-auto absolute" style={{ bottom: PH - 6, left: "var(--bl, -60px)", width: 236, animation: "bubbleIn .3s var(--ease-soft) both", filter: "drop-shadow(0 8px 14px rgba(0,0,0,.35))" }}>
+        <div
+          key={bubble.id}
+          className="px-clip px-frame pixel-font pointer-events-auto absolute"
+          style={{
+            bottom: PH - 6,
+            left: "var(--bl, -60px)",
+            width: 236,
+            animation: "bubbleIn .3s var(--ease-soft) both",
+            filter: "drop-shadow(0 8px 14px rgba(0,0,0,.35))",
+            contain: "strict",
+          }}
+        >
           <div className="px-clip px-in px-3 py-2 text-[14px] leading-snug">
             <div>{bubble.text}</div>
             {bubble.action && (
-              <button className="btn btn-sm btn-accent mt-2" onClick={() => { useStore.getState().openNote(bubble.action!.noteId); useStore.setState({ bubble: null }); }}>
+              <button
+                className="btn btn-sm btn-accent mt-2"
+                onClick={() => { useStore.getState().openNote(bubble.action!.noteId); useStore.setState({ bubble: null }); }}
+              >
                 {bubble.action.label}
               </button>
             )}
@@ -273,7 +371,6 @@ export function DesktopPet() {
           if (now - s.lastClick < 350) {
             trickPet();
           } else {
-            // single click: open the quick-chat bubble anchored to the pet
             const r = e.currentTarget.getBoundingClientRect();
             useStore.getState().openQuickChat("desktop", r.left + r.width / 2, r.bottom);
           }
@@ -285,7 +382,7 @@ export function DesktopPet() {
         }}
         title={`${pet.name} — click to chat, double-click for a trick, drag to move, right-click for the menu`}
       >
-        <PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={SCALE} fps={12} getPose={() => ({ mood: mood.current, facing: facing.current, look: look.current })} />
+        <PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={SCALE} fps={rafRate} getPose={() => ({ mood: mood.current, facing: facing.current, look: look.current })} />
       </div>
     </div>
   );

@@ -854,3 +854,36 @@ Stage Summary:
 - Known limits: table alignment hints (:---:) are normalized to plain cells on edit; emoji pack falls back to glyphs for unmapped ids; public share URLs live at /?share=<id> (single-route app); zoom uses CSS zoom (Chromium/FF126+).
 - Demo state: uiStyle=obsidian (dark), sidebar+notesList on, 1 tab open, emoji icon pack reset to default, QA test notes deleted.
 NEXT ideas: per-note theme override (Obsidian "note properties"), tab drag-reorder, table row drag, share analytics page, obsidian-style vault switcher.
+
+---
+Task ID: 7
+Agent: main orchestrator
+Task: Tauri desktop upgrade pass — pet overlay, ultra perf, MCP, new icon
+
+Work Log:
+- DesktopPet.tsx rewritten: pet is a desktop overlay that shows ONLY on normal windows (notes/graph/canvas/focus/team/market/activity/rules/settings). Hidden during Arcade games, fullscreen, zen mode, ultra-clean mode, and the Den — controlled by desktopPrefs (petOnDesktop, petHideGames, petHideFullscreen). Fullscreenchange listener; RAF loop skipped when hidden; contain:strict + translate3d; perfMode "max" drops to 6 FPS + fewer frames for zero-lag desktop play.
+- store.ts: added exported DesktopPrefs interface + desktopPrefs field in state S, persisted via localStorage nook:prefs AND synced to Rust (desktop-prefs.json). Actions: setDesktopPrefs syncs alwaysOnTop/minimizeToTray/autoStart to Tauri. loadPrefs/set handle defaults.
+- tauri.ts: new commands get/saveDesktopPrefs, set/getAlwaysOnTop, getMcpInfo, testMcpConnection; DesktopPrefs interface; McpInfo type.
+- src-tauri/main.rs: added SERVER_PORT + ALWAYS_ON_TOP statics; commands get_desktop_prefs/save_desktop_prefs/set_always_on_top/get_always_on_top/get_mcp_info; port stored after server spawn; prefs applied on setup (tray + always-on-top); desktop-prefs.json seed.
+- SettingsView.tsx: new "Pet on the desktop" / "Hide pet during games" / Ultra performance (Balanced/Max) toggles + Desktop shell section (Always on top, Minimize to tray, Open on startup). MCP connection URL now dynamic (window.origin) so it works on the random desktop port; agent config snippets + copy use the live URL; test-connection already present.
+- New icon: replaced logo-based icon with a crisp pixel pet face (round head, ears, eyes, blush, smile, lime accent) — icon.png, tray-icon.png, 16..512 PNGs, multi-res icon.ico — generated with PIL.
+- package.json: start script uses node (not bun) so the embedded server runs on plain Node for the desktop build.
+- Cannot compile Rust here (no cargo/crates.io in sandbox); `cargo tauri build` must run on Windows.
+
+---
+Task ID: 8
+Agent: main orchestrator
+Task: Desktop reliability pass — offline write queue, local AI, Apple-style icon
+
+Work Log:
+- New Apple-style icon: rounded squircle, lime gradient, drop shadow, centered
+  pixel pet face — icon.png (512/1024), tray-icon.png, multi-res icon.ico,
+  16–1024 PNGs in src-tauri/icons/.
+- store.ts: api() returns { ok } instead of swallowing errors; offline write
+  queue (pendingWrites) persisted to localStorage and retried every 5s + on
+  online/focus; notes backed up to nook:notes-backup and restored if server
+  empty; pendingWrites + isDesktopOnline in state.
+- notes API routes: return 500 on DB failure so failed writes actually retry.
+- ai/route.ts: cloud() has 6s hard timeout → falls back to offline local agent
+  fast when no network.
+- docs/DESKTOP.md: documented offline writes, local AI backend, MCP, icon.

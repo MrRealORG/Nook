@@ -27,6 +27,6 @@ export async function POST(req: Request) {
     });
     return Response.json(serializeNote(row));
   } catch {
-    return Response.json({ id });
+    return Response.json({ id, error: "db write failed" }, { status: 500 });
   }
 }
