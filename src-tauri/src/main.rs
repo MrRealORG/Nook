@@ -185,28 +185,33 @@ fn set_auto_start(enable: bool) -> Result<(), String> {
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .replace('\\', "\\\\");
-        let run = if enable {
-            Command::new("reg")
-                .args([
-                    "add",
-                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                    "/v",
-                    "Nook",
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    &exe,
-                    "/f",
-                ])
+        // Bind the Command to a local first: `Command::new(..).args(..)` returns
+        // a &mut borrowed from a temporary, which would be dropped before `run`
+        // is used below (E0716).
+        let mut run = if enable {
+            let mut c = Command::new("reg");
+            c.args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "Nook",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &exe,
+                "/f",
+            ]);
+            c
         } else {
-            Command::new("reg")
-                .args([
-                    "delete",
-                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                    "/v",
-                    "Nook",
-                    "/f",
-                ])
+            let mut c = Command::new("reg");
+            c.args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "Nook",
+                "/f",
+            ]);
+            c
         };
         run.creation_flags(0x00000008) // CREATE_NO_WINDOW
             .output()
@@ -234,11 +239,15 @@ fn save_desktop_prefs(prefs: serde_json::Value) -> Result<(), String> {
     let dir = data_dir_path()?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(DESKTOP_PREFS_FILE);
-    let merged: serde_json::Value = match fs::read_to_string(&path) {
+    // `merged` must be mut for as_object_mut(), and the fallback Map needs a
+    // binding that outlives `obj` — an inline `&mut Map::new()` is a temporary
+    // that would be dropped while still borrowed (E0596 + E0716).
+    let mut merged: serde_json::Value = match fs::read_to_string(&path) {
         Ok(txt) => serde_json::from_str(&txt).unwrap_or(serde_json::json!({})),
         Err(_) => serde_json::json!({}),
     };
-    let mut obj = merged.as_object_mut().unwrap_or(&mut serde_json::Map::new());
+    let mut fallback = serde_json::Map::new();
+    let obj = merged.as_object_mut().unwrap_or(&mut fallback);
     if let Some(map) = prefs.as_object() {
         for (k, v) in map {
             obj.insert(k.clone(), v.clone());
@@ -414,7 +423,7 @@ fn spawn_server(port: u16) -> Result<(), String> {
         .map_err(|e| format!("could not start Nook server — is Node.js installed and on PATH? ({e})"))?;
 
     let log_path = data_dir.join("server.log");
-    if let (Ok(out), Ok(err)) = (child.stdout.take(), child.stderr.take()) {
+    if let (Some(mut out), Some(mut err)) = (child.stdout.take(), child.stderr.take()) {
         let out_log = log_path.clone();
         thread::spawn(move || -> std::io::Result<()> {
             let mut file = fs::OpenOptions::new()
@@ -501,7 +510,7 @@ fn main() {
     };
 
     thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
+        for mut stream in listener.incoming().flatten() {
             let _ = stream.read(&mut [0u8; 16]);
             show_main_window();
         }
@@ -526,6 +535,7 @@ fn main() {
             set_always_on_top,
             get_always_on_top,
             get_mcp_info,
+            set_auto_start,
             get_auto_start,
         ])
         .setup(|app| {
@@ -582,15 +592,18 @@ fn main() {
 
             // Embedded Next.js server on a free localhost port.
             let port = find_free_port();
-            let _ = SERVER_PORT.get().unwrap().lock().unwrap().replace(port);
+            let _ = SERVER_PORT.get().unwrap().lock().map(|mut g| *g = port);
             spawn_server(port)?;
 
             let url = Url::parse(&format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?;
 
-            let window = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::External(url))
+            // The builder's returned handle is managed by the app runtime; the
+            // window is shown later via show_main_window() once /api/health
+            // answers, so the local binding is intentionally not used here.
+            WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::External(url))
                 .title("Nook")
                 .inner_size(state.width as f64, state.height as f64)
-                .min_inner_size(960, 640)
+                .min_inner_size(960.0, 640.0)
                 .maximized(state.maximized)
                 .resizable(true)
                 .visible(false) // hidden until /api/health answers
@@ -629,7 +642,7 @@ fn main() {
                 RunEvent::ExitRequested { .. } => {
                     stop_server();
                 }
-                RunEvent::WindowEvent { label, event }
+                RunEvent::WindowEvent { label, event, .. }
                     if label == MAIN_LABEL =>
                 {
                     match event {
