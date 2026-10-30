@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en" data-theme="graphite" data-widget="true">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nook widget</title>
+    <script>
+      try { var p = JSON.parse(localStorage.getItem("nook:prefs") || "{}"); document.documentElement.dataset.theme = p.theme || "graphite"; } catch (e) {}
+    </script>
+  </head>
+  <body class="widget-body">
+    <div id="widget"></div>
+    <script type="module" src="/src/widget/main.tsx"></script>
+  </body>
+</html>

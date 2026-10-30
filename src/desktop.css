@@ -1,0 +1,33 @@
+/* ---------- desktop build additions (fonts, glass backdrop, window chrome, widget) ---------- */
+@font-face { font-family: "Pixelify Sans"; src: url("./fonts/PixelifySans.ttf") format("truetype"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "Silkscreen"; src: url("./fonts/Silkscreen.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+:root { --f-pixel: "Pixelify Sans"; --f-silk: "Silkscreen"; }
+
+/* Mica / acrylic: let the native backdrop show through a tinted veil */
+html[data-glass="mica"] body, html[data-glass="acrylic"] body { background: transparent; }
+html[data-glass="mica"] .backdrop, html[data-glass="acrylic"] .backdrop { opacity: calc(var(--hero-op) * 0.5); }
+html[data-glass="mica"] body::before, html[data-glass="acrylic"] body::before {
+  content: ""; position: fixed; inset: 0; z-index: -3; pointer-events: none; background: var(--bg); opacity: 0.55;
+}
+
+/* custom title bar window buttons */
+.win-controls { display: flex; align-items: stretch; height: 30px; margin-left: 4px; -webkit-app-region: no-drag; }
+.win-btn { width: 40px; display: grid; place-items: center; border-radius: 8px; color: var(--dim); transition: background .12s, color .12s; }
+.win-btn:hover { background: var(--panel2); color: var(--ink); }
+.win-btn[data-kind="close"]:hover { background: #c4423a; color: #fff; }
+
+/* ---------- desktop widget ---------- */
+html[data-widget="true"], html[data-widget="true"] body.widget-body { background: transparent !important; }
+.widget-body .backdrop, .widget-body .grain, .widget-body .noise { display: none; }
+.widget-shell {
+  position: fixed; inset: 6px; display: flex; flex-direction: column; gap: 8px; padding: 10px;
+  border-radius: 18px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel-solid) 88%, transparent);
+  box-shadow: 0 10px 30px -12px rgba(0,0,0,.7); backdrop-filter: blur(14px); overflow: hidden;
+}
+.widget-head { display: flex; align-items: center; gap: 6px; cursor: grab; }
+.widget-card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel2); padding: 8px 10px; }
+.widget-task { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 12.5px; }
+.widget-task input { margin-top: 2px; accent-color: var(--accent); }
+.widget-task[data-done="true"] span { text-decoration: line-through; color: var(--faint); }
+.att-lightbox { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; background: rgba(0,0,0,.72); cursor: zoom-out; }
+.att-lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
