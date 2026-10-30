@@ -74,7 +74,7 @@ The whole app is now **native Rust** — no servers, no waiting.
         reminded: false, position: 3, createdAt: now - 300000, completedAt: null
       }
     ],
-    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal', closeToTray: '0', aiUrl: 'http://127.0.0.1:11434', aiModel: '', initialized: '1' },
+    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal', closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy', defaultFolder: '', initialized: '1' },
     stats: { notes: 3, favorites: 2, openTasks: 2, folders: 3, trash: 1 },
     recordings: [
       { name: 'rec-20261029-101500.wav', path: 'C:\\recordings\\rec-20261029-101500.wav', bytes: 1875000, durationMs: 93500, createdAt: now - 86400000 },
@@ -307,12 +307,57 @@ function mockCall(cmd, args) {
       return Promise.resolve();
     case 'export_recording':
       return Promise.resolve('C:\\Users\\demo\\Desktop\\' + a.name);
-    case 'ai_models':
-      return Promise.resolve(['llama3.2:latest', 'qwen2.5:7b', 'mistral:latest']);
-    case 'ai_generate':
+    case 'ai_list_models':
+      return Promise.resolve(['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.2-70b']);
+    case 'ai_complete':
       return Promise.resolve(
-        '• This is a mock AI response from the browser preview.\n• In the real app this comes from your local Ollama model.\n• Nothing ever leaves the PC.'
+        '• This is a mock AI response from the browser preview.\n• In the real app this comes from your own AI provider.\n• Your key stays on this PC.'
       );
+    case 'ai_chat':
+      return Promise.resolve();
+    case 'ai_stop':
+      return Promise.resolve();
+    case 'ai_test':
+      return Promise.resolve('Connected — model replied: OK (mock)');
+    case 'list_chats':
+      return Promise.resolve(mock.chats || []);
+    case 'create_chat': {
+      mock.chats = mock.chats || [];
+      const c = { id: 'chat-' + Date.now(), title: (a.title || 'New chat').trim() || 'New chat', createdAt: Date.now(), updatedAt: Date.now() };
+      mock.chats.unshift(c);
+      return Promise.resolve({ ...c });
+    }
+    case 'rename_chat': {
+      const c = (mock.chats || []).find((x) => x.id === a.id);
+      if (c) c.title = a.title;
+      return Promise.resolve();
+    }
+    case 'delete_chat':
+      mock.chats = (mock.chats || []).filter((x) => x.id !== a.id);
+      mock.chatMsgs = Object.fromEntries(Object.entries(mock.chatMsgs || {}).filter(([k]) => k !== a.id));
+      return Promise.resolve();
+    case 'get_chat_messages':
+      return Promise.resolve((mock.chatMsgs || {})[a.chatId] || []);
+    case 'add_chat_message': {
+      mock.chatMsgs = mock.chatMsgs || {};
+      const arr = mock.chatMsgs[a.chatId] = mock.chatMsgs[a.chatId] || [];
+      const m = { id: 'msg-' + Date.now(), chatId: a.chatId, role: a.role, content: a.content, createdAt: Date.now() };
+      arr.push(m);
+      return Promise.resolve({ ...m });
+    }
+    case 'clear_chat_messages':
+      if (mock.chatMsgs) mock.chatMsgs[a.chatId] = [];
+      return Promise.resolve();
+    case 'import_notes':
+      return Promise.resolve(2);
+    case 'autostart_get':
+      return Promise.resolve(false);
+    case 'autostart_set':
+      return Promise.resolve();
+    case 'clipboard_write':
+      return Promise.resolve();
+    case 'clipboard_read':
+      return Promise.resolve('clipboard mock text');
     case 'get_stats':
       return Promise.resolve(mockStats());
     case 'data_dir':

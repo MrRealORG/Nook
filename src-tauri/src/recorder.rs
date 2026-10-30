@@ -2,9 +2,16 @@
 //! Windows) and streams raw samples straight to a 16-bit PCM WAV file.
 //! No codecs, no ffmpeg, no network. Files live in <appdata>/recordings.
 //!
-//! The whole capture (device + stream + file) runs inside one dedicated
-//! thread: cpal::Stream is !Send, so it must never cross threads. The UI
-//! talks to that thread through atomic stop flags and mpsc channels.
+//! v0.7 FIX — "recording gets stuck": start/stop used to BLOCK the UI
+//! thread (Tauri sync commands run on the main thread) waiting on channel
+//! handshakes and thread joins. If a mic driver took long to initialise
+//! the whole window froze. Now every command returns instantly and the
+//! capture thread reports progress through `recorder://event`:
+//!   { kind: "started" }
+//!   { kind: "saved",   info: RecordingInfo }
+//!   { kind: "error",   message: String, saved: bool }
+//! The whole capture (device + stream + file) still runs inside one
+//! dedicated thread: cpal::Stream is !Send, so it must never cross threads.
 
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -16,7 +23,7 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{civil_from_days, es, now_ms, CmdResult};
 
@@ -24,8 +31,6 @@ pub struct RecorderState {
     recording: Arc<AtomicBool>,
     stop_flag: Arc<AtomicBool>,
     started_at: AtomicI64,
-    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    result_rx: Mutex<Option<mpsc::Receiver<Result<RecordingInfo, String>>>>,
     last_error: Mutex<Option<String>>,
 }
 
@@ -35,8 +40,6 @@ impl RecorderState {
             recording: Arc::new(AtomicBool::new(false)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             started_at: AtomicI64::new(0),
-            thread: Mutex::new(None),
-            result_rx: Mutex::new(None),
             last_error: Mutex::new(None),
         }
     }
@@ -58,6 +61,27 @@ pub struct RecorderStatus {
     pub recording: bool,
     pub elapsed_ms: i64,
     pub error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RecEvent {
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    info: Option<RecordingInfo>,
+}
+
+fn emit_event(app: &AppHandle, kind: &str, message: Option<String>, info: Option<RecordingInfo>) {
+    let _ = app.emit(
+        "recorder://event",
+        RecEvent {
+            kind: kind.to_string(),
+            message,
+            info,
+        },
+    );
 }
 
 fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -146,19 +170,18 @@ pub fn wav_duration_ms(path: &PathBuf) -> i64 {
 
 // --------------------------------------------------------- capture thread ----
 
-/// Runs the entire recording session. Returns the file info through
-/// `out_tx` when the stop flag is set (or an error if anything fails).
+/// Runs the entire recording session in its own thread. Reports progress
+/// through `recorder://event` — never through blocking channel handshakes.
 fn capture_session(
+    app: AppHandle,
     device: Option<String>,
     path: PathBuf,
     stop: Arc<AtomicBool>,
     rec: Arc<AtomicBool>,
-    ready_tx: mpsc::Sender<Result<(), String>>,
-    out_tx: mpsc::Sender<Result<RecordingInfo, String>>,
 ) {
-    let fail = |ready_tx: &mpsc::Sender<Result<(), String>>, msg: String| {
-        let _ = ready_tx.send(Err(msg));
+    let abort = |msg: String| {
         rec.store(false, Ordering::Relaxed);
+        emit_event(&app, "error", Some(msg), None);
     };
 
     let host = cpal::default_host();
@@ -168,25 +191,25 @@ fn capture_session(
                 .ok_or_else(|| format!("Microphone \"{name}\" not found"))
         }) {
             Ok(d) => d,
-            Err(e) => return fail(&ready_tx, e),
+            Err(e) => return abort(e),
         },
         None => match host.default_input_device() {
             Some(d) => d,
-            None => return fail(&ready_tx, "No microphone found on this PC".into()),
+            None => return abort("No microphone found on this PC".into()),
         },
     };
 
     let cfg = match dev.default_input_config() {
         Ok(c) => c,
-        Err(e) => return fail(&ready_tx, es(e)),
+        Err(e) => return abort(format!("Could not open the microphone: {}", es(e))),
     };
     let (sample_rate, channels) = (cfg.sample_rate().0, cfg.channels());
 
     let (tx, rx) = mpsc::channel::<Vec<i16>>();
-    let last_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let cb_error = last_error.clone();
+    let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let cb_error = stream_error.clone();
 
-    let stream = match cfg.sample_format() {
+    let build = |dev: &cpal::Device, cfg: &cpal::SupportedStreamConfig| match cfg.sample_format() {
         cpal::SampleFormat::F32 => dev.build_input_stream(
             &cfg.config(),
             move |data: &[f32], _| {
@@ -222,34 +245,38 @@ fn capture_session(
             },
             None,
         ),
-        other => {
-            return fail(&ready_tx, format!("Unsupported mic sample format: {other}"));
-        }
+        _other => Err(cpal::BuildStreamError::StreamConfigNotSupported),
     };
 
-    let mut stream = match stream {
+    // builds the input stream for whatever sample format the device offers;
+    // `tx` is consumed into the first successful stream's data callback
+    let stream = match build(&dev, &cfg) {
         Ok(s) => s,
-        Err(e) => return fail(&ready_tx, es(e)),
+        Err(e) => return abort(format!("Could not start the microphone: {}", es(e))),
     };
+
     if let Err(e) = stream.play() {
-        return fail(&ready_tx, es(e));
+        return abort(format!("Could not start the microphone: {}", es(e)));
     }
 
     let mut file = match File::create(&path) {
         Ok(f) => f,
-        Err(e) => return fail(&ready_tx, es(e)),
+        Err(e) => return abort(format!("Could not create the file: {}", es(e))),
     };
     if let Err(e) = write_wav_header(&mut file, sample_rate, channels) {
-        return fail(&ready_tx, es(e));
+        return abort(format!("Could not write the file: {}", es(e)));
     }
 
-    // microphone is live — tell the caller
-    let _ = ready_tx.send(Ok(()));
+    // microphone is live — tell the UI
+    emit_event(&app, "started", None, None);
 
     let mut total: u64 = 0;
+    let mut err_streak: u32 = 0;
+    let mut stop_pressed = false;
     loop {
         match rx.recv_timeout(Duration::from_millis(150)) {
             Ok(chunk) => {
+                err_streak = 0;
                 let mut bytes = Vec::with_capacity(chunk.len() * 2);
                 for s in chunk {
                     bytes.extend_from_slice(&s.to_le_bytes());
@@ -260,7 +287,20 @@ fn capture_session(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if stop.load(Ordering::Relaxed) {
+                    stop_pressed = true;
                     break;
+                }
+                // if the device errored out and stays silent, end the session
+                // instead of spinning forever on a dead stream
+                let has_err = stream_error
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_some();
+                if has_err {
+                    err_streak += 1;
+                    if err_streak >= 10 {
+                        break; // ~1.5 s of silence after an error
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -270,20 +310,44 @@ fn capture_session(
     let _ = patch_wav_header(&mut file, total);
     drop(stream); // stops the capture on the thread that created it
 
-    let _ = out_tx.send(match std::fs::metadata(&path) {
-        Ok(meta) => Ok(RecordingInfo {
-            name: path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            path: path.to_string_lossy().into_owned(),
-            bytes: meta.len() as i64,
-            duration_ms: wav_duration_ms(&path),
-            created_at: now_ms(),
-        }),
-        Err(e) => Err(es(e)),
+    let info = std::fs::metadata(&path).ok().map(|meta| RecordingInfo {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: path.to_string_lossy().into_owned(),
+        bytes: meta.len() as i64,
+        duration_ms: wav_duration_ms(&path),
+        created_at: now_ms(),
     });
+
     rec.store(false, Ordering::Relaxed);
+
+    let stream_err = stream_error
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+
+    if stop_pressed && stream_err.is_none() {
+        if let Some(info) = info {
+            emit_event(&app, "saved", None, Some(info));
+            return;
+        }
+        emit_event(&app, "error", Some("Could not save the recording".into()), None);
+        return;
+    }
+
+    // ended because of a device error (or the channel died)
+    let msg = stream_err.unwrap_or_else(|| "The microphone stopped unexpectedly".into());
+    match info {
+        Some(i) if i.bytes > 44 => emit_event(
+            &app,
+            "error",
+            Some(format!("{msg} — audio captured so far was saved")),
+            Some(i),
+        ),
+        _ => emit_event(&app, "error", Some(msg), None),
+    }
 }
 
 // --------------------------------------------------------------- commands ----
@@ -321,12 +385,10 @@ pub fn recorder_status(state: State<'_, RecorderState>) -> CmdResult<RecorderSta
     })
 }
 
+/// Returns instantly — the UI gets `recorder://event` when the mic is live
+/// (or when it fails). NEVER blocks the main/UI thread.
 #[tauri::command]
-pub fn recorder_start(
-    app: AppHandle,
-    state: State<'_, RecorderState>,
-    device: Option<String>,
-) -> CmdResult<()> {
+pub fn recorder_start(app: AppHandle, state: State<'_, RecorderState>, device: Option<String>) -> CmdResult<()> {
     if state.recording.load(Ordering::Relaxed) {
         return Err("Already recording".into());
     }
@@ -342,74 +404,27 @@ pub fn recorder_start(
 
     state.stop_flag.store(false, Ordering::Relaxed);
     state.recording.store(true, Ordering::Relaxed);
-
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
-    let (out_tx, out_rx) = mpsc::channel::<Result<RecordingInfo, String>>();
+    state.started_at.store(now_ms(), Ordering::Relaxed);
+    *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
 
     let stop = state.stop_flag.clone();
     let rec = state.recording.clone();
-    let handle = std::thread::spawn(move || {
-        capture_session(device, path.clone(), stop, rec, ready_tx, out_tx);
+    std::thread::spawn(move || {
+        capture_session(app, device, path, stop, rec);
     });
 
-    // wait (briefly) for the microphone handshake
-    match ready_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            let _ = handle.join();
-            state.recording.store(false, Ordering::Relaxed);
-            *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.clone());
-            return Err(e);
-        }
-        Err(_) => {
-            state.stop_flag.store(true, Ordering::Relaxed);
-            let _ = handle.join();
-            state.recording.store(false, Ordering::Relaxed);
-            let msg = "Recorder could not start in time".to_string();
-            *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg.clone());
-            return Err(msg);
-        }
-    }
-
-    state.started_at.store(now_ms(), Ordering::Relaxed);
-    *state.thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
-    *state.result_rx.lock().unwrap_or_else(|p| p.into_inner()) = Some(out_rx);
-    *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
     Ok(())
 }
 
+/// Returns instantly — the capture thread finalises the WAV and reports
+/// back through `recorder://event` ("saved"). NEVER blocks the UI thread.
 #[tauri::command]
-pub fn recorder_stop(state: State<'_, RecorderState>) -> CmdResult<Option<RecordingInfo>> {
+pub fn recorder_stop(state: State<'_, RecorderState>) -> CmdResult<()> {
     if !state.recording.load(Ordering::Relaxed) {
-        return Ok(None);
+        return Ok(());
     }
     state.stop_flag.store(true, Ordering::Relaxed);
-    let handle = state
-        .thread
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .take();
-    let rx = state
-        .result_rx
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .take();
-
-    let mut info = None;
-    if let Some(rx) = rx {
-        match rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(i)) => info = Some(i),
-            Ok(Err(e)) => {
-                *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
-            }
-            Err(_) => {}
-        }
-    }
-    if let Some(h) = handle {
-        let _ = h.join();
-    }
-    state.recording.store(false, Ordering::Relaxed);
-    Ok(info)
+    Ok(())
 }
 
 #[tauri::command]

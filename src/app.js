@@ -29,13 +29,32 @@ const LIGHT_THEMES = THEMES.filter((t) => t.light).map((t) => t.id);
 const PRIO_LABEL = ['', 'Low', 'Medium', 'High'];
 const REPEAT_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 
+// ---------------------------------------------------------------- AI providers ----
+// Every provider talks the OpenAI-compatible /chat/completions protocol.
+const AI_PROVIDERS = [
+  { id: 'openrouter', name: 'OpenRouter', url: 'https://openrouter.ai/api/v1', key: true, models: true, hint: '400+ models — one key. openrouter.ai/keys' },
+  { id: 'zai',        name: 'Z.ai (GLM)', url: 'https://api.z.ai/api/paas/v4', key: true, models: false, hint: 'GLM-4.6 · GLM-4.5 · GLM-4.5-Air — z.ai model names' },
+  { id: 'openai',     name: 'OpenAI',     url: 'https://api.openai.com/v1', key: true, models: true, hint: 'GPT-4o / GPT-4.1 family — platform.openai.com' },
+  { id: 'groq',       name: 'Groq',       url: 'https://api.groq.com/openai/v1', key: true, models: true, hint: 'Llama & Mixtral at crazy speed — console.groq.com' },
+  { id: 'gemini',     name: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai', key: true, models: true, hint: 'Use an AI Studio key — aistudio.google.com/apikey' },
+  { id: 'deepseek',   name: 'DeepSeek',   url: 'https://api.deepseek.com/v1', key: true, models: true, hint: 'deepseek-chat / deepseek-reasoner' },
+  { id: 'ollama',     name: 'Ollama (local)', url: 'http://127.0.0.1:11434/v1', key: false, models: true, hint: 'Free & offline — models you pulled with ollama' },
+  { id: 'lmstudio',   name: 'LM Studio (local)', url: 'http://127.0.0.1:1234/v1', key: false, models: true, hint: 'Point LM Studio at port 1234 and go' },
+  { id: 'custom',     name: 'Custom',     url: '', key: true, models: true, hint: 'Any OpenAI-compatible endpoint' }
+];
+const DEFAULT_AI_SETTINGS = {
+  active: '',
+  providers: {},   // id -> { url, apiKey, model }
+  systemPrompt: 'You are Nook AI, a friendly assistant inside a notes app. Be concise. Use Markdown.'
+};
+
 const state = {
   folders: [],
   folderCountMap: {},   // folderId -> live note count
   notes: [],            // summaries for the current view
   tasks: [],
   stats: null,
-  view: { type: 'all' }, // all | favorites | trash | folder | tasks | search
+  view: { type: 'all' }, // all | favorites | trash | folder | tasks | recordings | chat | search
   sort: localStorage.getItem('nook.sort') || 'updated',
   taskFilter: localStorage.getItem('nook.taskFilter') || 'all',
   taskSort: localStorage.getItem('nook.taskSort') || 'manual',
@@ -44,7 +63,12 @@ const state = {
   openNote: null,       // full note object being edited
   preview: false,
   query: '',
-  settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal', closeToTray: '0', aiUrl: 'http://127.0.0.1:11434', aiModel: '' },
+  settings: {
+    theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal',
+    closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy',
+    defaultFolder: '', autostart: '0',
+    ai: JSON.parse(JSON.stringify(DEFAULT_AI_SETTINGS))
+  },
   tabs: [],              // open note ids, in order
   recPoll: null,         // recorder status poller
   audioEl: null,         // one shared audio player
@@ -52,7 +76,15 @@ const state = {
   saveTimer: null,
   taskSaveTimer: null,
   saving: false,
-  bootDone: false
+  bootDone: false,
+  // AI chat
+  chats: [],
+  chatId: null,
+  chatMsgs: [],
+  chatUseNote: false,
+  aiStreaming: false,
+  aiReqId: null,
+  aiStreamText: ''
 };
 
 // The keystrokes typed since the last completed save. queueSave() fills it,
@@ -354,6 +386,7 @@ const VIEW_META = [
   { type: 'all', label: 'All Notes', icon: 'all' },
   { type: 'favorites', label: 'Favorites', icon: 'star' },
   { type: 'tasks', label: 'Tasks', icon: 'checkSq' },
+  { type: 'chat', label: 'AI Chat', icon: 'sparkle' },
   { type: 'recordings', label: 'Recordings', icon: 'mic' },
   { type: 'trash', label: 'Trash', icon: 'trash' }
 ];
@@ -365,7 +398,7 @@ function renderSidebar() {
   viewsEl.innerHTML = VIEW_META.map((v) => {
     const active = state.view.type === v.type ? ' active' : '';
     const count = v.type === 'all' ? s.notes : v.type === 'favorites' ? s.favorites : v.type === 'tasks' ? s.openTasks : s.trash;
-    const showCount = v.type !== 'tasks' && v.type !== 'recordings';
+    const showCount = v.type !== 'tasks' && v.type !== 'recordings' && v.type !== 'chat';
     return `
       <button class="sb-row${active}" data-view="${v.type}">
         <span class="sb-ico">${ico(v.icon)}</span>
@@ -463,6 +496,7 @@ function currentViewTitle() {
     case 'trash': return 'Trash';
     case 'tasks': return 'Tasks';
     case 'recordings': return 'Recordings';
+    case 'chat': return 'AI Chat';
     case 'search': return state.query.trim() ? `Results for “${state.query.trim()}”` : 'Search';
     case 'folder': {
       const f = state.folders.find((x) => x.id === state.view.folderId);
@@ -475,10 +509,10 @@ function currentViewTitle() {
 function renderListHeader() {
   $('#nl-title').textContent = currentViewTitle();
   $('#nl-count').textContent =
-    state.view.type === 'tasks' || state.view.type === 'recordings' ? '' : `${state.notes.length}`;
+    state.view.type === 'tasks' || state.view.type === 'recordings' || state.view.type === 'chat' ? '' : `${state.notes.length}`;
   $('#nl-sort').value = state.sort;
   $('#nl-sort').style.display =
-    state.view.type === 'tasks' || state.view.type === 'recordings' ? 'none' : '';
+    state.view.type === 'tasks' || state.view.type === 'recordings' || state.view.type === 'chat' ? 'none' : '';
   const emptyBtn = $('#btn-empty-trash');
   emptyBtn.classList.toggle('hidden', !(state.view.type === 'trash' && state.notes.length > 0));
 }
@@ -487,7 +521,7 @@ function renderNoteList() {
   renderListHeader();
   const el = $('#nl-items');
 
-  if (state.view.type === 'tasks' || state.view.type === 'recordings') {
+  if (state.view.type === 'tasks' || state.view.type === 'recordings' || state.view.type === 'chat') {
     el.innerHTML = '';
     return;
   }
@@ -541,6 +575,23 @@ function renderNoteList() {
       const nid = card.dataset.nid;
       const n = state.notes.find((x) => x.id === nid);
       if (!n) return;
+      if (n.trashed || state.view.type === 'trash') {
+        showMenu(e.clientX, e.clientY, [
+          { label: 'Open', icon: 'pencil', fn: () => selectNote(nid) },
+          { label: 'Restore note', icon: 'check', fn: async () => { await call('trash_note', { id: nid, trashed: false }); await refreshAll(); refreshStatsOnly(); toast('Note restored'); } },
+          { sep: true },
+          { label: 'Delete forever', icon: 'trash', danger: true, fn: async () => {
+            const ok = await confirmModal({ title: 'Delete forever?', body: 'This note will be gone for good. There is no undo.', confirmLabel: 'Delete forever', danger: true });
+            if (!ok) return;
+            await call('delete_note_forever', { id: nid });
+            if (state.currentNoteId === nid) { state.currentNoteId = null; state.openNote = null; renderEditor(); closeTab(nid, { switchAway: false }); }
+            state.notes = state.notes.filter((x) => x.id !== nid);
+            renderNoteList(); renderTabs(); refreshStatsOnly();
+            toast('Deleted forever');
+          } }
+        ]);
+        return;
+      }
       const folder = state.folders.find((f) => f.id === n.folderId);
       showMenu(e.clientX, e.clientY, [
         { label: 'Open', icon: 'pencil', fn: () => selectNote(nid) },
@@ -1078,6 +1129,8 @@ async function refreshTasks() {
 
 async function refreshAll() {
   await Promise.all([refreshFolders(), refreshNotes(), refreshStatsOnly()]);
+  // quick switcher works across every note, not just the current view
+  state.allNotesCache = await call('list_notes', { view: 'all', sort: 'updated' });
   renderSidebar();
   renderNoteList();
   renderTasks();
@@ -1098,7 +1151,7 @@ function setView(view, opts = {}) {
   state.view = view;
   closeSlash();
   closeMenu();
-  if (view.type === 'tasks' || view.type === 'recordings') {
+  if (view.type === 'tasks' || view.type === 'recordings' || view.type === 'chat') {
     state.currentNoteId = null;
     state.openNote = null;
   }
@@ -1109,6 +1162,7 @@ function setView(view, opts = {}) {
       $('#tasks-view').classList.remove('hidden');
       $('#tasks-view').classList.add('view-enter');
       $('#rec-view').classList.add('hidden');
+      $('#chat-view').classList.add('hidden');
       $('#note-list').classList.add('hidden');
       $('#editor').style.display = 'none';
       renderTasks();
@@ -1116,6 +1170,7 @@ function setView(view, opts = {}) {
       $('#rec-view').classList.remove('hidden');
       $('#rec-view').classList.add('view-enter');
       $('#tasks-view').classList.add('hidden');
+      $('#chat-view').classList.add('hidden');
       $('#note-list').classList.add('hidden');
       $('#editor').style.display = 'none';
       if (!state.recViewLoaded) {
@@ -1129,9 +1184,18 @@ function setView(view, opts = {}) {
         }).catch(() => {});
       }
       renderRecordings();
+    } else if (view.type === 'chat') {
+      $('#chat-view').classList.remove('hidden');
+      $('#chat-view').classList.add('view-enter');
+      $('#tasks-view').classList.add('hidden');
+      $('#rec-view').classList.add('hidden');
+      $('#note-list').classList.add('hidden');
+      $('#editor').style.display = 'none';
+      openChatView();
     } else {
       $('#tasks-view').classList.add('hidden');
       $('#rec-view').classList.add('hidden');
+      $('#chat-view').classList.add('hidden');
       $('#note-list').classList.remove('hidden');
       $('#editor').style.display = '';
     }
@@ -1170,7 +1234,10 @@ async function selectNote(id) {
 
 async function createNote() {
   await flushSave();
-  const folderId = state.view.type === 'folder' ? state.view.folderId : null;
+  let folderId = state.view.type === 'folder' ? state.view.folderId : null;
+  if (!folderId && state.view.type !== 'folder' && state.settings.defaultFolder) {
+    folderId = state.settings.defaultFolder; // v0.7 — default folder setting
+  }
   const note = await call('create_note', { folderId });
   state.openNote = note;
   state.currentNoteId = note.id;
@@ -1216,6 +1283,12 @@ function queueSave() {
     content: $('#ed-text').value
   };
   updateWordCount(pending.content);
+  // Realtime autosave can be turned off in Settings — then we only save on
+  // Ctrl+S / blur / close. The status bar always tells the truth.
+  if (state.settings.autosave === '0') {
+    setSaveState('saving', 'Unsaved — Ctrl+S to save');
+    return;
+  }
   setSaveState('saving', 'Saving…');
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(flushSave, 250);
@@ -1432,7 +1505,7 @@ async function newFolder() {
 
 // ------------------------------------------------------------------ settings ----
 
-async function openSettings() {
+async function openSettings(section) {
   const dataPath = await call('data_dir');
   const root = $('#overlay-root');
   const theme = state.settings.theme;
@@ -1440,6 +1513,47 @@ async function openSettings() {
   const ef = state.settings.editorFont;
   const ew = state.settings.editorWidth;
   const ctt = state.settings.closeToTray === '1';
+  const asv = state.settings.autosave === '1';
+  const spc = state.settings.spellcheck === '1';
+  const den = state.settings.density || 'cozy';
+  const auto = state.settings.autostart === '1';
+  const ai = state.settings.ai;
+  const activeId = ai.active || 'openrouter';
+
+  const providerPanel = (pid) => {
+    const meta = AI_PROVIDERS.find((p) => p.id === pid) || AI_PROVIDERS[0];
+    const conf = ai.providers[pid] || {};
+    const url = conf.url ?? meta.url ?? '';
+    const model = conf.model || '';
+    const apiKey = conf.apiKey || '';
+    const needsKey = !!meta.key;
+    return `
+      <div class="prov-panel">
+        <div class="prov-row">
+          <label>API key ${needsKey ? '' : '<span class="prov-opt">(not needed)</span>'}</label>
+          <div class="prov-keywrap">
+            <input type="password" id="pv-key" value="${esc(apiKey)}" placeholder="${needsKey ? 'Paste your key — it never leaves this PC' : 'No key needed'}" spellcheck="false" autocomplete="off" ${needsKey ? '' : 'disabled'} />
+            <button type="button" class="prov-eye" id="pv-eye" title="Show / hide">${ico('eye')}</button>
+          </div>
+        </div>
+        <div class="prov-row">
+          <label>API base URL</label>
+          <input type="text" id="pv-url" value="${esc(url)}" placeholder="${esc(meta.url || 'https://…')}" spellcheck="false" />
+        </div>
+        <div class="prov-row">
+          <label>Model</label>
+          <input type="text" id="pv-model" value="${esc(model)}" placeholder="e.g. ${pid === 'zai' ? 'glm-4.6' : pid === 'openai' ? 'gpt-4o-mini' : pid === 'openrouter' ? 'openai/gpt-4o-mini' : 'model-name'}" spellcheck="false" />
+        </div>
+        <div id="pv-models" class="prov-models"></div>
+        <div class="prov-hint">${esc(meta.hint || '')}</div>
+        <div class="prov-actions">
+          ${meta.models ? '<button class="btn ghost small" id="pv-fetch">Fetch models</button>' : ''}
+          <button class="btn ghost small" id="pv-test">Test connection</button>
+          <span id="pv-status"></span>
+        </div>
+        <div class="prov-note">🔑 Keys are stored only in the local Nook database on this PC — never in backups, never sent anywhere except the provider you picked.</div>
+      </div>`;
+  };
 
   root.innerHTML = `
     <div class="overlay">
@@ -1448,7 +1562,7 @@ async function openSettings() {
 
         <div class="set-row" style="display:block">
           <div class="set-label">Theme</div>
-          <div class="set-sub">Eight cozy looks — pick your mood.</div>
+          <div class="set-sub">Twelve cozy looks — pick your mood.</div>
           <div class="theme-grid" id="theme-grid">
             ${THEMES.map((t) => `
               <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
@@ -1494,6 +1608,50 @@ async function openSettings() {
 
         <div class="set-row">
           <div>
+            <div class="set-label">Note list density</div>
+            <div class="set-sub">Roomy cards or a compact list.</div>
+          </div>
+          <div class="seg" id="seg-density">
+            <button data-v="cozy" class="${den === 'cozy' ? 'on' : ''}">Cozy</button>
+            <button data-v="compact" class="${den === 'compact' ? 'on' : ''}">Compact</button>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Realtime autosave</div>
+            <div class="set-sub">Save as you type (also on blur & close). Off = save manually with Ctrl+S.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="set-autosave"${asv ? ' checked' : ''} />
+            <span class="track"></span>
+          </label>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Spell check</div>
+            <div class="set-sub">Browser spellcheck inside the editor.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="set-spellcheck"${spc ? ' checked' : ''} />
+            <span class="track"></span>
+          </label>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Default folder for new notes</div>
+            <div class="set-sub">New notes land here (unless you're inside a folder).</div>
+          </div>
+          <select id="set-deffolder" class="set-select">
+            <option value="">Unfiled</option>
+            ${state.folders.map((f) => `<option value="${esc(f.id)}"${state.settings.defaultFolder === f.id ? ' selected' : ''}>${esc(f.name)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="set-row">
+          <div>
             <div class="set-label">Close button hides to tray</div>
             <div class="set-sub">Nook keeps running (reminders still fire) — reopen it from the tray icon.</div>
           </div>
@@ -1503,22 +1661,51 @@ async function openSettings() {
           </label>
         </div>
 
-        <div class="set-row" style="display:block">
-          <div class="set-label">Nook AI (local, private)</div>
-          <div class="set-sub">Connect your own <a href="https://ollama.com" style="color:var(--lav)" data-url="https://ollama.com">Ollama</a> — summarize notes, pull action items into tasks, suggest titles. Nothing leaves this PC.</div>
-          <div style="display:flex; gap:8px; margin-top:8px; align-items:center">
-            <input type="text" id="ai-url" value="${esc(state.settings.aiUrl)}" spellcheck="false" style="flex:1; height:32px; background:var(--bg-card); border:1px solid var(--border-soft); border-radius:8px; padding:0 10px; font-size:12px; outline:none; color:var(--text)" />
-            <button class="btn ghost small" id="btn-ai-detect">Detect models</button>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Start Nook when I log in</div>
+            <div class="set-sub">Launches quietly in the background with Windows.</div>
           </div>
-          <div id="ai-models" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px">
-            ${state.settings.aiModel ? `<span class="badge b-subs b-done" style="font-size:11px; padding:3px 10px">${esc(state.settings.aiModel)}</span>` : '<span style="font-size:11px; color:var(--text-faint)">No model selected yet — install Ollama, pull a model (e.g. <code style="font-family:monospace">ollama pull llama3.2</code>), then Detect.</span>'}
+          <label class="switch">
+            <input type="checkbox" id="set-autostart"${auto ? ' checked' : ''} />
+            <span class="track"></span>
+          </label>
+        </div>
+
+        <div class="set-row" style="display:block" id="sec-ai">
+          <div class="set-label">Nook AI — bring your own key</div>
+          <div class="set-sub">Chat with an AI, summarize notes, pull action items into tasks. Works with OpenRouter, Z.ai (GLM), OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio — any OpenAI-compatible endpoint.</div>
+          <div class="prov-grid" id="prov-grid">
+            ${AI_PROVIDERS.map((p) => {
+              const conf = ai.providers[p.id] || {};
+              const configured = !!(conf.model || '').trim() && (!p.key || !!(conf.apiKey || '').trim());
+              return `<button class="prov-chip${activeId === p.id ? ' on' : ''}${configured ? ' ready' : ''}" data-p="${p.id}" title="${esc(p.name)}">
+                <span class="pc-name">${esc(p.name)}</span>
+                ${configured ? '<span class="pc-dot"></span>' : ''}
+              </button>`;
+            }).join('')}
+          </div>
+          <div id="prov-panel">${providerPanel(activeId)}</div>
+          <div class="prov-row" style="margin-top:10px">
+            <label>AI personality (system prompt)</label>
+            <textarea id="ai-sysprompt" rows="2" spellcheck="false" class="prov-sys">${esc(ai.systemPrompt || '')}</textarea>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Import notes</div>
+            <div class="set-sub">Bring in .md or .txt files as notes.</div>
+          </div>
+          <div class="set-actions">
+            <button class="btn ghost" id="btn-import-notes">${ico('upload')}Import files</button>
           </div>
         </div>
 
         <div class="set-row">
           <div>
             <div class="set-label">Backup</div>
-            <div class="set-sub">Save everything to a file, or restore it on another PC.</div>
+            <div class="set-sub">Save everything to a file, or restore it on another PC. (API keys are never included.)</div>
           </div>
           <div class="set-actions">
             <button class="btn ghost" id="btn-backup-export">${ico('download')}Export</button>
@@ -1537,7 +1724,7 @@ async function openSettings() {
 
         <div class="about-box">
           ${frogSvg}
-          <div class="ab-text"><b>Nook v0.6.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · 100% offline. Made cozy for Mr Real 🐸</div>
+          <div class="ab-text"><b>Nook v0.7.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real 🐸</div>
         </div>
         <div class="modal-actions">
           <button class="btn ghost" data-x="shortcuts">Shortcuts</button>
@@ -1554,11 +1741,22 @@ async function openSettings() {
   });
   root.querySelector('#btn-open-data').addEventListener('click', () => call('reveal_data_dir'));
 
+  if (section === 'ai') {
+    setTimeout(() => {
+      const el = root.querySelector('#sec-ai');
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); }
+    }, 60);
+  }
+
+  const setSetting = async (key, value) => {
+    await call('set_setting', { key, value });
+  };
+
   root.querySelectorAll('#theme-grid .theme-chip').forEach((b) => {
     b.addEventListener('click', async () => {
       state.settings.theme = b.dataset.t;
       root.querySelectorAll('#theme-grid .theme-chip').forEach((x) => x.classList.toggle('on', x === b));
-      await call('set_setting', { key: 'theme', value: b.dataset.t });
+      await setSetting('theme', b.dataset.t);
       applySettings();
     });
   });
@@ -1567,7 +1765,7 @@ async function openSettings() {
     b.addEventListener('click', async () => {
       state.settings.fontSize = b.dataset.v;
       root.querySelectorAll('#seg-font button').forEach((x) => x.classList.toggle('on', x === b));
-      await call('set_setting', { key: 'fontSize', value: b.dataset.v });
+      await setSetting('fontSize', b.dataset.v);
       applySettings();
     });
   });
@@ -1576,72 +1774,204 @@ async function openSettings() {
     b.addEventListener('click', async () => {
       state.settings.editorFont = b.dataset.v;
       root.querySelectorAll('#seg-edfont button').forEach((x) => x.classList.toggle('on', x === b));
-      await call('set_setting', { key: 'editorFont', value: b.dataset.v });
+      await setSetting('editorFont', b.dataset.v);
       applySettings();
     });
-  });
-
-  root.querySelector('#set-ctt').addEventListener('change', async (e) => {
-    state.settings.closeToTray = e.target.checked ? '1' : '0';
-    await call('set_setting', { key: 'closeToTray', value: state.settings.closeToTray });
-    toast(e.target.checked ? 'Nook will hide to the tray' : 'Nook will quit when closed');
   });
 
   root.querySelectorAll('#seg-width button').forEach((b) => {
     b.addEventListener('click', async () => {
       state.settings.editorWidth = b.dataset.v;
       root.querySelectorAll('#seg-width button').forEach((x) => x.classList.toggle('on', x === b));
-      await call('set_setting', { key: 'editorWidth', value: b.dataset.v });
+      await setSetting('editorWidth', b.dataset.v);
       applySettings();
     });
   });
 
-  const aiUrlInput = root.querySelector('#ai-url');
-  aiUrlInput.addEventListener('change', async () => {
-    state.settings.aiUrl = aiUrlInput.value.trim() || 'http://127.0.0.1:11434';
-    aiUrlInput.value = state.settings.aiUrl;
-    await call('set_setting', { key: 'aiUrl', value: state.settings.aiUrl });
+  root.querySelectorAll('#seg-density button').forEach((b) => {
+    b.addEventListener('click', async () => {
+      state.settings.density = b.dataset.v;
+      root.querySelectorAll('#seg-density button').forEach((x) => x.classList.toggle('on', x === b));
+      await setSetting('density', b.dataset.v);
+      applySettings();
+    });
   });
-  root.querySelector('#btn-ai-detect').addEventListener('click', async () => {
-    state.settings.aiUrl = aiUrlInput.value.trim() || 'http://127.0.0.1:11434';
-    await call('set_setting', { key: 'aiUrl', value: state.settings.aiUrl });
-    const box = root.querySelector('#ai-models');
-    box.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Looking for models…</span>';
+
+  root.querySelector('#set-ctt').addEventListener('change', async (e) => {
+    state.settings.closeToTray = e.target.checked ? '1' : '0';
+    await setSetting('closeToTray', state.settings.closeToTray);
+    toast(e.target.checked ? 'Nook will hide to the tray' : 'Nook will quit when closed');
+  });
+
+  root.querySelector('#set-autosave').addEventListener('change', async (e) => {
+    state.settings.autosave = e.target.checked ? '1' : '0';
+    await setSetting('autosave', state.settings.autosave);
+    toast(e.target.checked ? 'Realtime autosave on' : 'Autosave off — Ctrl+S to save');
+    if (e.target.checked && pending) flushSave();
+  });
+
+  root.querySelector('#set-spellcheck').addEventListener('change', async (e) => {
+    state.settings.spellcheck = e.target.checked ? '1' : '0';
+    await setSetting('spellcheck', state.settings.spellcheck);
+    applySettings();
+  });
+
+  root.querySelector('#set-deffolder').addEventListener('change', async (e) => {
+    state.settings.defaultFolder = e.target.value || '';
+    await setSetting('defaultFolder', state.settings.defaultFolder);
+  });
+
+  root.querySelector('#set-autostart').addEventListener('change', async (e) => {
     try {
-      const models = await call('ai_models', { url: state.settings.aiUrl });
-      if (!models.length) {
-        box.innerHTML = '<span style="font-size:11px; color:var(--text-faint)">Ollama is reachable but no models yet — run <code style="font-family:monospace">ollama pull llama3.2</code> then Detect again.</span>';
-        return;
-      }
-      box.innerHTML = models
-        .map(
-          (m) => `
-          <button class="theme-chip" data-m="${esc(m)}" style="padding:6px 10px" title="Use this model">
-            <span class="t-name" style="font-size:11px">${esc(m)}</span>
-          </button>`
-        )
-        .join('');
-      box.querySelectorAll('[data-m]').forEach((b) => {
-        b.classList.toggle('on', b.dataset.m === state.settings.aiModel);
-        b.addEventListener('click', async () => {
-          state.settings.aiModel = b.dataset.m;
-          box.querySelectorAll('[data-m]').forEach((x) => x.classList.toggle('on', x === b));
-          await call('set_setting', { key: 'aiModel', value: b.dataset.m });
-          toast(`AI model set to ${b.dataset.m}`, { icon: 'sparkle' });
-        });
-      });
+      await call('autostart_set', { enabled: e.target.checked });
+      state.settings.autostart = e.target.checked ? '1' : '0';
+      toast(e.target.checked ? 'Nook will start with Windows' : 'Nook will not start with Windows');
     } catch (err) {
-      box.innerHTML = `<span style="font-size:11px; color:var(--danger)">${esc(err.message)}</span>`;
+      e.target.checked = !e.target.checked;
+      toast('Could not change: ' + err.message);
     }
   });
 
-  const ollamaLink = root.querySelector('[data-url]');
-  if (ollamaLink) {
-    ollamaLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      call('open_url', { url: ollamaLink.dataset.url });
+  root.querySelector('#btn-import-notes').addEventListener('click', async () => {
+    try {
+      const n = await call('import_notes');
+      if (n) {
+        await refreshAll();
+        toast(`Imported ${n} note${n === 1 ? '' : 's'}`, { icon: 'upload' });
+      }
+    } catch (err) {
+      if (!/cancel/i.test(err.message)) toast('Import failed: ' + err.message);
+    }
+  });
+
+  // ---------------- AI providers ----------------
+  const saveAi = async () => {
+    await call('set_setting', { key: 'aiProviders', value: JSON.stringify(state.settings.ai) });
+  };
+
+  const refreshProvChips = () => {
+    root.querySelectorAll('#prov-grid .prov-chip').forEach((chip) => {
+      const pid = chip.dataset.p;
+      const meta = AI_PROVIDERS.find((p) => p.id === pid);
+      const conf = state.settings.ai.providers[pid] || {};
+      const configured = !!(conf.model || '').trim() && (!meta?.key || !!(conf.apiKey || '').trim());
+      chip.classList.toggle('on', pid === state.settings.ai.active);
+      chip.classList.toggle('ready', configured);
+      const dot = chip.querySelector('.pc-dot');
+      if (dot) dot.remove();
+      if (configured) chip.insertAdjacentHTML('beforeend', '<span class="pc-dot"></span>');
     });
-  }
+    updateChatStatus();
+  };
+
+  const wireProviderPanel = () => {
+    const panel = root.querySelector('#prov-panel');
+    if (!panel) return;
+    const pid = state.settings.ai.active || 'openrouter';
+    const status = panel.querySelector('#pv-status');
+    const confOf = () => {
+      const ai2 = state.settings.ai;
+      ai2.providers[pid] = ai2.providers[pid] || {};
+      return ai2.providers[pid];
+    };
+
+    const keyInput = panel.querySelector('#pv-key');
+    if (keyInput && !keyInput.disabled) {
+      keyInput.addEventListener('change', async () => {
+        confOf().apiKey = keyInput.value.trim();
+        await saveAi();
+        refreshProvChips();
+      });
+    }
+    const eye = panel.querySelector('#pv-eye');
+    if (eye) {
+      eye.addEventListener('click', () => {
+        keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+      });
+    }
+    const urlInput = panel.querySelector('#pv-url');
+    urlInput.addEventListener('change', async () => {
+      confOf().url = urlInput.value.trim();
+      await saveAi();
+    });
+    const modelInput = panel.querySelector('#pv-model');
+    modelInput.addEventListener('change', async () => {
+      confOf().model = modelInput.value.trim();
+      await saveAi();
+      refreshProvChips();
+    });
+
+    const sysp = root.querySelector('#ai-sysprompt');
+    sysp.addEventListener('change', async () => {
+      state.settings.ai.systemPrompt = sysp.value.trim() || DEFAULT_AI_SETTINGS.systemPrompt;
+      await saveAi();
+    });
+
+    const fetchBtn = panel.querySelector('#pv-fetch');
+    if (fetchBtn) {
+      fetchBtn.addEventListener('click', async () => {
+        confOf().url = urlInput.value.trim();
+        confOf().apiKey = keyInput && !keyInput.disabled ? keyInput.value.trim() : confOf().apiKey;
+        await saveAi();
+        const box = panel.querySelector('#pv-models');
+        box.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Fetching models…</span>';
+        try {
+          const models = await call('ai_list_models', { baseUrl: confOf().url, apiKey: confOf().apiKey || null });
+          if (!models.length) {
+            box.innerHTML = '<span class="pv-mini">Endpoint answered but listed no models — type the model name manually.</span>';
+            return;
+          }
+          box.innerHTML = models.slice(0, 60).map((m) =>
+            `<button type="button" class="pv-model${m === modelInput.value.trim() ? ' on' : ''}" data-m="${esc(m)}">${esc(m)}</button>`
+          ).join('');
+          box.querySelectorAll('.pv-model').forEach((b) => {
+            b.addEventListener('click', async () => {
+              modelInput.value = b.dataset.m;
+              confOf().model = b.dataset.m;
+              await saveAi();
+              box.querySelectorAll('.pv-model').forEach((x) => x.classList.toggle('on', x === b));
+              refreshProvChips();
+              toast(`Model set to ${b.dataset.m}`, { icon: 'sparkle' });
+            });
+          });
+        } catch (err) {
+          box.innerHTML = `<span class="pv-mini" style="color:var(--danger)">${esc(err.message)}</span>`;
+        }
+      });
+    }
+
+    const testBtn = panel.querySelector('#pv-test');
+    testBtn.addEventListener('click', async () => {
+      confOf().url = urlInput.value.trim();
+      confOf().model = modelInput.value.trim();
+      confOf().apiKey = keyInput && !keyInput.disabled ? keyInput.value.trim() : confOf().apiKey;
+      await saveAi();
+      if (!confOf().model) {
+        status.innerHTML = '<span style="color:var(--warn)">Pick a model first</span>';
+        return;
+      }
+      status.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Testing…</span>';
+      try {
+        const reply = await call('ai_test', { baseUrl: confOf().url, apiKey: confOf().apiKey || null, model: confOf().model });
+        status.innerHTML = `<span style="color:var(--accent)">${esc(reply)}</span>`;
+        refreshProvChips();
+      } catch (err) {
+        status.innerHTML = `<span style="color:var(--danger)">${esc(err.message)}</span>`;
+      }
+    });
+  };
+
+  root.querySelectorAll('#prov-grid .prov-chip').forEach((chip) => {
+    chip.addEventListener('click', async () => {
+      state.settings.ai.active = chip.dataset.p;
+      await saveAi();
+      root.querySelector('#prov-panel').innerHTML = providerPanel(chip.dataset.p);
+      wireProviderPanel();
+      refreshProvChips();
+    });
+  });
+  wireProviderPanel();
+  refreshProvChips();
 
   root.querySelector('#btn-backup-export').addEventListener('click', async () => {
     try {
@@ -1684,6 +2014,7 @@ function openShortcuts() {
   const rows = [
     ['New note', 'Ctrl + N'],
     ['Search notes', 'Ctrl + F'],
+    ['Quick switcher', 'Ctrl + K'],
     ['Save now', 'Ctrl + S'],
     ['Preview markdown', 'Ctrl + E'],
     ['Bold / Italic', 'Ctrl + B / I'],
@@ -1721,8 +2052,48 @@ async function loadSettings() {
   state.settings.editorFont = (await call('get_setting', { key: 'editorFont' })) || 'sans';
   state.settings.editorWidth = (await call('get_setting', { key: 'editorWidth' })) || 'normal';
   state.settings.closeToTray = (await call('get_setting', { key: 'closeToTray' })) || '0';
-  state.settings.aiUrl = (await call('get_setting', { key: 'aiUrl' })) || 'http://127.0.0.1:11434';
-  state.settings.aiModel = (await call('get_setting', { key: 'aiModel' })) || '';
+  // v0.7 settings
+  state.settings.autosave = (await call('get_setting', { key: 'autosave' })) ?? '1';
+  state.settings.spellcheck = (await call('get_setting', { key: 'spellcheck' })) || '0';
+  state.settings.density = (await call('get_setting', { key: 'density' })) || 'cozy';
+  state.settings.defaultFolder = (await call('get_setting', { key: 'defaultFolder' })) || '';
+  // AI providers (JSON blob; API keys stay in the local DB, never in backups)
+  let ai = null;
+  try {
+    const raw = await call('get_setting', { key: 'aiProviders' });
+    if (raw) ai = JSON.parse(raw);
+  } catch { ai = null; }
+  if (!ai || typeof ai !== 'object') ai = {};
+  // v0.6 → v0.7 migration: old single-Ollama settings move to providers.ollama
+  const legacyUrl = await call('get_setting', { key: 'aiUrl' });
+  const legacyModel = await call('get_setting', { key: 'aiModel' });
+  if (legacyUrl && !ai.providers?.ollama) {
+    ai.providers = ai.providers || {};
+    ai.providers.ollama = { url: legacyUrl, apiKey: '', model: legacyModel || '' };
+    if (!ai.active) ai.active = legacyModel ? 'ollama' : '';
+  }
+  state.settings.ai = {
+    active: ai.active || '',
+    providers: ai.providers || {},
+    systemPrompt: ai.systemPrompt || DEFAULT_AI_SETTINGS.systemPrompt
+  };
+  try {
+    state.settings.autostart = IS_TAURI ? ((await call('autostart_get')) ? '1' : '0') : '0';
+  } catch { state.settings.autostart = '0'; }
+}
+
+function activeAiProvider() {
+  const ai = state.settings.ai;
+  if (!ai.active) return null;
+  const meta = AI_PROVIDERS.find((p) => p.id === ai.active);
+  const conf = ai.providers[ai.active] || {};
+  return {
+    meta,
+    url: (conf.url ?? meta?.url ?? '').trim(),
+    apiKey: conf.apiKey || '',
+    model: (conf.model || '').trim(),
+    ready: !!(conf.model || '').trim() && (!meta?.key || !!(conf.apiKey || '').trim())
+  };
 }
 
 function applySettings() {
@@ -1732,6 +2103,9 @@ function applySettings() {
   document.documentElement.style.setProperty('--font-size', `${state.settings.fontSize}px`);
   document.body.dataset.edfont = state.settings.editorFont || 'sans';
   document.body.dataset.edwidth = state.settings.editorWidth || 'normal';
+  document.body.dataset.density = state.settings.density || 'cozy';
+  const ed = $('#ed-text');
+  if (ed) ed.spellcheck = state.settings.spellcheck === '1';
 }
 
 // ------------------------------------------------------------------ shortcuts ----
@@ -1786,6 +2160,10 @@ function wireShortcuts() {
         e.preventDefault();
         openSettings();
         break;
+      case 'k':
+        e.preventDefault();
+        openQuickSwitcher();
+        break;
       case '/':
         e.preventDefault();
         openShortcuts();
@@ -1827,6 +2205,28 @@ function wireReminderListener() {
       });
       listen('settings-changed', () => {
         loadSettings().then(applySettings).catch(() => {});
+      });
+      // v0.7 — recorder reports through events; no more frozen UI
+      listen('recorder://event', (e) => {
+        const p = e.payload || {};
+        if (p.kind === 'started') {
+          updateRecUi(true, 0);
+          if (!state.recPoll) state.recPoll = setInterval(pollRecStatus, 500);
+        } else if (p.kind === 'saved') {
+          updateRecUi(false, 0);
+          if (state.recPoll) { clearInterval(state.recPoll); state.recPoll = null; }
+          if (p.info) toast(`Saved ${fmtClock(p.info.durationMs)} recording`, { icon: 'mic' });
+          renderRecordings();
+        } else if (p.kind === 'error') {
+          updateRecUi(false, 0);
+          if (state.recPoll) { clearInterval(state.recPoll); state.recPoll = null; }
+          toast(p.message || 'Recorder error', { icon: 'mic', ms: 6000 });
+          renderRecordings();
+        }
+      });
+      // v0.7 — AI chat streaming
+      listen('ai://event', (e) => {
+        handleAiEvent(e.payload || {});
       });
     })
     .catch(() => {});
@@ -1876,10 +2276,15 @@ function wireEditor() {
   $('#btn-rec').addEventListener('click', toggleRecording);
   $('#rec-pill-stop').addEventListener('click', toggleRecording);
 
-  // right-click: custom menus everywhere except text fields
+  // right-click: custom menus everywhere (context-aware)
   window.addEventListener('contextmenu', (e) => {
-    if (e.target.closest('input, textarea, select')) return;
+    if (e.target.closest('.ctx')) return;
+    if (e.target.closest('input, textarea, select') && !e.target.closest('#ed-text, #cv-input')) {
+      return; // native menu for small fields
+    }
     e.preventDefault();
+    e.stopPropagation();
+    showContextualMenu(e);
   });
   // click anywhere closes menus
   window.addEventListener('mousedown', (e) => {
@@ -2060,11 +2465,11 @@ function closeMenu() {
 function showMenu(x, y, items) {
   const root = $('#menu-root');
   const html = items
-    .map((it) => {
+    .map((it, idx) => {
       if (it.sep) return '<div class="ctx-sep"></div>';
       if (it.header) return `<div class="ctx-label">${esc(it.label || '')}</div>`;
       return `
-        <button class="ctx-item${it.danger ? ' danger' : ''}${it.disabled ? ' disabled' : ''}" data-mi="${esc(it.label)}">
+        <button class="ctx-item${it.danger ? ' danger' : ''}${it.disabled ? ' disabled' : ''}" data-mi="${idx}">
           <span class="ci-ico">${it.icon ? ico(it.icon) : ''}</span>
           <span>${esc(it.label)}</span>
           ${it.key ? `<span class="ci-key">${esc(it.key)}</span>` : ''}
@@ -2080,7 +2485,7 @@ function showMenu(x, y, items) {
   menu.style.top = `${Math.min(y, vh - rect.height - 8)}px`;
 
   root.querySelectorAll('.ctx-item').forEach((el) => {
-    const it = items.find((i) => !i.sep && i.label === el.dataset.mi);
+    const it = items[Number(el.dataset.mi)];
     if (!it || !it.fn) return;
     el.addEventListener('click', () => {
       closeMenu();
@@ -2292,15 +2697,24 @@ function wireDragDrop() {
     document.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
   });
 
-  document.querySelectorAll('.sb-row').forEach((row) => {
-    row.addEventListener('dragover', (e) => {
-      if (!e.dataTransfer.types.includes('text/plain')) return;
+  // v0.7 FIX: bind drop targets on the persistent sidebar CONTAINERS with
+  // event delegation — per-row listeners used to die every time
+  // renderSidebar() rebuilt the rows (drag-to-folder silently stopped).
+  const wireDropTarget = (container) => {
+    container.addEventListener('dragover', (e) => {
+      const row = e.target.closest('.sb-row');
+      if (!row || !e.dataTransfer.types.includes('text/plain')) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       row.classList.add('drag-over');
     });
-    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
-    row.addEventListener('drop', async (e) => {
+    container.addEventListener('dragleave', (e) => {
+      const row = e.target.closest('.sb-row');
+      if (row) row.classList.remove('drag-over');
+    });
+    container.addEventListener('drop', async (e) => {
+      const row = e.target.closest('.sb-row');
+      if (!row) return;
       e.preventDefault();
       row.classList.remove('drag-over');
       const nid = e.dataTransfer.getData('text/plain');
@@ -2329,7 +2743,9 @@ function wireDragDrop() {
         toast(`Moved to ${f ? f.name : 'folder'}`, { icon: 'folder' });
       }
     });
-  });
+  };
+  wireDropTarget($('#sb-views'));
+  wireDropTarget($('#sb-folders'));
 }
 
 // ==================================================================
@@ -2529,13 +2945,18 @@ function updateRecUi(recording, elapsedMs) {
 async function toggleRecording() {
   const btn = $('#btn-rec');
   if (btn.classList.contains('recording')) {
+    // stop is fire-and-forget on the Rust side — the `saved` event refreshes
+    // the UI when the WAV is finalised. Nothing blocks, nothing freezes.
     try {
       const info = await call('recorder_stop');
-      if (state.recPoll) { clearInterval(state.recPoll); state.recPoll = null; }
       updateRecUi(false, 0);
+      if (state.recPoll) { clearInterval(state.recPoll); state.recPoll = null; }
       if (info) {
+        // browser mock path (desktop reports via recorder://event)
         toast(`Saved ${fmtClock(info.durationMs)} recording`, { icon: 'mic' });
         renderRecordings();
+      } else {
+        toast('Finishing & saving…', { icon: 'mic' });
       }
     } catch (err) {
       toast('Could not stop: ' + err.message);
@@ -2545,22 +2966,27 @@ async function toggleRecording() {
   try {
     const device = $('#rec-device').value || null;
     await call('recorder_start', { device });
+    // optimistic UI — the `started`/`error` event confirms or corrects it
     updateRecUi(true, 0);
-    state.recPoll = setInterval(pollRecStatus, 500);
-    toast('Recording… the file stays on this PC', { icon: 'mic' });
+    if (!state.recPoll) state.recPoll = setInterval(pollRecStatus, 500);
   } catch (err) {
     toast(err.message, { icon: 'mic' });
   }
 }
 
 // ==================================================================
-// v0.6 — NOOK AI (local Ollama)
+// v0.7 — NOOK AI (any OpenAI-compatible provider)
 // ==================================================================
 
+function aiActiveReady() {
+  const p = activeAiProvider();
+  return !!(p && p.ready);
+}
+
 async function aiEnsureModel() {
-  if (state.settings.aiModel) return true;
+  if (aiActiveReady()) return true;
   openSettings('ai');
-  toast('Pick an AI model first — Settings → Nook AI', { icon: 'sparkle' });
+  toast('Pick an AI provider, add your key & model first — Settings → Nook AI', { icon: 'sparkle', ms: 5000 });
   return false;
 }
 
@@ -2574,6 +3000,7 @@ async function aiRun(kind) {
 
   const btn = $('#btn-ai');
   btn.innerHTML = `<span class="ai-spin"></span>`;
+  const p = activeAiProvider();
   const prompts = {
     summarize: {
       system: 'You are a precise assistant inside a notes app. Reply with plain text only, no markdown headers.',
@@ -2588,14 +3015,18 @@ async function aiRun(kind) {
       prompt: `Suggest a short title (max 6 words) for this note. Reply with only the title.\n\n---\n${n.content.slice(0, 4000)}`
     }
   };
-  const p = prompts[kind];
+  const cfg = prompts[kind];
+  const messages = JSON.stringify([
+    { role: 'system', content: cfg.system },
+    { role: 'user', content: cfg.prompt }
+  ]);
   try {
     const out = (
-      await call('ai_generate', {
-        url: state.settings.aiUrl,
-        model: state.settings.aiModel,
-        prompt: p.prompt,
-        system: p.system
+      await call('ai_complete', {
+        baseUrl: p.url,
+        apiKey: p.apiKey || null,
+        model: p.model,
+        messages
       })
     ).trim();
     btn.innerHTML = ico('sparkle');
@@ -2636,7 +3067,7 @@ function showAiResult(out, n) {
     <div class="overlay">
       <div class="modal" style="width:520px">
         <h3>${ico('sparkle')} Summary</h3>
-        <div class="ai-out">${esc(out)}</div>
+        <div class="ai-out">${renderMarkdown(out)}</div>
         <div class="modal-actions">
           <button class="btn ghost" data-x="copy">Copy</button>
           <button class="btn ghost" data-x="insert">Insert into note</button>
@@ -2675,8 +3106,601 @@ function openAiMenu() {
     { label: 'Extract action items → tasks', icon: 'checkSq', fn: () => aiRun('actions') },
     { label: 'Suggest title', icon: 'pencil', fn: () => aiRun('title') },
     { sep: true },
-    { header: true, label: 'Local Ollama — nothing leaves this PC' }
+    { label: 'Open AI chat', icon: 'all', key: 'Ctrl+K', fn: () => setView({ type: 'chat' }) },
+    { sep: true },
+    { header: true, label: 'Your provider, your key — see Settings' }
   ]);
+}
+
+// ==================================================================
+// v0.7 — AI CHAT (streaming, history saved locally)
+// ==================================================================
+
+function updateChatStatus() {
+  const el = $('#cv-status');
+  if (!el) return;
+  const p = activeAiProvider();
+  if (!p) {
+    el.innerHTML = 'No AI provider yet — <button class="linklike" id="cv-goset">open Settings</button> to add a key (OpenRouter, Z.ai, OpenAI, Groq, Gemini, Ollama…).';
+  } else if (!p.ready) {
+    el.innerHTML = `<b>${esc(p.meta ? p.meta.name : p.url)}</b> selected but not configured — add ${p.meta && p.meta.key ? 'a key & ' : ''}a model in <button class="linklike" id="cv-goset">Settings</button>.`;
+  } else {
+    el.innerHTML = `Talking to <b>${esc(p.meta ? p.meta.name : 'AI')}</b> · <span class="cv-model">${esc(p.model)}</span>`;
+  }
+  const go = el.querySelector('#cv-goset');
+  if (go) go.addEventListener('click', () => openSettings('ai'));
+}
+
+function chatBubbleHtml(m) {
+  const isUser = m.role === 'user';
+  const body = isUser
+    ? esc(m.content).replace(/\n/g, '<br/>')
+    : renderMarkdown(m.content);
+  return `
+    <div class="cv-msg${isUser ? ' user' : ' bot'}" data-mid="${esc(m.id || '')}">
+      <div class="cv-avatar">${isUser ? '🧑' : frogSvg}</div>
+      <div class="cv-bubble">
+        <div class="cv-content">${body}</div>
+        ${!isUser && m.id ? `
+        <div class="cv-msg-actions">
+          <button class="cv-act" data-act="copy" title="Copy">Copy</button>
+          <button class="cv-act" data-act="note" title="Append to the current note">→ Note</button>
+        </div>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderChatMessages() {
+  const box = $('#cv-messages');
+  if (!box) return;
+  if (!state.chatMsgs.length) {
+    box.innerHTML = `
+      <div class="cv-empty">
+        ${frogSvg}
+        <div><b>Ask me anything</b></div>
+        <div>Draft ideas, summarize your notes, plan your day.<br/>Chats are saved on this PC only.</div>
+      </div>`;
+    return;
+  }
+  box.innerHTML = state.chatMsgs.map(chatBubbleHtml).join('');
+  wireChatMsgActions();
+  box.scrollTop = box.scrollHeight;
+}
+
+function wireChatMsgActions() {
+  $('#cv-messages').querySelectorAll('.cv-msg.bot').forEach((el) => {
+    const mid = el.dataset.mid;
+    el.querySelectorAll('.cv-act').forEach((b) => {
+      b.addEventListener('click', () => {
+        const m = state.chatMsgs.find((x) => x.id === mid);
+        if (!m) return;
+        if (b.dataset.act === 'copy') {
+          navigator.clipboard.writeText(m.content).then(() => toast('Copied')).catch(() => toast('Could not copy'));
+        } else if (b.dataset.act === 'note') {
+          const ta = $('#ed-text');
+          if (!ta) { toast('Open a note first', { icon: 'pencil' }); return; }
+          ta.value = ta.value + (ta.value.endsWith('\n') || !ta.value ? '' : '\n\n') + m.content + '\n';
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+          toast('Appended to the current note', { icon: 'pencil' });
+        }
+      });
+    });
+  });
+}
+
+async function refreshChats() {
+  state.chats = await call('list_chats');
+}
+
+function renderChatSelect() {
+  const sel = $('#cv-chat-select');
+  sel.innerHTML = state.chats.length
+    ? state.chats.map((c) => `<option value="${esc(c.id)}"${c.id === state.chatId ? ' selected' : ''}>${esc(c.title)}</option>`).join('')
+    : '<option value="">No chats yet</option>';
+}
+
+async function openChatView() {
+  await refreshChats();
+  if (!state.chats.length) {
+    const c = await call('create_chat', {});
+    state.chats = [c];
+    state.chatId = c.id;
+  }
+  if (!state.chats.some((c) => c.id === state.chatId)) {
+    state.chatId = state.chats[0].id;
+  }
+  renderChatSelect();
+  state.chatMsgs = await call('get_chat_messages', { chatId: state.chatId });
+  renderChatMessages();
+  updateChatStatus();
+  updateChatComposer();
+  setTimeout(() => $('#cv-input').focus(), 40);
+}
+
+function updateChatComposer() {
+  const busy = state.aiStreaming;
+  $('#cv-send').classList.toggle('hidden', busy);
+  $('#cv-stop').classList.toggle('hidden', !busy);
+  $('#cv-use-note').classList.toggle('on', state.chatUseNote);
+}
+
+function aiProviderOrWarn() {
+  const p = activeAiProvider();
+  if (!p || !p.ready) {
+    openSettings('ai');
+    toast('Add an API key & model first — Settings → Nook AI', { icon: 'sparkle', ms: 5000 });
+    return null;
+  }
+  return p;
+}
+
+async function sendChat() {
+  const input = $('#cv-input');
+  const text = input.value.trim();
+  if (!text || state.aiStreaming) return;
+  const p = aiProviderOrWarn();
+  if (!p) return;
+
+  if (!state.chatId) {
+    const c = await call('create_chat', {});
+    state.chats.unshift(c);
+    state.chatId = c.id;
+    renderChatSelect();
+  }
+
+  input.value = '';
+  autoGrowChatInput();
+
+  const userMsg = await call('add_chat_message', { chatId: state.chatId, role: 'user', content: text });
+  state.chatMsgs.push(userMsg);
+  if (!state.chats.some((c) => c.id === state.chatId)) {
+    // chat was created just now
+    state.chats = await call('list_chats');
+    renderChatSelect();
+  } else {
+    const c = state.chats.find((x) => x.id === state.chatId);
+    if (c && c.title === 'New chat') {
+      c.title = text.slice(0, 42);
+      renderChatSelect();
+    }
+  }
+  renderChatMessages();
+
+  // build the request: history + optional note context
+  const msgs = [];
+  if (state.settings.ai.systemPrompt) {
+    msgs.push({ role: 'system', content: state.settings.ai.systemPrompt });
+  }
+  for (const m of state.chatMsgs) {
+    if (m.role === 'user' || m.role === 'assistant') {
+      msgs.push({ role: m.role, content: m.content });
+    }
+  }
+  if (state.chatUseNote && state.openNote) {
+    msgs.splice(1, 0, {
+      role: 'system',
+      content: `The user's current note "${state.openNote.title || 'Untitled'}" — use it as context when relevant:\n---\n${state.openNote.content.slice(0, 12000)}\n---`
+    });
+    state.chatUseNote = false;
+    updateChatComposer();
+  }
+
+  state.aiStreaming = true;
+  state.aiReqId = 'req' + Date.now().toString(36) + Math.floor(Math.random() * 9999);
+  state.aiStreamText = '';
+  const placeholder = { id: '', role: 'assistant', content: '', createdAt: Date.now() };
+  state.chatMsgs.push(placeholder);
+  const box = $('#cv-messages');
+  box.insertAdjacentHTML('beforeend', `
+    <div class="cv-msg bot streaming" id="cv-streaming">
+      <div class="cv-avatar">${frogSvg}</div>
+      <div class="cv-bubble"><div class="cv-content"><span class="ai-loading"><span class="ai-spin"></span>Thinking…</span></div></div>
+    </div>`);
+  box.scrollTop = box.scrollHeight;
+  updateChatComposer();
+
+  if (!IS_TAURI) {
+    // browser preview mock — fake a stream
+    const reply = 'This is the browser preview — in the desktop app I answer through your own AI provider (OpenRouter, Z.ai, OpenAI, Groq, Gemini, Ollama…).';
+    for (const w of reply.split(' ')) {
+      await new Promise((r) => setTimeout(r, 40));
+      state.aiStreamText += (state.aiStreamText ? ' ' : '') + w;
+      const el = $('#cv-streaming .cv-content');
+      if (el) el.innerHTML = renderMarkdown(state.aiStreamText);
+    }
+    finishChatStream();
+    return;
+  }
+
+  try {
+    await call('ai_chat', {
+      requestId: state.aiReqId,
+      baseUrl: p.url,
+      apiKey: p.apiKey || null,
+      model: p.model,
+      messages: JSON.stringify(msgs)
+    });
+  } catch (err) {
+    state.aiStreaming = false;
+    const el = $('#cv-streaming');
+    if (el) el.remove();
+    state.chatMsgs.pop();
+    renderChatMessages();
+    updateChatComposer();
+    toast(err.message, { icon: 'sparkle', ms: 6000 });
+  }
+}
+
+function handleAiEvent(p) {
+  if (!state.aiStreaming || p.id !== state.aiReqId) return;
+  if (p.error) {
+    state.aiStreaming = false;
+    const el = $('#cv-streaming');
+    if (el) el.remove();
+    if (state.chatMsgs[state.chatMsgs.length - 1]?.role === 'assistant') state.chatMsgs.pop();
+    renderChatMessages();
+    updateChatComposer();
+    toast(p.error, { icon: 'sparkle', ms: 7000 });
+    return;
+  }
+  if (p.delta) {
+    state.aiStreamText += p.delta;
+    const el = $('#cv-streaming .cv-content');
+    if (el) {
+      el.innerHTML = renderMarkdown(state.aiStreamText);
+      const box = $('#cv-messages');
+      box.scrollTop = box.scrollHeight;
+    }
+    return;
+  }
+  // done
+  finishChatStream();
+}
+
+async function finishChatStream() {
+  state.aiStreaming = false;
+  const text = state.aiStreamText.trim();
+  const el = $('#cv-streaming');
+  if (el) el.remove();
+  state.chatMsgs.pop(); // remove placeholder
+  if (text) {
+    const m = await call('add_chat_message', { chatId: state.chatId, role: 'assistant', content: text });
+    state.chatMsgs.push(m);
+  } else {
+    toast('The model replied with nothing', { icon: 'sparkle' });
+  }
+  state.aiStreamText = '';
+  renderChatMessages();
+  updateChatComposer();
+}
+
+async function stopChatStream() {
+  if (state.aiStreaming && state.aiReqId && IS_TAURI) {
+    try { await call('ai_stop', { requestId: state.aiReqId }); } catch { /* ignore */ }
+  }
+  if (!IS_TAURI) finishChatStream();
+}
+
+function autoGrowChatInput() {
+  const ta = $('#cv-input');
+  ta.style.height = 'auto';
+  ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+}
+
+function wireChatView() {
+  $('#cv-new').addEventListener('click', async () => {
+    if (state.aiStreaming) { toast('Wait for the reply to finish (or press Stop)', { icon: 'sparkle' }); return; }
+    const c = await call('create_chat', {});
+    state.chats.unshift(c);
+    state.chatId = c.id;
+    state.chatMsgs = [];
+    renderChatSelect();
+    renderChatMessages();
+    updateChatStatus();
+    $('#cv-input').focus();
+  });
+  $('#cv-del').addEventListener('click', async () => {
+    if (!state.chatId) return;
+    const ok = await confirmModal({
+      title: 'Delete this chat?',
+      body: 'The whole conversation will be removed from this PC. There is no undo.',
+      confirmLabel: 'Delete chat',
+      danger: true
+    });
+    if (!ok) return;
+    await call('delete_chat', { id: state.chatId });
+    await refreshChats();
+    state.chatId = state.chats[0]?.id || null;
+    state.chatMsgs = state.chatId ? await call('get_chat_messages', { chatId: state.chatId }) : [];
+    renderChatSelect();
+    renderChatMessages();
+    updateChatStatus();
+  });
+  $('#cv-chat-select').addEventListener('change', async (e) => {
+    if (state.aiStreaming) return;
+    state.chatId = e.target.value;
+    state.chatMsgs = await call('get_chat_messages', { chatId: state.chatId });
+    renderChatMessages();
+  });
+  $('#cv-composer').addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendChat();
+  });
+  $('#cv-stop').addEventListener('click', stopChatStream);
+  $('#cv-use-note').addEventListener('click', () => {
+    if (!state.openNote) { toast('Open a note first — then I can use it as context', { icon: 'pencil' }); return; }
+    state.chatUseNote = !state.chatUseNote;
+    updateChatComposer();
+    toast(state.chatUseNote ? 'Next message gets your note as context' : 'Note context off', { icon: 'all' });
+  });
+  const input = $('#cv-input');
+  input.addEventListener('input', autoGrowChatInput);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
+}
+
+// ==================================================================
+// v0.7 — RIGHT-CLICK ANYWHERE (context-aware menus)
+// ==================================================================
+
+async function pasteInto(target) {
+  try {
+    const text = IS_TAURI
+      ? await call('clipboard_read')
+      : await navigator.clipboard.readText();
+    const el = target;
+    const s = el.selectionStart, e2 = el.selectionEnd;
+    el.value = el.value.slice(0, s) + text + el.value.slice(e2);
+    const np = s + text.length;
+    el.setSelectionRange(np, np);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
+  } catch {
+    toast('Clipboard is empty or blocked');
+  }
+}
+
+function copySelectionOf(target) {
+  const s = target.selectionStart, e2 = target.selectionEnd;
+  const text = target.value.slice(s, e2);
+  if (!text) { toast('Nothing selected'); return; }
+  if (IS_TAURI) call('clipboard_write', { text }).then(() => toast('Copied')).catch(() => toast('Could not copy'));
+  else navigator.clipboard.writeText(text).then(() => toast('Copied')).catch(() => toast('Could not copy'));
+}
+
+function cutSelectionOf(target) {
+  const s = target.selectionStart, e2 = target.selectionEnd;
+  const text = target.value.slice(s, e2);
+  if (!text) { toast('Nothing selected'); return; }
+  if (IS_TAURI) call('clipboard_write', { text }).catch(() => {});
+  else navigator.clipboard.writeText(text).catch(() => {});
+  target.value = target.value.slice(0, s) + target.value.slice(e2);
+  target.setSelectionRange(s, s);
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+  target.focus();
+}
+
+function showContextualMenu(e) {
+  const t = e.target;
+
+  // ---- editor textarea ----
+  if (t.id === 'ed-text') {
+    const editable = state.openNote && !state.openNote.trashed && !state.preview;
+    const items = [];
+    if (editable) {
+      items.push(
+        { label: 'Cut', icon: 'copy', key: 'Ctrl+X', fn: () => cutSelectionOf(t) },
+        { label: 'Copy', icon: 'copy', key: 'Ctrl+C', fn: () => copySelectionOf(t) },
+        { label: 'Paste', icon: 'all', key: 'Ctrl+V', fn: () => pasteInto(t) },
+        { sep: true }
+      );
+    }
+    items.push(
+      { label: 'Select all', icon: 'checkSq', key: 'Ctrl+A', fn: () => { t.focus(); t.select(); } }
+    );
+    if (editable) {
+      items.push(
+        { sep: true },
+        { label: 'Insert date & time', icon: 'clock', fn: () => mdAction('timestamp') },
+        { label: 'Slash commands', icon: 'pencil', fn: () => {
+            const ta = t;
+            ta.focus();
+            const pos = ta.selectionStart;
+            const before = ta.value.slice(0, pos);
+            const ins = (pos === 0 || before.endsWith('\n') || /^\s*$/.test(before.split('\n').pop())) ? '/' : '\n/';
+            ta.value = ta.value.slice(0, pos) + ins + ta.value.slice(pos);
+            const caret = pos + ins.length;
+            ta.setSelectionRange(caret, caret);
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+            openSlash(ta);
+            slashState.at = caret - 1; // position of the '/'
+            renderSlash(ta);
+          } },
+        { label: state.preview ? 'Hide preview' : 'Markdown preview', icon: 'eye', key: 'Ctrl+E', fn: () => $('#btn-preview').click() },
+        { label: 'Ask AI about this note', icon: 'sparkle', fn: () => openAiMenu() }
+      );
+    }
+    showMenu(e.clientX, e.clientY, items);
+    return;
+  }
+
+  // ---- chat composer ----
+  if (t.id === 'cv-input') {
+    showMenu(e.clientX, e.clientY, [
+      { label: 'Cut', icon: 'copy', fn: () => cutSelectionOf(t) },
+      { label: 'Copy', icon: 'copy', fn: () => copySelectionOf(t) },
+      { label: 'Paste', icon: 'all', fn: () => pasteInto(t) },
+      { sep: true },
+      { label: 'Select all', icon: 'checkSq', fn: () => { t.focus(); t.select(); } }
+    ]);
+    return;
+  }
+
+  // ---- note list empty area / header ----
+  if (t.closest('#note-list')) {
+    const items = [
+      { label: 'New note', icon: 'pencil', key: 'Ctrl+N', fn: () => createNote() },
+      { label: 'New folder', icon: 'folder', fn: () => newFolder() }
+    ];
+    if (state.view.type === 'trash' && state.notes.length) {
+      items.push({ sep: true }, { label: 'Empty trash', icon: 'trash', danger: true, fn: () => emptyTrash() });
+    }
+    items.push({ sep: true }, { label: 'Import .md / .txt files', icon: 'upload', fn: () => openSettings() });
+    showMenu(e.clientX, e.clientY, items);
+    return;
+  }
+
+  // ---- sidebar empty area ----
+  if (t.closest('#sidebar')) {
+    showMenu(e.clientX, e.clientY, [
+      { label: 'New note', icon: 'pencil', key: 'Ctrl+N', fn: () => createNote() },
+      { label: 'New folder', icon: 'folder', fn: () => newFolder() },
+      { sep: true },
+      { label: 'Settings', icon: 'settings', key: 'Ctrl+,', fn: () => openSettings() },
+      { label: 'Guide', icon: 'book', fn: () => openGuide() }
+    ]);
+    return;
+  }
+
+  // ---- tabs bar empty space ----
+  if (t.closest('#tabbar')) {
+    showMenu(e.clientX, e.clientY, [
+      { label: 'New note (new tab)', icon: 'pencil', key: 'Ctrl+N', fn: () => createNote() },
+      { label: 'Close all tabs', icon: 'x', disabled: !state.tabs.length, fn: () => closeAllTabs() }
+    ]);
+    return;
+  }
+
+  // ---- tasks view ----
+  if (t.closest('#tasks-view')) {
+    showMenu(e.clientX, e.clientY, [
+      { label: 'New task', icon: 'checkSq', fn: () => { $('#tv-input').focus(); } },
+      { label: 'Clear completed', icon: 'trash', disabled: !state.tasks.some((x) => x.done), fn: async () => { await call('clear_done_tasks'); await refreshTasks(); renderTasks(); refreshStatsOnly(); } }
+    ]);
+    return;
+  }
+
+  // ---- recordings view ----
+  if (t.closest('#rec-view')) {
+    showMenu(e.clientX, e.clientY, [
+      { label: $('#btn-rec').classList.contains('recording') ? 'Stop recording' : 'Start recording', icon: 'mic', fn: () => toggleRecording() },
+      { label: 'Refresh list', icon: 'all', fn: () => renderRecordings() }
+    ]);
+    return;
+  }
+
+  // ---- AI chat view ----
+  if (t.closest('#chat-view')) {
+    showMenu(e.clientX, e.clientY, [
+      { label: 'New chat', icon: 'sparkle', fn: () => $('#cv-new').click() },
+      { label: 'Delete this chat', icon: 'trash', danger: true, disabled: !state.chatId, fn: () => $('#cv-del').click() },
+      { sep: true },
+      { label: 'AI settings', icon: 'settings', fn: () => openSettings('ai') }
+    ]);
+    return;
+  }
+
+  // ---- editor pane (title/toolbar/preview) ----
+  if (t.closest('#ed-pane')) {
+    if (state.openNote) {
+      showMenu(e.clientX, e.clientY, [
+        { label: state.openNote.pinned ? 'Unpin note' : 'Pin note', icon: 'pin', fn: () => togglePin() },
+        { label: state.openNote.favorite ? 'Remove favorite' : 'Favorite', icon: 'star', fn: () => toggleFavorite() },
+        { label: 'Duplicate note', icon: 'copy', key: 'Ctrl+D', fn: () => duplicateCurrent() },
+        { label: 'Export as Markdown', icon: 'export', fn: () => exportCurrent() },
+        { sep: true },
+        { label: 'Ask AI about this note', icon: 'sparkle', fn: () => openAiMenu() },
+        { sep: true },
+        { label: 'Move to Trash', icon: 'trash', danger: true, fn: () => trashCurrent() }
+      ]);
+    } else {
+      showMenu(e.clientX, e.clientY, [{ label: 'New note', icon: 'pencil', key: 'Ctrl+N', fn: () => createNote() }]);
+    }
+    return;
+  }
+
+  // ---- statusbar / anywhere else ----
+  showMenu(e.clientX, e.clientY, [
+    { label: 'New note', icon: 'pencil', key: 'Ctrl+N', fn: () => createNote() },
+    { label: 'Quick find a note', icon: 'search', key: 'Ctrl+K', fn: () => openQuickSwitcher() },
+    { sep: true },
+    { label: 'Settings', icon: 'settings', key: 'Ctrl+,', fn: () => openSettings() },
+    { label: 'Shortcuts', icon: 'all', key: 'Ctrl+/', fn: () => openShortcuts() }
+  ]);
+}
+
+// ==================================================================
+// v0.7 — QUICK SWITCHER (Ctrl+K)
+// ==================================================================
+
+let quickSwitchItems = [];
+
+function openQuickSwitcher() {
+  const root = $('#overlay-root');
+  root.innerHTML = `
+    <div class="overlay">
+      <div class="modal" style="width:480px">
+        <input type="text" id="qs-input" placeholder="Jump to a note… (type to filter, Enter to open)" spellcheck="false" autocomplete="off" />
+        <div class="qs-list" id="qs-list"></div>
+        <div class="modal-actions" style="justify-content:space-between">
+          <span style="font-size:11px;color:var(--text-faint)">↑↓ navigate · Enter open · Esc close</span>
+          <button class="btn primary" data-x="close">Close</button>
+        </div>
+      </div>
+    </div>`;
+  const done = () => closeModal();
+  root.querySelector('[data-x="close"]').addEventListener('click', done);
+  root.querySelector('.overlay').addEventListener('mousedown', (e) => {
+    if (e.target === e.currentTarget) done();
+  });
+
+  const input = root.querySelector('#qs-input');
+  const list = root.querySelector('#qs-list');
+  let sel = 0;
+
+  const renderList = () => {
+    const q = input.value.trim().toLowerCase();
+    quickSwitchItems = state.allNotesCache
+      .filter((n) => !q || (n.title || '').toLowerCase().includes(q) || (n.snippet || '').toLowerCase().includes(q))
+      .slice(0, 12);
+    sel = Math.min(sel, Math.max(0, quickSwitchItems.length - 1));
+    if (!quickSwitchItems.length) {
+      list.innerHTML = '<div class="qs-empty">No matching notes</div>';
+      return;
+    }
+    list.innerHTML = quickSwitchItems.map((n, i) => `
+      <button class="qs-item${i === sel ? ' sel' : ''}" data-i="${i}">
+        <span class="qs-title">${esc(n.title.trim() || 'Untitled note')}</span>
+        <span class="qs-snippet">${esc((n.snippet || '').slice(0, 60))}</span>
+      </button>`).join('');
+    list.querySelectorAll('.qs-item').forEach((b) => {
+      b.addEventListener('click', () => pick(Number(b.dataset.i)));
+    });
+  };
+
+  const pick = async (i) => {
+    const n = quickSwitchItems[i];
+    if (!n) return;
+    closeModal();
+    if (state.view.type === 'tasks' || state.view.type === 'recordings' || state.view.type === 'chat') {
+      setView({ type: 'all' });
+    }
+    await selectNote(n.id);
+  };
+
+  input.addEventListener('input', () => { sel = 0; renderList(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % Math.max(1, quickSwitchItems.length); renderList(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + quickSwitchItems.length) % Math.max(1, quickSwitchItems.length); renderList(); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(sel); }
+    else if (e.key === 'Escape') { e.preventDefault(); done(); }
+  });
+  setTimeout(() => input.focus(), 30);
+  renderList();
 }
 
 // ==================================================================
@@ -2685,14 +3709,15 @@ function openAiMenu() {
 
 function openGuide() {
   const rows = [
-    ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · everything autosaves as you type. Right-click any note, folder or tab for quick actions. Drag a note onto a folder to file it.'],
+    ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> jump to any note · everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it.'],
     ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, dividers and more. Filter by typing.'],
     ['Tabs', 'Open as many notes as you want — each gets a tab. Middle-click or × closes a tab. Right-click a tab to close others.'],
     ['Tasks & reminders', 'Add a task, press the ⌄ to open details: <b>due date</b>, <b>reminder</b>, <b>priority</b>, <b>repeat</b> and <b>subtasks</b>. Nook notifies you at reminder time.'],
-    ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Play, rename, export or delete anytime.'],
-    ['Nook AI', 'Install <b>Ollama</b> (ollama.com, free & local), pick a model in Settings → Nook AI, then use the ✨ button: summarize a note, pull action items into tasks, or get a title. 100% offline.'],
-    ['Themes', 'Settings → Theme — 12 looks. Dark and light.'],
-    ['Backup', 'Settings → Backup — export everything to a file and import it anywhere.'],
+    ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Start/stop never freezes the app anymore, even if the mic is slow. Play, rename, export or delete anytime.'],
+    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Chat streams live, history stays on this PC, and the 📎 button gives the AI your current note as context. Keys are stored locally and never included in backups.'],
+    ['Note tools with AI', 'The ✨ button summarizes the open note, extracts action items straight into Tasks, or suggests a title — through the same provider you configured.'],
+    ['Themes', 'Settings → Theme — 12 looks. Dark and light. Plus editor size/font/width, note density, autosave and spellcheck toggles, default folder, start-with-Windows.'],
+    ['Backup', 'Settings → Backup — export everything to a file and import it anywhere. API keys are never exported.'],
     ['Shortcuts', 'Press <b>Ctrl+/</b> anytime for the full list.']
   ];
   const root = $('#overlay-root');
@@ -2723,11 +3748,12 @@ Your cozy little corner for notes and tasks — **100% offline**, everything sta
 ## Quick tips
 - Type **/** on an empty line — Notion-style commands appear
 - Open many notes at once — each gets a **tab**
-- **Right-click** anything: notes, folders, tabs, tasks
+- **Right-click anywhere** — notes, folders, tabs, tasks, even empty space
+- **Ctrl+K** jumps to any note in a heartbeat
 - **Drag** a note onto a folder to file it
 - Tasks have due dates, priorities, subtasks and **reminders**
 - **Recordings** — record meetings straight to this PC
-- **Nook AI** — connect your local Ollama for summaries (Settings)
+- **AI Chat** — add your own key (OpenRouter, Z.ai, OpenAI, Groq, Gemini…) in Settings
 - 12 themes in Settings. Press **Ctrl+/** for all shortcuts.
 
 Cozy up and start writing. ☕`;
@@ -2746,6 +3772,7 @@ async function boot() {
   wireEditor();
   wireShortcuts();
   wireReminderListener();
+  wireChatView();
 
   // settings first so the theme applies before first paint of content
   await loadSettings();

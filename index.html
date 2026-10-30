@@ -15,7 +15,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.6</span>
+        <span class="tb-ver">v0.7</span>
       </div>
 
       <div class="tb-search">
@@ -180,6 +180,25 @@
             <select id="rec-device" title="Microphone"></select>
           </div>
           <div class="rv-list" id="rv-list"></div>
+        </div>
+      </section>
+      <section id="chat-view" class="hidden">
+        <div class="cv-col">
+          <div class="cv-head">
+            <h1>AI Chat</h1>
+            <span class="tb-spacer"></span>
+            <select id="cv-chat-select" title="Chat history"></select>
+            <button class="btn ghost small" id="cv-new">+ New chat</button>
+            <button class="btn danger small" id="cv-del">Delete</button>
+          </div>
+          <div class="cv-scroll" id="cv-messages"></div>
+          <form id="cv-composer">
+            <button type="button" id="cv-use-note" title="Attach the current note as context for the next message">📎 Note</button>
+            <textarea id="cv-input" rows="1" placeholder="Ask anything… Enter sends · Shift+Enter new line" spellcheck="false"></textarea>
+            <button class="btn primary" type="submit" id="cv-send">Send</button>
+            <button class="btn danger hidden" type="button" id="cv-stop">Stop</button>
+          </form>
+          <div class="cv-foot" id="cv-status">Choose an AI provider & model in Settings — keys stay on this PC.</div>
         </div>
       </section>
     </div>

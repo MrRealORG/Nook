@@ -17,6 +17,8 @@ use std::sync::{Mutex, MutexGuard};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as _AutostartExt;
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
 pub mod ai;
@@ -124,6 +126,25 @@ struct Stats {
     trash: i64,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ChatSummary {
+    id: String,
+    title: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ChatMsg {
+    id: String,
+    chat_id: String,
+    role: String,
+    content: String,
+    created_at: i64,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Backup {
@@ -187,6 +208,23 @@ fn init_db(path: &PathBuf) -> Result<Connection, rusqlite::Error> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS chats (
+            id         TEXT PRIMARY KEY,
+            title      TEXT NOT NULL DEFAULT 'New chat',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id         TEXT PRIMARY KEY,
+            chat_id    TEXT NOT NULL,
+            role       TEXT NOT NULL,
+            content    TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_msgs ON chat_messages(chat_id, created_at);
         "#,
     )?;
     Ok(conn)
@@ -859,6 +897,161 @@ fn set_setting(state: State<'_, Db>, key: String, value: String) -> CmdResult<()
     set_kv(&conn, &key, &value)
 }
 
+// -------------------------------------------------------------- ai chats ----
+
+#[tauri::command]
+fn list_chats(state: State<'_, Db>) -> CmdResult<Vec<ChatSummary>> {
+    let conn = db(&state);
+    let mut stmt = conn
+        .prepare("SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC")
+        .map_err(es)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ChatSummary {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                created_at: r.get(2)?,
+                updated_at: r.get(3)?,
+            })
+        })
+        .map_err(es)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+fn create_chat(state: State<'_, Db>, title: Option<String>) -> CmdResult<ChatSummary> {
+    let conn = db(&state);
+    let c = ChatSummary {
+        id: new_id("chat"),
+        title: title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "New chat".into()),
+        created_at: now_ms(),
+        updated_at: now_ms(),
+    };
+    conn.execute(
+        "INSERT INTO chats(id, title, created_at, updated_at) VALUES(?1, ?2, ?3, ?4)",
+        params![c.id, c.title, c.created_at, c.updated_at],
+    )
+    .map_err(es)?;
+    Ok(c)
+}
+
+#[tauri::command]
+fn rename_chat(state: State<'_, Db>, id: String, title: String) -> CmdResult<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Title cannot be empty".into());
+    }
+    let conn = db(&state);
+    conn.execute(
+        "UPDATE chats SET title = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, title, now_ms()],
+    )
+    .map_err(es)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_chat(state: State<'_, Db>, id: String) -> CmdResult<()> {
+    let conn = db(&state);
+    conn.execute("DELETE FROM chat_messages WHERE chat_id = ?1", params![id])
+        .map_err(es)?;
+    conn.execute("DELETE FROM chats WHERE id = ?1", params![id])
+        .map_err(es)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<Vec<ChatMsg>> {
+    let conn = db(&state);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, chat_id, role, content, created_at FROM chat_messages
+             WHERE chat_id = ?1 ORDER BY created_at ASC, id ASC",
+        )
+        .map_err(es)?;
+    let rows = stmt
+        .query_map(params![chat_id], |r| {
+            Ok(ChatMsg {
+                id: r.get(0)?,
+                chat_id: r.get(1)?,
+                role: r.get(2)?,
+                content: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })
+        .map_err(es)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+fn add_chat_message(
+    state: State<'_, Db>,
+    chat_id: String,
+    role: String,
+    content: String,
+) -> CmdResult<ChatMsg> {
+    let role = match role.as_str() {
+        "user" | "assistant" | "system" => role,
+        _ => "user".to_string(),
+    };
+    let conn = db(&state);
+    let m = ChatMsg {
+        id: new_id("msg"),
+        chat_id: chat_id.clone(),
+        role,
+        content,
+        created_at: now_ms(),
+    };
+    conn.execute(
+        "INSERT INTO chat_messages(id, chat_id, role, content, created_at) VALUES(?1, ?2, ?3, ?4, ?5)",
+        params![m.id, m.chat_id, m.role, m.content, m.created_at],
+    )
+    .map_err(es)?;
+    // bump the chat + auto-title from the first user message
+    let auto_title: Option<String> = conn
+        .query_row(
+            "SELECT title FROM chats WHERE id = ?1",
+            params![chat_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let needs_title = matches!(auto_title.as_deref(), None | Some("New chat") | Some(""));
+    if m.role == "user" && needs_title {
+        let t: String = m.content.chars().take(42).collect();
+        let t = t.trim();
+        if !t.is_empty() {
+            let _ = conn.execute(
+                "UPDATE chats SET title = ?2 WHERE id = ?1",
+                params![chat_id, t],
+            );
+        }
+    }
+    conn.execute(
+        "UPDATE chats SET updated_at = ?2 WHERE id = ?1",
+        params![chat_id, now_ms()],
+    )
+    .map_err(es)?;
+    Ok(m)
+}
+
+#[tauri::command]
+fn clear_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<()> {
+    let conn = db(&state);
+    conn.execute(
+        "DELETE FROM chat_messages WHERE chat_id = ?1",
+        params![chat_id],
+    )
+    .map_err(es)?;
+    conn.execute(
+        "UPDATE chats SET title = 'New chat', updated_at = ?2 WHERE id = ?1",
+        params![chat_id, now_ms()],
+    )
+    .map_err(es)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_stats(state: State<'_, Db>) -> CmdResult<Stats> {
     let conn = db(&state);
@@ -923,7 +1116,10 @@ fn read_backup_data(conn: &Connection) -> Result<Backup, String> {
         .collect();
 
     let mut stmt = conn
-        .prepare("SELECT key, value FROM settings WHERE key != 'window_bounds'")
+        .prepare(
+            "SELECT key, value FROM settings
+             WHERE key != 'window_bounds' AND key NOT LIKE 'aiProv%'",
+        )
         .map_err(es)?;
     let settings = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -1026,7 +1222,7 @@ fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option<Stats
         );
         }
         for (k, v) in &data.settings {
-            if k == "window_bounds" {
+            if k == "window_bounds" || k.starts_with("aiProv") {
                 continue;
             }
             let _ = tx.execute(
@@ -1194,6 +1390,85 @@ fn reveal_data_dir(app: AppHandle) -> CmdResult<()> {
     Ok(())
 }
 
+// --------------------------------------------------------- extras (v0.7) ----
+
+/// Imports .md / .txt files from disk as new notes (title = file name).
+#[tauri::command]
+fn import_notes(state: State<'_, Db>) -> CmdResult<Option<usize>> {
+    let paths = rfd::FileDialog::new()
+        .set_title("Choose Markdown or text files to import")
+        .add_filter("Notes (Markdown & text)", &["md", "markdown", "txt"])
+        .pick_files();
+    let Some(paths) = paths else { return Ok(None) };
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let conn = db(&state);
+    let mut imported = 0usize;
+    for p in paths {
+        let Ok(raw) = std::fs::read_to_string(&p) else { continue };
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Imported note".into());
+        let mut title = sanitize_filename(&stem);
+        if title.is_empty() {
+            title = "Imported note".into();
+        }
+        let (first_line, rest) = match raw.split_once('\n') {
+            Some((a, b)) => (a.trim(), b.to_string()),
+            None => (raw.trim(), String::new()),
+        };
+        // if the file starts with a markdown H1, prefer it as the title
+        let (title, content) = if let Some(h) = first_line.strip_prefix("# ") {
+            (h.trim().to_string(), rest.trim_start().to_string())
+        } else {
+            (title, raw)
+        };
+        let now = now_ms();
+        conn.execute(
+            "INSERT INTO notes(id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at)
+             VALUES(?1, NULL, ?2, ?3, 0, 0, 0, ?4, ?5)",
+            params![new_id("note"), title, content, now, now],
+        )
+        .map_err(es)?;
+        imported += 1;
+    }
+    if imported == 0 {
+        return Err("No readable notes found in the selected files".into());
+    }
+    Ok(Some(imported))
+}
+
+#[tauri::command]
+fn autostart_get(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn autostart_set(app: AppHandle, enabled: bool) -> CmdResult<()> {
+    let al = app.autolaunch();
+    if enabled {
+        al.enable().map_err(es)
+    } else {
+        al.disable().map_err(es)
+    }
+}
+
+#[tauri::command]
+fn clipboard_write(app: AppHandle, text: String) -> CmdResult<()> {
+    app.clipboard().write_text(text).map_err(es)
+}
+
+#[tauri::command]
+fn clipboard_read(app: AppHandle) -> CmdResult<String> {
+    app.clipboard().read_text().map_err(es)
+}
+
 // -------------------------------------------------------- reminder engine ----
 
 /// Background loop: every 15 s it checks for tasks whose reminder time has
@@ -1295,6 +1570,11 @@ fn main() {
             show_main(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let dir = app
                 .path()
@@ -1309,6 +1589,7 @@ fn main() {
 
             app.manage(Db(Mutex::new(conn)));
             app.manage(recorder::RecorderState::new());
+            app.manage(ai::AiState::new());
 
             let win = app
                 .get_webview_window("main")
@@ -1382,6 +1663,18 @@ fn main() {
             get_stats,
             export_backup,
             import_backup,
+            list_chats,
+            create_chat,
+            rename_chat,
+            delete_chat,
+            get_chat_messages,
+            add_chat_message,
+            clear_chat_messages,
+            import_notes,
+            autostart_get,
+            autostart_set,
+            clipboard_write,
+            clipboard_read,
             recorder::recorder_devices,
             recorder::recorder_status,
             recorder::recorder_start,
@@ -1390,8 +1683,11 @@ fn main() {
             recorder::rename_recording,
             recorder::delete_recording,
             recorder::export_recording,
-            ai::ai_models,
-            ai::ai_generate,
+            ai::ai_list_models,
+            ai::ai_complete,
+            ai::ai_chat,
+            ai::ai_stop,
+            ai::ai_test,
             data_dir,
             export_note,
             open_url,
