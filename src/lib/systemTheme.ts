@@ -8,7 +8,7 @@ import { THEMES, isPremiumTheme, type ThemeId } from "@/lib/themes";
 
 export type FollowCfg = { on: boolean; light: ThemeId; dark: ThemeId };
 const KEY = "nook:themeFollow";
-const DEFAULTS: FollowCfg = { on: false, light: "mist", dark: "graphite" };
+const DEFAULTS: FollowCfg = { on: false, light: "light", dark: "dark" };
 const listeners = new Set<() => void>();
 
 export function getFollow(): FollowCfg {

@@ -98,7 +98,7 @@ export function TimelensSettings() {
           </label>
           <label className="block">
             <span className="tiny-font mb-1 block text-[9.5px] text-faint">SAMPLE EVERY (SECONDS)</span>
-            <input className="input" type="number" min={1} max={30} value={cfg.intervalSecs} onChange={(e) => void patch({ intervalSecs: Number(e.target.value) || 2 })} aria-label="Sample interval seconds" />
+            <input className="input" type="number" min={5} max={60} value={cfg.intervalSecs} onChange={(e) => void patch({ intervalSecs: Math.max(5, Number(e.target.value) || 5) })} aria-label="Sample interval seconds" />
           </label>
         </div>
       </div>

@@ -1,5 +1,6 @@
 
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { frameLoop, isLowPower, onPowerChange } from "@/lib/power";
 import { drawPet, makePalette, SH, SW, type Mood, type Palette, type Pose, type Species } from "@/lib/sprite";
 import { useStore } from "@/lib/store";
 import { THEMES } from "@/lib/themes";
@@ -53,37 +54,43 @@ type Props = {
   look?: { x: number; y: number };
   getPose?: () => Partial<Pose>;
   fps?: number;
+  /** force animation on/off (default: animate unless low-power mode is on) */
+  animate?: boolean;
   className?: string;
   style?: CSSProperties;
 };
 
-export function PetView({ species, tint, hat = "none", mood = "idle", scale = 3, facing = 1, look, getPose, fps = 12, className, style }: Props) {
+export function PetView({ species, tint, hat = "none", mood = "idle", scale = 3, facing = 1, look, getPose, fps = 12, animate, className, style }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const pal = useSpeciesPalette(species, tint);
   const live = useRef({ species, hat, mood, facing, look, getPose, pal });
   useEffect(() => {
     live.current = { species, hat, mood, facing, look, getPose, pal };
   });
+  // low-power mode: draw once (and again when what we draw changes); animate only when asked
+  const [power, setPower] = useState(() => isLowPower());
+  useEffect(() => onPowerChange(() => setPower(isLowPower())), []);
+  const moving = animate ?? !power;
 
   useEffect(() => {
     const cv = ref.current;
     const ctx = cv?.getContext("2d");
     if (!cv || !ctx) return;
     const t0 = performance.now() + Math.random() * 3000;
-    let raf = 0;
-    let last = -1e9;
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      if (document.hidden || now - last < 1000 / fps) return;
-      last = now;
+    const draw = (now: number) => {
       const L = live.current;
       const t = (now - t0) / 1000;
       const x = L.getPose?.() ?? {};
-      drawPet(ctx, L.species, { mood: x.mood ?? L.mood, t, facing: x.facing ?? L.facing, look: x.look ?? L.look, blink: t % 3.8 < 0.14 }, L.pal, L.hat);
+      drawPet(ctx, L.species, { mood: x.mood ?? L.mood, t: moving ? t : 0.5, facing: x.facing ?? L.facing, look: x.look ?? L.look, blink: moving && t % 3.8 < 0.14 }, L.pal, L.hat);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [fps]);
+    if (!moving) {
+      draw(performance.now());
+      return;
+    }
+    // capped fps with timers (not a 60 Hz rAF wake-up), paused while hidden / scrolled away
+    const fl = frameLoop(draw, fps, cv);
+    return () => fl.stop();
+  }, [fps, moving, species, hat, mood, facing, pal]);
 
   return <canvas ref={ref} width={SW} height={SH} className={`pixelated ${className ?? ""}`} style={{ width: SW * scale, height: SH * scale, ...style }} />;
 }

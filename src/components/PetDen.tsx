@@ -1,4 +1,5 @@
 
+import { frameLoop, isLowPower } from "@/lib/power";
 import { useEffect, useRef, useState } from "react";
 import { PHASE_TINT, PhaseCelestial, phaseOf, useAmbience, type Phase } from "@/lib/ambience";
 import { AiChat } from "@/components/AiChat";
@@ -106,10 +107,9 @@ function Stage() {
 
   useEffect(() => {
     const el = box.current!;
-    let raf = 0, last = performance.now();
+    let last = performance.now();
+    // 1.2: capped-fps timer loop (30 fps, 15 in low-power), stops while hidden / off screen
     const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      if (document.hidden) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const s = S.current;
@@ -182,8 +182,8 @@ function Stage() {
         ballEl.current.style.transform = `translate3d(${b.x - 11}px, ${-b.y}px, 0)`;
       }
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    const fl = frameLoop(loop, isLowPower() ? 15 : 30, el);
+    return () => fl.stop();
   }, []);
 
   return (
@@ -243,7 +243,7 @@ function Stage() {
           </div>
         )}
         <div style={{ transform: `scale(${stage.scale})`, transformOrigin: "50% 100%", position: "relative" }}>
-          <PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={SCALE} fps={14} getPose={() => ({ mood: mood.current, facing: facing.current, look: look.current })} />
+          <PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={SCALE} fps={14} animate getPose={() => ({ mood: mood.current, facing: facing.current, look: look.current })} />
         </div>
       </div>
     </div>

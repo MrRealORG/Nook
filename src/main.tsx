@@ -2,12 +2,15 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@/globals.css";
 import "@/desktop.css";
+import "@/clean.css";
 import { installApiShim } from "@/lib/apiShim";
 import { installDesktopGlue } from "@/lib/platform";
+import { installPower } from "@/lib/power";
 import type { InitialData } from "@/lib/types";
 
 installApiShim();
 installDesktopGlue();
+installPower();
 
 function Boot() {
   const [data, setData] = useState<InitialData | null>(null);

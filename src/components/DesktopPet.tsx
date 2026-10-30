@@ -9,6 +9,7 @@ import { feedPet, napPet, trickPet } from "@/lib/petActions";
 import type { Mood } from "@/lib/sprite";
 import { clamp, parseNote } from "@/lib/util";
 import { useStore } from "@/lib/store";
+import { everyActive, frameLoop, isLowPower, onPowerChange } from "@/lib/power";
 
 const SCALE = 2.5;
 const PW = 32 * SCALE;
@@ -41,6 +42,21 @@ function WidgetActions({ onMenu }: { onMenu?: () => void }) {
   );
 }
 
+/** an occasional speech bubble from the roaming pet */
+function chatLine() {
+  const st = useStore.getState();
+  if (st.bubble || st.act || Date.now() - activity.lastType < 4000) return;
+  const p = st.pet;
+  let open = 0;
+  for (const n of st.notes) { const m = parseNote(n.content); open += m.tasks.total - m.tasks.done; }
+  const speciesSays = SPECIES[p.species]?.says ?? [];
+  const pool = [...speciesSays];
+  if (p.food < 35) pool.push("My tummy is rumbling…", "Is it snack time?");
+  if (p.joy < 35) pool.push("Pet me? Please?");
+  if (open > 0) pool.push(`You have ${open} open task${open > 1 ? "s" : ""}. I believe in you.`);
+  if (pool.length) st.say(pool[Math.floor(Math.random() * pool.length)]);
+}
+
 export function DesktopPet() {
   const roam = useStore((s) => s.roam);
   const view = useStore((s) => s.view);
@@ -56,6 +72,11 @@ export function DesktopPet() {
   const S = useRef({ x: 160, y: 0, vy: 0, mode: "idle" as Mode, until: 0, target: 160, held: false, moved: false, dx: 0, dy: 0, sx: 0, sy: 0, mx: -1, my: -1, lastClick: 0, facing: 1 as 1 | -1 });
 
   const hidden = !roam || view === "den";
+  // 1.2 low-power mode (default): the pet sits still — no per-frame loop at all; it still
+  // reacts (mood changes redraw the sprite) and keeps its hover toolbar / chat.
+  const [low, setLow] = useState(() => isLowPower());
+  useEffect(() => onPowerChange(() => setLow(isLowPower())), []);
+  const act = useStore((s) => s.act);
 
   // close the widget context menu on outside click / Escape
   useEffect(() => {
@@ -73,9 +94,30 @@ export function DesktopPet() {
   }, [menu]);
 
   useEffect(() => {
-    if (hidden) return;
+    if (hidden || !low) return;
+    const el = wrap.current;
     const s = S.current;
-    let raf = 0;
+    const place = () => {
+      if (!el) return;
+      const W = window.innerWidth;
+      s.x = clamp(s.x, 0, W - PW);
+      el.style.transform = `translate3d(${s.x}px, 0, 0)`;
+      el.style.setProperty("--bl", `${clamp(s.x + PW / 2 - 118, 8, W - 244) - s.x}px`);
+      el.style.setProperty("--tl", `${s.x + PW / 2 - clamp(s.x + PW / 2 - 118, 8, W - 244) - 6}px`);
+      el.style.setProperty("--popx", `${clamp(s.x + PW / 2, 104, W - 104)}px`);
+    };
+    place();
+    window.addEventListener("resize", place);
+    const stopChat = everyActive(() => chatLine(), 120_000);
+    return () => {
+      window.removeEventListener("resize", place);
+      stopChat();
+    };
+  }, [hidden, low]);
+
+  useEffect(() => {
+    if (hidden || low) return;
+    const s = S.current;
     let last = performance.now();
 
     const onMove = (e: PointerEvent) => {
@@ -89,9 +131,8 @@ export function DesktopPet() {
     activity.lastInput = Date.now();
 
     const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
       const el = wrap.current;
-      if (!el || document.hidden) return;
+      if (!el) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const st = useStore.getState();
@@ -146,25 +187,14 @@ export function DesktopPet() {
       // popover anchor: horizontally centered over the pet, clamped to the viewport
       el.style.setProperty("--popx", `${clamp(s.x + PW / 2, 104, W - 104)}px`);
     };
-    raf = requestAnimationFrame(loop);
+    // full-power mode: 30 fps timer loop (was a 60 Hz rAF), paused while the window is hidden
+    const fl = frameLoop(loop, 30);
 
-    const chat = setInterval(() => {
-      const st = useStore.getState();
-      if (st.bubble || st.act || Date.now() - activity.lastType < 4000 || S.current.mode === "sleep") return;
-      const p = st.pet;
-      let open = 0;
-      for (const n of st.notes) { const m = parseNote(n.content); open += m.tasks.total - m.tasks.done; }
-      const speciesSays = SPECIES[p.species]?.says ?? [];
-      const pool = [...speciesSays];
-      if (p.food < 35) pool.push("My tummy is rumbling…", "Is it snack time?");
-      if (p.joy < 35) pool.push("Pet me? Please?");
-      if (open > 0) pool.push(`You have ${open} open task${open > 1 ? "s" : ""}. I believe in you.`);
-      st.say(pool[Math.floor(Math.random() * pool.length)]);
-    }, 52_000);
+    const stopChat = everyActive(() => chatLine(), 52_000);
 
     return () => {
-      cancelAnimationFrame(raf);
-      clearInterval(chat);
+      fl.stop();
+      stopChat();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("keydown", onKey);
     };
@@ -284,7 +314,7 @@ export function DesktopPet() {
         }}
         title={`${pet.name} — click to chat, double-click for a trick, drag to move, right-click for the menu`}
       >
-        <PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={SCALE} fps={12} getPose={() => ({ mood: mood.current, facing: facing.current, look: look.current })} />
+        <PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={SCALE} fps={12} animate={!low} mood={low ? (act?.mood ?? "idle") : "idle"} getPose={low ? undefined : () => ({ mood: mood.current, facing: facing.current, look: look.current })} />
       </div>
     </div>
   );

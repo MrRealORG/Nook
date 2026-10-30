@@ -1,4 +1,5 @@
 
+import { everyActive } from "@/lib/power";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { Markdown } from "@/components/Markdown";
@@ -80,7 +81,7 @@ export default function ShareReader({ shareId, onExit }: { shareId: string; onEx
   // live sync — poll every 5s so the owner sees worker progress in real time
   useEffect(() => {
     if (state !== "ready") return;
-    const t = setInterval(async () => {
+    return everyActive(async () => {
       try {
         const fresh = await getShare(shareId);
         if (!aliveRef.current || fresh.revoked) return;
@@ -89,7 +90,6 @@ export default function ShareReader({ shareId, onExit }: { shareId: string; onEx
         /* transient poll errors are silently ignored */
       }
     }, 5000);
-    return () => clearInterval(t);
   }, [shareId, state]);
 
   // Escape exits the reader

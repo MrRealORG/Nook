@@ -7,7 +7,7 @@ import { onCtx, type CtxItem } from "@/components/ContextMenu";
 import { levelOf } from "@/lib/pet";
 import { RAIL_DEFAULT_ICONS, RAIL_DEFAULT_ORDER, railOrderOf, RAIL_ICON_CHOICES, useStore, type View } from "@/lib/store";
 
-const META: Record<View, { label: string; key: string }> = {
+export const META: Record<View, { label: string; key: string }> = {
   notes: { label: "Notes", key: "1" },
   graph: { label: "Graph", key: "2" },
   canvas: { label: "Canvas", key: "3" },
@@ -46,7 +46,7 @@ export function ShieldChip() {
 }
 
 /** icon picker popover for one rail item (edit mode) */
-function IconPicker({ view, onClose }: { view: View; onClose: () => void }) {
+export function IconPicker({ view, onClose }: { view: View; onClose: () => void }) {
   const current = useStore((s) => s.railIcons[view] ?? RAIL_DEFAULT_ICONS[view]);
   const railPos = useStore((s) => s.railPos);
   const ref = useRef<HTMLDivElement>(null);
@@ -339,13 +339,150 @@ export function DockRail() {
   );
 }
 
+/** sidebar sections (1.2): grouped navigation; order inside a group follows the user's rail order */
+export const NAV_GROUPS: { id: string; label: string; views: View[] }[] = [
+  { id: "workspace", label: "Workspace", views: ["notes", "calendar", "tasks", "chat"] },
+  { id: "create", label: "Create", views: ["canvas", "graph"] },
+  { id: "productivity", label: "Productivity", views: ["focus", "timelens", "activity", "rules"] },
+  { id: "play", label: "Play", views: ["den", "arcade", "market", "team"] },
+];
+
+/**
+ * The 1.2 sidebar: grouped sections, icon + label, collapses to an icon rail (tooltips),
+ * an accent active indicator, quiet hover. Right-click any item to reorder / hide / re-icon
+ * (the edit mode from 1.1 still works). Ctrl+B hides it; the chevron collapses it.
+ */
 export function Rail() {
+  const view = useStore((s) => s.view);
+  const collapsed = useStore((s) => s.sidebarCollapsed);
+  const railIcons = useStore((s) => s.railIcons);
+  const railOrder = useStore((s) => s.railOrder);
+  const railHidden = useStore((s) => s.railHidden);
   const railEdit = useStore((s) => s.railEdit);
+  const railPos = useStore((s) => s.railPos);
+  const marketUnread = useStore((s) => s.marketUnread);
+  const openTasks = useStore((s) => s.tasks.filter((t) => !t.done).length);
+  const freshNotices = useStore((s) => s.notices.reduce((a, n) => a + (n.fresh ? 1 : 0), 0));
+  const noticeOpen = useStore((s) => s.noticeOpen);
+  const pet = useStore((s) => s.pet);
+  const petEnabled = useStore((s) => s.petEnabled);
+  const shieldOn = useStore((s) => s.rules.shieldOn);
+  const [picking, setPicking] = useState<View | null>(null);
+  // collapsed-rail tooltips are fixed-positioned (the scroll area would clip absolute ones)
+  const [tip, setTip] = useState<{ label: string; hint?: string; x: number; y: number } | null>(null);
+  const tipFor = (label: string, hint?: string) =>
+    collapsed
+      ? {
+          onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setTip({ label, hint, x: railPos === "right" ? r.left - 10 : r.right + 10, y: r.top + r.height / 2 });
+          },
+          onPointerLeave: () => setTip(null),
+          onFocus: (e: React.FocusEvent<HTMLElement>) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setTip({ label, hint, x: railPos === "right" ? r.left - 10 : r.right + 10, y: r.top + r.height / 2 });
+          },
+          onBlur: () => setTip(null),
+        }
+      : {};
+  const order = railOrderOf(railOrder);
+  const shown = (v: View) => railEdit || !railHidden.includes(v);
+  const badge = (v: View) => (v === "market" ? marketUnread : v === "tasks" ? openTasks : 0);
+  const st = useStore.getState;
+
+  const menu = (v: View): CtxItem[] => [
+    { icon: "external-link", label: `Open ${META[v].label}`, run: () => st().setView(v) },
+    { sep: true },
+    { icon: "arrow-up", label: "Move up", disabled: order.indexOf(v) <= 0, run: () => st().moveRailItem(v, -1) },
+    { icon: "arrow-down", label: "Move down", disabled: order.indexOf(v) >= order.length - 1, run: () => st().moveRailItem(v, 1) },
+    { icon: "palette", label: "Change icon…", run: () => { useStore.setState({ railEdit: true }); setPicking(v); } },
+    { icon: railHidden.includes(v) ? "eye" : "close", label: railHidden.includes(v) ? "Show in sidebar" : "Hide from sidebar", disabled: v === "notes", run: () => st().toggleRailHidden(v) },
+    { sep: true },
+    { icon: "sliders", label: "Sidebar settings…", run: () => { st().setView("settings"); useStore.setState({ settingsSection: "sidebar" }); } },
+  ];
+
+  const item = (v: View) => {
+    const n = badge(v);
+    const custom = railIcons[v];
+    return (
+      <button
+        key={v}
+        className="nav-item"
+        data-testid={`nav-${v}`}
+        data-on={view === v}
+        data-off={railHidden.includes(v)}
+        onClick={() => (railEdit ? setPicking(picking === v ? null : v) : st().setView(v))}
+        onContextMenu={onCtx(() => menu(v), { icon: RAIL_DEFAULT_ICONS[v], title: META[v].label })}
+        aria-label={META[v].label + (n ? ` — ${n} new` : "")}
+        aria-current={view === v ? "page" : undefined}
+        {...tipFor(META[v].label, `Alt ${META[v].key}`)}
+      >
+        <Icon name={custom ?? RAIL_DEFAULT_ICONS[v]} size={18} />
+        <span className="nav-label">{META[v].label}</span>
+        {n > 0 && !railEdit && <span className="nav-badge">{n > 99 ? "99+" : n}</span>}
+        {v === "rules" && shieldOn && <span className="nav-dot" title="Shield is up" />}
+      </button>
+    );
+  };
+
   return (
-    <nav className="panel scroll flex w-[62px] flex-none flex-col items-center gap-1.5 rounded-[18px] py-3" data-rail-edit={railEdit}>
-      <RailButtons />
-      <div className="my-1 h-px w-7 flex-none bg-line" />
-      <RailUtilities />
+    <nav className="nav" data-testid="sidebar" data-collapsed={collapsed} data-side={railPos} data-rail-edit={railEdit} aria-label="Sidebar">
+      <div className="nav-head">
+        <button className="nav-item nav-search" onClick={() => useStore.setState({ palette: true })} aria-label="Search and commands" {...tipFor("Search & commands", "Ctrl K")}>
+          <Icon name="search" size={16} />
+          <span className="nav-label">Search</span>
+          <span className="nav-kbd">Ctrl K</span>
+        </button>
+        <button className="nav-collapse" data-testid="sidebar-collapse" onPointerDown={() => setTip(null)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => st().set({ sidebarCollapsed: !collapsed })}>
+          <Icon name={collapsed ? "chevron-right" : "chevron-left"} size={15} />
+        </button>
+      </div>
+      <div className="nav-scroll scroll">
+        {NAV_GROUPS.map((g) => {
+          const views = order.filter((v) => g.views.includes(v) && shown(v));
+          if (!views.length) return null;
+          return (
+            <div key={g.id} className="nav-group" role="group" aria-label={g.label}>
+              <div className="nav-group-label">{g.label}</div>
+              {views.map(item)}
+            </div>
+          );
+        })}
+      </div>
+      <div className="nav-foot">
+        <button className="nav-item" data-on={noticeOpen} onClick={() => useStore.setState((s) => ({ noticeOpen: !s.noticeOpen }))} aria-label={`Notifications${freshNotices > 0 ? ` — ${freshNotices} new` : ""}`} {...tipFor("Notifications")}>
+          <Icon name="bell" size={18} />
+          <span className="nav-label">Notifications</span>
+          {freshNotices > 0 && <span className="nav-badge">{freshNotices > 9 ? "9+" : freshNotices}</span>}
+        </button>
+        <button className="nav-item" onClick={() => useStore.setState({ notesDrawer: true })} aria-label="All notes drawer" {...tipFor("All notes", "Ctrl ⇧ N")}>
+          <Icon name="library" size={18} />
+          <span className="nav-label">All notes</span>
+        </button>
+        {shown("settings") && item("settings")}
+        {railEdit && (
+          <div className="flex gap-1 px-1 pt-1">
+            <button className="btn btn-sm flex-1" onClick={() => useStore.setState({ railEdit: false })} aria-label="Customize sidebar">Done</button>
+            <button className="btn btn-sm" onClick={() => st().resetRail()} aria-label="Reset sidebar" title="Reset to the default layout"><Icon name="reload" size={13} /></button>
+          </div>
+        )}
+        {petEnabled && (
+          <button className="nav-pet" onClick={() => st().setView("den")} title={`${pet.name} · level ${levelOf(pet.xp).level}`} aria-label={`${pet.name}'s den`}>
+            <span className="nav-pet-art"><PetView species={pet.species} tint={pet.look} hat={pet.hat} scale={1} fps={6} /></span>
+            <span className="nav-label min-w-0">
+              <span className="block truncate text-[12.5px] font-medium text-ink">{pet.name}</span>
+              <span className="block text-[11px] text-faint">Level {levelOf(pet.xp).level}</span>
+            </span>
+          </button>
+        )}
+      </div>
+      {railEdit && picking && <IconPicker view={picking} onClose={() => setPicking(null)} />}
+      {tip && collapsed && (
+        <span className="nav-tip" role="tooltip" data-side={railPos} style={{ left: tip.x, top: tip.y }}>
+          {tip.label}
+          {tip.hint && <span className="nav-tip-key">{tip.hint}</span>}
+        </span>
+      )}
     </nav>
   );
 }

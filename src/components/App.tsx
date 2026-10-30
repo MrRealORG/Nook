@@ -29,6 +29,7 @@ import { DEFAULT_RULES, type RulesState } from "@/lib/rules";
 import { wallpaperCss } from "@/lib/wallpapers";
 import type { InitialData } from "@/lib/types";
 import { useUi11 } from "@/lib/ui11";
+import { everyActive, installPower } from "@/lib/power";
 
 const Loading = () => (
   <div className="grid h-full place-items-center">
@@ -103,7 +104,8 @@ const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
 function usePetNag() {
   useEffect(() => {
-    const iv = setInterval(() => {
+    // 1.2: every 90 s and only while the window is visible (was 45 s, always)
+    return everyActive(() => {
       const s = useStore.getState();
       if (!s.petNag || s.dnd || document.hidden) return;
       const now = Date.now();
@@ -128,8 +130,7 @@ function usePetNag() {
         lastNagAt = now;
         s.say(line);
       }
-    }, 45_000);
-    return () => clearInterval(iv);
+    }, 90_000);
   }, []);
 }
 
@@ -142,8 +143,10 @@ function useAppTimeTracker() {
     const onKey = () => (activity.lastInput = lastInput = Date.now());
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("keydown", onKey);
-    const iv = setInterval(() => {
-      if (document.hidden || Date.now() - lastInput > 120_000) return; // hidden or idle >2min → don't count
+    // 1.2: a 60 s tick (was 15 s) — every tick rewrites the prefs blob, so fewer is cheaper
+    const TICK = 60;
+    const stop = everyActive(() => {
+      if (Date.now() - lastInput > 120_000) return; // idle >2min → don't count
       const s = useStore.getState();
       const app = s.currentApp ? s.currentApp.toLowerCase() : `nook:${s.view}`;
       // ---- rule engine: blocked apps + limits (shield must be up) ----
@@ -170,10 +173,10 @@ function useAppTimeTracker() {
           s.say("Quiet hours! Something productive, maybe?");
         }
       }
-      s.trackApp(app, 15);
-    }, 15_000);
+      s.trackApp(app, TICK);
+    }, TICK * 1000);
     return () => {
-      clearInterval(iv);
+      stop();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("keydown", onKey);
     };
@@ -187,6 +190,14 @@ export function App({ initial }: { initial: InitialData }) {
     hydrated.current = true;
   }
   useEffect(() => installSystemTheme(), []);
+  // the focus timer is the only thing that needs a 1 s tick — run it only while a timer runs
+  const timerRunning = useStore((s) => s.timer.running);
+  useEffect(() => {
+    if (!timerRunning) return;
+    useStore.getState().tick();
+    const iv = setInterval(() => useStore.getState().tick(), 1000);
+    return () => clearInterval(iv);
+  }, [timerRunning]);
   const view = useStore((s) => s.view);
   const searchOpen = useUi11((s) => s.searchOpen);
   const versionsFor = useUi11((s) => s.versionsFor);
@@ -226,8 +237,9 @@ export function App({ initial }: { initial: InitialData }) {
     document.documentElement.dataset.theme = useStore.getState().theme;
     setMuted(useStore.getState().muted);
     setVolume(useStore.getState().volume);
-    const iv1 = setInterval(() => useStore.getState().tick(), 1000);
-    const iv2 = setInterval(() => useStore.getState().tickPet(), 30_000);
+    installPower();
+    // pet stat decay is time-based (decayed() uses timestamps), so a slow, visible-only tick is exact
+    const stopPet = everyActive(() => useStore.getState().tickPet(), 60_000);
     // live bazaar: bot sales anywhere in the app (coins + badge), listings kept fresh
     startMarketWatcher();
     // remember click points so coin rewards can fly from where the user clicked
@@ -239,7 +251,7 @@ export function App({ initial }: { initial: InitialData }) {
     void st.loadTasks();
     void st.loadCustomGames();
     // keep the rulebook in sync with the server (the AI harness and other browsers write there too)
-    const ivRules = setInterval(() => {
+    const stopRules = everyActive(() => {
       void fetch("/api/rules")
         .then((r) => r.json())
         .then((j) => {
@@ -249,7 +261,7 @@ export function App({ initial }: { initial: InitialData }) {
           if (JSON.stringify(cur) !== JSON.stringify(j.rules)) useStore.setState({ rules: { ...DEFAULT_RULES, ...(j.rules as RulesState) } });
         })
         .catch(() => {});
-    }, 30_000);
+    }, 120_000);
     const tour = setTimeout(() => {
       if (!useStore.getState().tourDone) useStore.getState().startTour();
     }, 1600);
@@ -323,9 +335,8 @@ export function App({ initial }: { initial: InitialData }) {
     };
     window.addEventListener("keydown", onKey);
     return () => {
-      clearInterval(iv1);
-      clearInterval(iv2);
-      clearInterval(ivRules);
+      stopPet();
+      stopRules();
       clearTimeout(hi);
       clearTimeout(tour);
       window.removeEventListener("pagehide", flush);

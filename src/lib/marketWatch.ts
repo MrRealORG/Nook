@@ -1,3 +1,4 @@
+import { everyActive, isLowPower } from "@/lib/power";
 import type { Listing } from "@/lib/types";
 import { flyCoins } from "@/lib/coinFly";
 import { sfx } from "@/lib/sfx";
@@ -14,7 +15,7 @@ import { useStore } from "@/lib/store";
  * It also keeps the store `listings` fresh everywhere (market grid, team bulletin).
  */
 
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: (() => void) | null = null;
 let started = false;
 /** sold listing ids already accounted for (payout shown or pre-existing) */
 const seen = new Set<string>();
@@ -140,11 +141,16 @@ export function startMarketWatcher() {
   if (started || typeof window === "undefined") return;
   started = true;
   void tick();
-  timer = setInterval(() => void tick(), 15_000);
+  // 1.2: visible-only, and 60 s in low-power mode (bot sales are simulated server-side anyway)
+  timer = everyActive(() => {
+    if (isLowPower() && ++skips % 4 !== 0) return;
+    void tick();
+  }, 15_000);
 }
+let skips = 0;
 
 export function stopMarketWatcher() {
-  if (timer) clearInterval(timer);
+  if (timer) timer();
   timer = null;
   started = false;
 }

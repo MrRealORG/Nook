@@ -1,4 +1,5 @@
 
+import { everyActive } from "@/lib/power";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
@@ -652,8 +653,7 @@ function McpSection() {
       .then((j) => setTools((j?.result?.tools ?? []).map((t: { name: string }) => t.name)))
       .catch(() => setTools([]));
     loadLog();
-    const iv = setInterval(loadLog, 6000);
-    return () => clearInterval(iv);
+    return everyActive(loadLog, 10_000);
   }, []);
   const runTest = async () => {
     setTesting(true);

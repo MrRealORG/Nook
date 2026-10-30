@@ -4,6 +4,7 @@ import { Icon } from "@/components/Icon";
 import { useStore } from "@/lib/store";
 import { THEMES } from "@/lib/themes";
 import { clamp, parseNote, titleKey } from "@/lib/util";
+import { isActive, motionAllowed, onPowerChange } from "@/lib/power";
 
 type Kind = "note" | "ghost" | "tag";
 type GNode = { id: string; label: string; kind: Kind; x: number; y: number; z: number; vx: number; vy: number; vz: number; deg: number; pinned: boolean };
@@ -328,11 +329,13 @@ export function GraphView() {
     const loop = (t: number) => {
       running = false;
       frame(world, ctx, t);
-      const moving = world.alpha > 0.014 || Math.abs(world.yaw - world.yawT) > 0.002 || Math.abs(world.pitch - world.pitchT) > 0.002 || Math.abs(world.pf - world.pfT) > 0.004 || (world.opts.orbit && world.three && !world.dragging) || world.dragging;
-      if (moving && !document.hidden) { running = true; raf = requestAnimationFrame(loop); }
+      // 1.2: the idle orbit is decorative — off in low-power mode; nothing runs while hidden
+      const moving = world.alpha > 0.014 || Math.abs(world.yaw - world.yawT) > 0.002 || Math.abs(world.pitch - world.pitchT) > 0.002 || Math.abs(world.pf - world.pfT) > 0.004 || (world.opts.orbit && world.three && !world.dragging && motionAllowed()) || world.dragging;
+      if (moving && isActive()) { running = true; raf = requestAnimationFrame(loop); }
       if (!world.fitted && world.alpha < 0.35 && world.nodes.length) { world.fitted = true; fit(); }
     };
     world.kick = () => { if (!running) { running = true; raf = requestAnimationFrame(loop); } };
+    const offPower = onPowerChange(() => world.kick());
 
     const fit = () => {
       let mx = 1;
@@ -446,6 +449,7 @@ export function GraphView() {
     document.addEventListener("visibilitychange", vis);
     return () => {
       cancelAnimationFrame(raf);
+      offPower();
       ro.disconnect();
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointermove", move);

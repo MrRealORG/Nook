@@ -80,20 +80,18 @@ export function GuidedTour() {
   // locate the target element
   useLayoutEffect(() => {
     if (!open) return;
-    let raf = 0;
     const find = () => {
       const el = s.target ? document.querySelector(s.target) : null;
       setRect(el ? el.getBoundingClientRect() : null);
     };
     find();
     const t1 = setTimeout(find, 420); // after view transition
-    const loop = () => {
-      raf = requestAnimationFrame(loop);
-      find();
-    };
-    raf = requestAnimationFrame(loop);
+    // 1.2: re-measure 4×/s instead of every frame — enough to follow layout changes
+    const iv = setInterval(find, 250);
+    window.addEventListener("resize", find);
     return () => {
-      cancelAnimationFrame(raf);
+      clearInterval(iv);
+      window.removeEventListener("resize", find);
       clearTimeout(t1);
     };
   }, [open, step, s.view, s.target]);

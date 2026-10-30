@@ -2,6 +2,8 @@
  * Full-app UI styles — three complete looks, switchable from Settings → Appearance
  * (or the big Clean/Layout button in the title bar):
  *
+ *   clean    — 1.2 default: system UI type (Segoe UI Variable on Windows), opaque surfaces,
+ *              hairline borders, soft shadows, crisp lucide icons. Light + dark.
  *   nook     — the classic Nook look: tinted monochrome, pixel accents, soft glass panels
  *   pixel    — "Pixelated Soft": pastel cream/lavender, chunky 2px borders, stepped
  *              hard shadows, everything rounded and squishy — a soft pixel toy box
@@ -12,7 +14,7 @@
  * top of whichever tint theme is selected; the tint still colors small accents.
  */
 
-export type UiStyleId = "nook" | "pixel" | "obsidian";
+export type UiStyleId = "clean" | "nook" | "pixel" | "obsidian";
 
 export type UiStyle = {
   id: UiStyleId;
@@ -25,10 +27,18 @@ export type UiStyle = {
 };
 
 export const UI_STYLES: Record<UiStyleId, UiStyle> = {
+  clean: {
+    id: "clean",
+    name: "Clean",
+    blurb: "Modern and calm — system type, crisp icons, soft surfaces. The 1.2 default.",
+    dark: false,
+    ramp: ["#f7f8fa", "#e6e9ef", "#b8bfcc", "#5468e8", "#171a21"],
+    accent: "#5468e8",
+  },
   nook: {
     id: "nook",
-    name: "Nook",
-    blurb: "The classic look — glassy panels, pixel type, tinted monochrome.",
+    name: "Classic pixel",
+    blurb: "The classic Nook look — glassy panels, pixel type, tinted monochrome.",
     dark: true,
     ramp: ["#0d0e10", "#3d4147", "#767c85", "#b4bac2", "#eef0f3"],
     accent: "#9db7d0",

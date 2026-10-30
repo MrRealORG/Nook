@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@/globals.css";
 import "@/desktop.css";
+import "@/clean.css";
 import { installApiShim } from "@/lib/apiShim";
 import { Widget } from "@/widget/Widget";
 

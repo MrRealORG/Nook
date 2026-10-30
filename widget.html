@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en" data-theme="graphite" data-widget="true">
+<html lang="en" data-theme="light" data-ui="clean" data-power="low" data-widget="true">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Nook widget</title>
     <script>
-      try { var p = JSON.parse(localStorage.getItem("nook:prefs") || "{}"); document.documentElement.dataset.theme = p.theme || "graphite"; } catch (e) {}
+      try { var p = JSON.parse(localStorage.getItem("nook:prefs") || "{}"); var d = document.documentElement; var fresh = !p.theme && !p.uiStyle; var dk = matchMedia("(prefers-color-scheme: dark)").matches; var old = !p.v12 && (!p.uiStyle || p.uiStyle === "nook") && (!p.theme || p.theme === "graphite"); d.dataset.theme = fresh ? (dk ? "dark" : "light") : old ? "dark" : p.theme; d.dataset.ui = fresh || old ? "clean" : (p.uiStyle || "clean"); var pw = JSON.parse(localStorage.getItem("nook:power") || "{}"); d.dataset.power = pw.lowPower === false ? "full" : "low"; } catch (e) {}
     </script>
   </head>
   <body class="widget-body">

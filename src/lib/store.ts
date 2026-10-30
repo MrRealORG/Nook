@@ -5,7 +5,8 @@ import { abilityOf, decayed, levelOf, stageOf } from "@/lib/pet";
 import { QUESTS, bonusQuestOf, freshQuests, todayKey, yesterdayKey, type QuestsState } from "@/lib/quests";
 import { sfx } from "@/lib/sfx";
 import type { Mood } from "@/lib/sprite";
-import { THEMES, isPremiumTheme, type ThemeId } from "@/lib/themes";
+import { setIconFamilyForUi } from "@/lib/iconStyle";
+import { LEGACY_DEFAULT_THEME, THEMES, isPremiumTheme, type ThemeId } from "@/lib/themes";
 import { installLogger, logEvent } from "@/lib/logger";
 import { isUiStyle, type UiStyleId } from "@/lib/uiStyles";
 import type { AiEffect, AiResult, Canvas, CanvasData, Folder, InitialData, Listing, Note, Pet, PetBlueprint, PetFolderRow, PetLook, PetPack, Species } from "@/lib/types";
@@ -272,6 +273,8 @@ interface S {
   railHidden: View[];
   /** rail edit mode (in-rail editing) */
   railEdit: boolean;
+  /** 1.2 sidebar: collapsed to an icon rail (true) or expanded with labels (false) */
+  sidebarCollapsed: boolean;
   /** sidebar position: left rail · right rail · bottom dock · floating pill */
   railPos: RailPos;
   /** floating pill position (viewport px) */
@@ -458,10 +461,39 @@ const BLANK_PET: Pet = {
 };
 
 /** apply the full UI chrome: style dataset + obsidian light/dark + real zoom scale */
+/**
+ * 1.2 look migration (runs once): new installs and users still on the 1.1 default
+ * (classic "nook" style + "graphite") move to the Clean style. A brand-new install follows the OS
+ * light/dark setting; a migrated user keeps a dark theme. Anyone who customised keeps their pick.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function migrateTo12(p: Record<string, any>): Record<string, any> {
+  if (p.v12) return p;
+  const fresh = p.theme === undefined && p.uiStyle === undefined;
+  const onOldDefault = (p.uiStyle === undefined || p.uiStyle === "nook") && (p.theme === undefined || p.theme === LEGACY_DEFAULT_THEME);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out: Record<string, any> = { ...p, v12: true };
+  if (fresh || onOldDefault) {
+    out.uiStyle = "clean";
+    const dark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
+    out.theme = fresh ? (dark ? "dark" : "light") : "dark";
+    if (fresh) {
+      try {
+        if (!localStorage.getItem("nook:themeFollow")) localStorage.setItem("nook:themeFollow", JSON.stringify({ on: true, light: "light", dark: "dark" }));
+      } catch {}
+    }
+  }
+  try {
+    localStorage.setItem("nook:prefs", JSON.stringify(out));
+  } catch {}
+  return out;
+}
+
 function applyUiChrome(style: UiStyleId, obsLight: boolean, scale: number) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.dataset.ui = style;
+  setIconFamilyForUi(style);
   if (style === "obsidian") root.dataset.obsMode = obsLight ? "light" : "dark";
   else delete root.dataset.obsMode;
   root.style.setProperty("--app-scale", String(scale));
@@ -493,8 +525,8 @@ export const useStore = create<S>()((set, get) => {
     activeId: null,
     activeCanvas: null,
     activeFolder: null,
-    theme: "graphite",
-    uiStyle: "nook",
+    theme: "light",
+    uiStyle: "clean",
     cleanMode: false,
     openTabs: [],
     tabPins: [],
@@ -575,6 +607,7 @@ export const useStore = create<S>()((set, get) => {
     railOrder: [],
     railHidden: [],
     railEdit: false,
+    sidebarCollapsed: false,
     railPos: "left",
     railFloat: { x: 84, y: 120 },
     petEnabled: true,
@@ -595,7 +628,7 @@ export const useStore = create<S>()((set, get) => {
     loadPrefs: () => {
       const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
       try {
-        const p = JSON.parse(localStorage.getItem("nook:prefs") ?? "{}");
+        const p = migrateTo12(JSON.parse(localStorage.getItem("nook:prefs") ?? "{}"));
         // persisted notices / market feed carry numeric ids from the previous session;
         // the id counter restarts at 1 on reload, which would collide keys — move it past them
         const persistedIds = [
@@ -613,7 +646,7 @@ export const useStore = create<S>()((set, get) => {
         }
         set({
           theme: p.theme ?? get().theme,
-          uiStyle: isUiStyle(p.uiStyle) ? p.uiStyle : "nook",
+          uiStyle: isUiStyle(p.uiStyle) ? p.uiStyle : "clean",
           cleanMode: p.cleanMode ?? false,
           roam: p.roam ?? true,
           follow: p.follow ?? false,
@@ -659,6 +692,8 @@ export const useStore = create<S>()((set, get) => {
           railOrder: Array.isArray(p.railOrder) ? (p.railOrder as View[]).filter((v) => RAIL_DEFAULT_ORDER.includes(v)) : [],
           railHidden: Array.isArray(p.railHidden) ? (p.railHidden as View[]) : [],
           railPos: ["left", "right", "dock", "float"].includes(p.railPos) ? (p.railPos as RailPos) : "left",
+          // expanded by default on roomy windows; small screens start as an icon rail
+          sidebarCollapsed: typeof p.sidebarCollapsed === "boolean" ? p.sidebarCollapsed : typeof window !== "undefined" && window.innerWidth < 1280,
           openTabs: Array.isArray(p.openTabs) ? (p.openTabs as string[]).filter((x) => typeof x === "string").slice(0, 14) : [],
           tabPins: Array.isArray(p.tabPins) ? (p.tabPins as string[]) : [],
           obsLight: p.obsLight ?? false,
@@ -704,9 +739,9 @@ export const useStore = create<S>()((set, get) => {
             muted: s.muted, volume: s.volume, music: s.music, gameScores: s.gameScores, gameStats: s.gameStats, gameRuns: s.gameRuns, focusLog: s.focusLog, achievements: s.achievements, quests: s.quests, streak: s.streak, activity: s.activity, arcadeStats: s.arcadeStats, bonusClaims: s.bonusClaims, notices: s.notices, questStreak: s.questStreak, marketFeed: s.marketFeed, wishlist: s.wishlist, dailyGift: s.dailyGift,
             appUse: s.appUse, appTimeline: s.appTimeline, appCat: s.appCat, currentApp: s.currentApp, activityGoal: s.activityGoal, grain: s.grain, effects: s.effects, tourDone: s.tourDone,
             rules: s.rules, font: s.font, appScale: s.appScale, profile: s.profile, customDock: s.customDock, blockedAttempts: s.blockedAttempts, blockedDay: todayKey(),
-            dnd: s.dnd, notifKinds: s.notifKinds, voiceModel: s.voiceModel,
+            dnd: s.dnd, notifKinds: s.notifKinds, voiceModel: s.voiceModel, v12: true,
             railIcons: s.railIcons, railOrder: s.railOrder, railHidden: s.railHidden,
-            railPos: s.railPos, railFloat: s.railFloat, petEnabled: s.petEnabled, wallpaper: s.wallpaper, iconPackPref: true, fontPackPref: true,
+            railPos: s.railPos, railFloat: s.railFloat, sidebarCollapsed: s.sidebarCollapsed, petEnabled: s.petEnabled, wallpaper: s.wallpaper, iconPackPref: true, fontPackPref: true,
             openTabs: s.openTabs, tabPins: s.tabPins, obsLight: s.obsLight, petNag: s.petNag,
           }),
         );
@@ -849,7 +884,7 @@ export const useStore = create<S>()((set, get) => {
       applyUiChrome(uiStyle, get().obsLight, get().appScale);
       get().set({ uiStyle });
       sfx("pop");
-      const name = { nook: "Nook classic", pixel: "Pixelated Soft", obsidian: "Obsidian" }[uiStyle];
+      const name = { clean: "Clean", nook: "Classic pixel", pixel: "Pixelated Soft", obsidian: "Obsidian" }[uiStyle];
       get().toast(`UI style: ${name}`, "sparkle");
       logEvent(`ui style → ${uiStyle}`, "info", "ui");
     },

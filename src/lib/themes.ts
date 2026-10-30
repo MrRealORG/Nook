@@ -1,4 +1,4 @@
-export type ThemeId = "graphite" | "moss" | "dusk" | "bone" | "mist" | "sunset" | "sakura" | "aurora" | "noir" | "seafoam";
+export type ThemeId = "light" | "dark" | "graphite" | "moss" | "dusk" | "bone" | "mist" | "sunset" | "sakura" | "aurora" | "noir" | "seafoam";
 
 export type Theme = {
   id: ThemeId;
@@ -14,6 +14,9 @@ export type Theme = {
 };
 
 export const THEMES: Record<ThemeId, Theme> = {
+  // 1.2 defaults — clean, neutral, soft indigo accent (light + dark)
+  light: { id: "light", name: "Light", dark: false, ramp: ["#1b1f27", "#4b5261", "#8b93a3", "#d9dde5", "#f7f8fa"], accent: "#5468e8", panel: "#ffffff", ink: "#171a21", dim: "#5b6372" },
+  dark: { id: "dark", name: "Dark", dark: true, ramp: ["#0f1115", "#2a2f39", "#5d6472", "#a3aab7", "#eceef2"], accent: "#8b9bff", panel: "#171a20", ink: "#e8eaef", dim: "#9ba2ae" },
   graphite: { id: "graphite", name: "Graphite", dark: true, ramp: ["#0d0e10", "#3d4147", "#767c85", "#b4bac2", "#eef0f3"], accent: "#9db7d0", panel: "#16181b", ink: "#e9ebee", dim: "#9aa0a8" },
   moss: { id: "moss", name: "Moss", dark: true, ramp: ["#0b100c", "#37443a", "#728268", "#aebca3", "#eef3e8"], accent: "#bccb92", panel: "#131a15", ink: "#e3ebe0", dim: "#98a893" },
   dusk: { id: "dusk", name: "Dusk", dark: true, ramp: ["#0f0e14", "#3f3b52", "#7a7494", "#b9b3d1", "#f1eff7"], accent: "#cba5ba", panel: "#17151f", ink: "#e8e6f0", dim: "#a29fb5" },
@@ -34,3 +37,6 @@ export function isPremiumTheme(id: ThemeId) {
 }
 
 export const THEME_IDS = Object.keys(THEMES) as ThemeId[];
+
+/** the 1.1 default (uiStyle "nook" + "graphite") — users still on it are moved to the 1.2 default */
+export const LEGACY_DEFAULT_THEME: ThemeId = "graphite";

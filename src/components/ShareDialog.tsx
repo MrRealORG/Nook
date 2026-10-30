@@ -1,4 +1,5 @@
 
+import { everyActive } from "@/lib/power";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
@@ -58,7 +59,7 @@ export default function ShareDialog({ noteId, noteTitle, onClose }: { noteId: st
   useEffect(() => {
     if (!record || record.mode !== "collab" || record.revoked) return;
     const id = record.id;
-    const t = setInterval(async () => {
+    return everyActive(async () => {
       try {
         const fresh = await getShare(id);
         setRecord((cur) => (cur && cur.id === id ? fresh : cur));
@@ -66,7 +67,6 @@ export default function ShareDialog({ noteId, noteTitle, onClose }: { noteId: st
         /* transient poll errors are silently ignored */
       }
     }, 5000);
-    return () => clearInterval(t);
   }, [record]);
 
   // Escape closes

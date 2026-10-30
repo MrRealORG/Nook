@@ -3,6 +3,8 @@ import { memo } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ICONS, type IconName } from "@/components/icons";
 import { ICON_PACKS, usePackStore, type IconPackStyle } from "@/lib/packs";
+import { LUCIDE } from "@/lib/lucideMap";
+import { useIconFamily } from "@/lib/iconStyle";
 
 const ICON_PACK_STYLES: Record<string, IconPackStyle> = Object.fromEntries(ICON_PACKS.map((p) => [p.id, p.style]));
 
@@ -112,7 +114,14 @@ export const Icon = memo(function Icon({ name, size = 16, className, style }: { 
   // subscribe so a pack switch repaints every glyph once (both selectors are stable otherwise)
   const customIcons = usePackStore((s) => s.customPacks.find((p) => p.id === s.iconPack)?.icons ?? null);
   const packStyle = usePackStore((s) => (s.iconPack === "pixel" ? null : ICON_PACK_STYLES[s.iconPack] ?? null));
+  const defaultPack = usePackStore((s) => s.iconPack === "pixel");
+  const family = useIconFamily();
   const url = customIcons?.[name];
+  // 1.2: Clean / Obsidian styles draw crisp lucide glyphs unless the user picked an icon pack
+  const Crisp = family === "crisp" && defaultPack && !url ? LUCIDE[name] : undefined;
+  if (Crisp) {
+    return <Crisp size={size} strokeWidth={size <= 14 ? 2 : 1.75} absoluteStrokeWidth={false} className={className} style={{ flex: "none", ...style }} aria-hidden />;
+  }
   if (url) {
     return (
       <img

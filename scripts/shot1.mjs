@@ -1,0 +1,16 @@
+import { chromium } from "@playwright/test";
+const [,, view = "notes", out = "/tmp/s.png", w = "1366", h = "768", theme = "", extra = ""] = process.argv;
+const b = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
+const ctx = await b.newContext({ viewport: { width: +w, height: +h } });
+await ctx.addInitScript((theme) => { window.__NOOK_E2E__ = true; localStorage.setItem("nook:prefs", JSON.stringify(theme ? { tourDone: true, theme, uiStyle: "clean", v12: true } : { tourDone: true })); }, theme);
+const p = await ctx.newPage();
+const errs = [];
+p.on("pageerror", (e) => errs.push(e.message));
+p.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+await p.goto("http://localhost:4173/");
+await p.waitForFunction(() => !!window.__nook, null, { timeout: 30000 });
+await p.evaluate(([v, extra]) => { const s = window.__nook.getState(); s.setView(v); if (extra) eval(extra); }, [view, extra]);
+await p.waitForTimeout(1500);
+await p.screenshot({ path: out });
+console.log(errs.join("\n") || "no errors");
+await b.close();
