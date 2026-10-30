@@ -1374,7 +1374,7 @@ async fn export_backup(state: State<'_, Db>) -> CmdResult<Option<String>> {
 #[tauri::command]
 async fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option<Stats>> {
     // dialog + file read + parse run on a worker thread — never block the UI
-    let picked = tauri::async_runtime::spawn_blocking(|| {
+    let picked = tauri::async_runtime::spawn_blocking(|| -> Result<Option<Backup>, String> {
         let path = rfd::FileDialog::new()
             .set_title("Choose a Nook backup file")
             .add_filter("Nook backup (JSON)", &["json"])
@@ -1627,7 +1627,7 @@ async fn reveal_data_dir(app: AppHandle) -> CmdResult<()> {
 #[tauri::command]
 async fn import_notes(state: State<'_, Db>) -> CmdResult<Option<usize>> {
     // dialog + file reads on a worker thread — the window stays buttery
-    let files = tauri::async_runtime::spawn_blocking(|| {
+    let files = tauri::async_runtime::spawn_blocking(|| -> Result<Option<Vec<(String, String)>>, String> {
         let paths = rfd::FileDialog::new()
             .set_title("Choose Markdown or text files to import")
             .add_filter("Notes (Markdown & text)", &["md", "markdown", "txt"])
