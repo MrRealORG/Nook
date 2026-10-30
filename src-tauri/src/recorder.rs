@@ -23,6 +23,9 @@ pub struct RecorderState {
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     current_path: Mutex<Option<PathBuf>>,
     last_error: Arc<Mutex<Option<String>>>,
+    // cpal::Stream is !Send — it must stay on the main thread. Keeping it
+    // here keeps the capture alive; dropping it stops the microphone.
+    stream: Mutex<Option<cpal::Stream>>,
 }
 
 impl RecorderState {
@@ -34,6 +37,7 @@ impl RecorderState {
             thread: Mutex::new(None),
             current_path: Mutex::new(None),
             last_error: Arc::new(Mutex::new(None)),
+            stream: Mutex::new(None),
         }
     }
 }
@@ -250,7 +254,7 @@ pub fn recorder_start(
         cpal::SampleFormat::U16 => dev.build_input_stream(
             &cfg.config(),
             move |data: &[u16], _| {
-                let v: Vec<i16> = data.iter().map(|s| (s as i32 - 32_768) as i16).collect();
+                let v: Vec<i16> = data.iter().map(|s| (*s as i32 - 32_768) as i16).collect();
                 let _ = tx.send(v);
             },
             move |err| {
@@ -296,9 +300,9 @@ pub fn recorder_start(
             }
         }
         let _ = patch_wav_header(&mut file, total);
-        drop(stream);
         rec.store(false, Ordering::Relaxed);
     });
+    *state.stream.lock().unwrap_or_else(|p| p.into_inner()) = Some(stream);
     *state.thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
     Ok(())
 }
@@ -387,8 +391,10 @@ pub fn list_recordings(app: AppHandle) -> CmdResult<Vec<RecordingInfo>> {
 #[tauri::command]
 pub fn rename_recording(app: AppHandle, from: String, to: String) -> CmdResult<()> {
     let dir = recordings_dir(&app)?;
-    let from = rec_file(&dir, safe_name(&from).ok_or("Invalid file name")?);
-    let to = rec_file(&dir, safe_name(&to).ok_or("Invalid new name")?);
+    let from_name = safe_name(&from).ok_or("Invalid file name")?;
+    let from = rec_file(&dir, &from_name);
+    let to_name = safe_name(&to).ok_or("Invalid new name")?;
+    let to = rec_file(&dir, &to_name);
     std::fs::rename(from, to).map_err(es)?;
     Ok(())
 }
@@ -396,7 +402,8 @@ pub fn rename_recording(app: AppHandle, from: String, to: String) -> CmdResult<(
 #[tauri::command]
 pub fn delete_recording(app: AppHandle, name: String) -> CmdResult<()> {
     let dir = recordings_dir(&app)?;
-    let p = rec_file(&dir, safe_name(&name).ok_or("Invalid file name")?);
+    let name_ok = safe_name(&name).ok_or("Invalid file name")?;
+    let p = rec_file(&dir, &name_ok);
     std::fs::remove_file(p).map_err(es)?;
     Ok(())
 }
@@ -404,7 +411,8 @@ pub fn delete_recording(app: AppHandle, name: String) -> CmdResult<()> {
 #[tauri::command]
 pub fn export_recording(app: AppHandle, name: String) -> CmdResult<Option<String>> {
     let dir = recordings_dir(&app)?;
-    let src = rec_file(&dir, safe_name(&name).ok_or("Invalid file name")?);
+    let name_ok = safe_name(&name).ok_or("Invalid file name")?;
+    let src = rec_file(&dir, &name_ok);
     let path = rfd::FileDialog::new()
         .set_title("Save recording as…")
         .set_file_name(name.as_str())
