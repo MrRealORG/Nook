@@ -48,7 +48,7 @@ fn new_id(prefix: &str) -> String {
 
 // ---------------------------------------------------------------- models ----
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Folder {
     id: String,
@@ -71,7 +71,7 @@ struct NoteSummary {
     updated_at: i64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Note {
     id: String,
@@ -93,7 +93,7 @@ struct Subtask {
     done: bool,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Task {
     id: String,
