@@ -15,7 +15,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.5</span>
+        <span class="tb-ver">v0.6</span>
       </div>
 
       <div class="tb-search">
@@ -40,6 +40,12 @@
       </div>
     </header>
 
+    <!-- ======= tabs ======= -->
+    <nav id="tabbar" class="hidden">
+      <div id="tabs"></div>
+      <button id="tab-new" title="New note (Ctrl+N)">+</button>
+    </nav>
+
     <!-- ======= main shell ======= -->
     <div id="shell">
       <div class="stars" aria-hidden="true"></div>
@@ -55,6 +61,10 @@
           <nav id="sb-folders"></nav>
         </div>
         <div class="sb-bottom">
+          <button class="sb-row" id="btn-guide">
+            <span class="sb-ico" data-ico="book"></span>
+            <span class="sb-name">Guide</span>
+          </button>
           <button class="sb-row" id="btn-settings">
             <span class="sb-ico" data-ico="settings"></span>
             <span class="sb-name">Settings</span>
@@ -98,6 +108,8 @@
             <button class="ed-btn" id="btn-pin" title="Pin to top"></button>
             <button class="ed-btn" id="btn-fav" title="Favorite"></button>
             <button class="ed-btn" id="btn-duplicate" title="Duplicate note (Ctrl+D)"></button>
+            <span class="ed-sep"></span>
+            <button class="ed-btn" id="btn-ai" title="Nook AI — summarize, action items, title"></button>
             <span class="ed-sep"></span>
             <button class="ed-btn" id="btn-preview" title="Markdown preview (Ctrl+E)"></button>
             <button class="ed-btn" id="btn-export" title="Export as Markdown"></button>
@@ -153,16 +165,35 @@
           </div>
         </div>
       </section>
+      <section id="rec-view" class="hidden">
+        <div class="rv-col">
+          <div class="rv-head">
+            <h1>Recordings</h1>
+            <span class="rv-sub">Meetings & ideas — saved on this PC as .wav, 100% offline</span>
+          </div>
+          <div class="rv-recbox">
+            <button id="btn-rec" class="idle">
+              <span class="rec-dot"></span>
+              <span id="rec-label">Start recording</span>
+              <span id="rec-timer" class="hidden">00:00</span>
+            </button>
+            <select id="rec-device" title="Microphone"></select>
+          </div>
+          <div class="rv-list" id="rv-list"></div>
+        </div>
+      </section>
     </div>
 
     <!-- ======= status bar ======= -->
     <footer id="statusbar">
       <span id="save-state"><span class="dot"></span><span id="save-text">Ready</span></span>
+      <span id="rec-pill" class="hidden"><span class="rp-dot"></span><span id="rec-pill-time">00:00</span><button id="rec-pill-stop" title="Stop recording">■</button></span>
       <span class="tb-spacer"></span>
       <span id="stats-right"></span>
     </footer>
   </div>
 
+  <div id="menu-root"></div>
   <div id="overlay-root"></div>
   <div id="toast-root"></div>
 

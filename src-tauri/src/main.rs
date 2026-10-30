@@ -19,9 +19,12 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 
+pub mod ai;
+mod recorder;
+
 type CmdResult<T> = Result<T, String>;
 
-fn es<E: std::fmt::Display>(e: E) -> String {
+pub fn es<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
@@ -33,7 +36,7 @@ fn db<'a>(state: &'a State<'_, Db>) -> MutexGuard<'a, Connection> {
     state.0.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -280,7 +283,7 @@ fn days_in_month(y: i64, m: i64) -> i64 {
 }
 
 /// Howard Hinnant's civil-from-days / days-from-civil algorithms.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
+pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -1071,6 +1074,10 @@ fn get_stats_inner(conn: &Connection) -> Result<Stats, String> {
 
 // ------------------------------------------------------------- desktop os ----
 
+pub fn app_data_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map_err(es)
+}
+
 #[tauri::command]
 fn data_dir(app: AppHandle) -> String {
     app.path()
@@ -1301,6 +1308,7 @@ fn main() {
             let saved_bounds = get_kv(&conn, "window_bounds");
 
             app.manage(Db(Mutex::new(conn)));
+            app.manage(recorder::RecorderState::new());
 
             let win = app
                 .get_webview_window("main")
@@ -1374,6 +1382,16 @@ fn main() {
             get_stats,
             export_backup,
             import_backup,
+            recorder::recorder_devices,
+            recorder::recorder_status,
+            recorder::recorder_start,
+            recorder::recorder_stop,
+            recorder::list_recordings,
+            recorder::rename_recording,
+            recorder::delete_recording,
+            recorder::export_recording,
+            ai::ai_models,
+            ai::ai_generate,
             data_dir,
             export_note,
             open_url,

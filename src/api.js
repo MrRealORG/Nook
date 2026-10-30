@@ -74,8 +74,13 @@ The whole app is now **native Rust** — no servers, no waiting.
         reminded: false, position: 3, createdAt: now - 300000, completedAt: null
       }
     ],
-    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', closeToTray: '0', initialized: '1' },
-    stats: { notes: 3, favorites: 2, openTasks: 2, folders: 3, trash: 1 }
+    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal', closeToTray: '0', aiUrl: 'http://127.0.0.1:11434', aiModel: '', initialized: '1' },
+    stats: { notes: 3, favorites: 2, openTasks: 2, folders: 3, trash: 1 },
+    recordings: [
+      { name: 'rec-20261029-101500.wav', path: 'C:\\recordings\\rec-20261029-101500.wav', bytes: 1875000, durationMs: 93500, createdAt: now - 86400000 },
+      { name: 'rec-20261028-154500.wav', path: 'C:\\recordings\\rec-20261028-154500.wav', bytes: 945000, durationMs: 47000, createdAt: now - 2 * 86400000 }
+    ],
+    recTimerStart: null
   };
 }
 
@@ -270,6 +275,44 @@ function mockCall(cmd, args) {
       return Promise.resolve('C:\\Users\\demo\\Documents\\nook-backup.json');
     case 'import_backup':
       return Promise.resolve(mockStats());
+    case 'recorder_devices':
+      return Promise.resolve(['Default — Built-in microphone', 'USB Microphone (Realtek)']);
+    case 'recorder_status':
+      return Promise.resolve({
+        recording: !!mock.recTimerStart,
+        elapsedMs: mock.recTimerStart ? Date.now() - mock.recTimerStart : 0,
+        error: null
+      });
+    case 'recorder_start':
+      mock.recTimerStart = Date.now();
+      return Promise.resolve();
+    case 'recorder_stop': {
+      if (!mock.recTimerStart) return Promise.resolve(null);
+      const ms = Date.now() - mock.recTimerStart;
+      mock.recTimerStart = null;
+      const name = 'rec-' + new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '') + '.wav';
+      const info = { name, path: 'C:\\recordings\\' + name, bytes: Math.round(ms * 17), durationMs: ms, createdAt: Date.now() };
+      mock.recordings.unshift(info);
+      return Promise.resolve(info);
+    }
+    case 'list_recordings':
+      return Promise.resolve(mock.recordings.slice());
+    case 'rename_recording': {
+      const r = mock.recordings.find((x) => x.name === a.from);
+      if (r) { r.name = a.to; r.path = 'C:\\recordings\\' + a.to; }
+      return Promise.resolve();
+    }
+    case 'delete_recording':
+      mock.recordings = mock.recordings.filter((x) => x.name !== a.name);
+      return Promise.resolve();
+    case 'export_recording':
+      return Promise.resolve('C:\\Users\\demo\\Desktop\\' + a.name);
+    case 'ai_models':
+      return Promise.resolve(['llama3.2:latest', 'qwen2.5:7b', 'mistral:latest']);
+    case 'ai_generate':
+      return Promise.resolve(
+        '• This is a mock AI response from the browser preview.\n• In the real app this comes from your local Ollama model.\n• Nothing ever leaves the PC.'
+      );
     case 'get_stats':
       return Promise.resolve(mockStats());
     case 'data_dir':
