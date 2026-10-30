@@ -1,6 +1,10 @@
 //! Nook meeting recorder — captures the microphone with cpal (WASAPI on
 //! Windows) and streams raw samples straight to a 16-bit PCM WAV file.
 //! No codecs, no ffmpeg, no network. Files live in <appdata>/recordings.
+//!
+//! The whole capture (device + stream + file) runs inside one dedicated
+//! thread: cpal::Stream is !Send, so it must never cross threads. The UI
+//! talks to that thread through atomic stop flags and mpsc channels.
 
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -21,11 +25,8 @@ pub struct RecorderState {
     stop_flag: Arc<AtomicBool>,
     started_at: AtomicI64,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    current_path: Mutex<Option<PathBuf>>,
-    last_error: Arc<Mutex<Option<String>>>,
-    // cpal::Stream is !Send — it must stay on the main thread. Keeping it
-    // here keeps the capture alive; dropping it stops the microphone.
-    stream: Mutex<Option<cpal::Stream>>,
+    result_rx: Mutex<Option<mpsc::Receiver<Result<RecordingInfo, String>>>>,
+    last_error: Mutex<Option<String>>,
 }
 
 impl RecorderState {
@@ -35,9 +36,8 @@ impl RecorderState {
             stop_flag: Arc::new(AtomicBool::new(false)),
             started_at: AtomicI64::new(0),
             thread: Mutex::new(None),
-            current_path: Mutex::new(None),
-            last_error: Arc::new(Mutex::new(None)),
-            stream: Mutex::new(None),
+            result_rx: Mutex::new(None),
+            last_error: Mutex::new(None),
         }
     }
 }
@@ -114,7 +114,7 @@ fn patch_wav_header(w: &mut File, data_bytes: u64) -> std::io::Result<()> {
     w.flush()
 }
 
-/// Duration of a 16-bit PCM wav in ms (falls back to file-size math).
+/// Duration of a 16-bit PCM wav in ms (falls back to 0 for broken files).
 pub fn wav_duration_ms(path: &PathBuf) -> i64 {
     let len = match std::fs::metadata(path) {
         Ok(m) => m.len() as i64,
@@ -123,33 +123,167 @@ pub fn wav_duration_ms(path: &PathBuf) -> i64 {
     if len < 44 {
         return 0;
     }
+    use std::io::Read;
     let mut head = [0u8; 44];
-    let rate = std::fs::File::open(path)
-        .and_then(|mut f| {
-            use std::io::Read;
-            f.read_exact(&mut head)?;
-            Ok(())
-        })
-        .ok()
-        .and_then(|_| {
-            let riff_ok = &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE";
-            if !riff_ok {
-                return None;
-            }
-            let channels = u16::from_le_bytes([head[22], head[23]]) as i64;
-            let rate = u32::from_le_bytes([head[24], head[25], head[26], head[27]]) as i64;
-            if rate <= 0 || channels <= 0 {
-                return None;
-            }
-            Some((rate, channels))
-        });
-    let (rate, channels) = match rate {
-        Some(v) => v,
-        None => return 0,
-    };
+    if std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_err()
+    {
+        return 0;
+    }
+    if &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+        return 0;
+    }
+    let channels = u16::from_le_bytes([head[22], head[23]]) as i64;
+    let rate = u32::from_le_bytes([head[24], head[25], head[26], head[27]]) as i64;
+    if rate <= 0 || channels <= 0 {
+        return 0;
+    }
     let data_bytes = (len - 44).max(0);
     let frames = data_bytes / (channels * 2);
     (frames * 1000) / rate
+}
+
+// --------------------------------------------------------- capture thread ----
+
+/// Runs the entire recording session. Returns the file info through
+/// `out_tx` when the stop flag is set (or an error if anything fails).
+fn capture_session(
+    device: Option<String>,
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+    rec: Arc<AtomicBool>,
+    ready_tx: mpsc::Sender<Result<(), String>>,
+    out_tx: mpsc::Sender<Result<RecordingInfo, String>>,
+) {
+    let fail = |ready_tx: &mpsc::Sender<Result<(), String>>, msg: String| {
+        let _ = ready_tx.send(Err(msg));
+        rec.store(false, Ordering::Relaxed);
+    };
+
+    let host = cpal::default_host();
+    let dev = match device.as_deref().filter(|s| !s.is_empty()) {
+        Some(name) => match host.input_devices().map_err(es).and_then(|ds| {
+            ds.find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                .ok_or_else(|| format!("Microphone \"{name}\" not found"))
+        }) {
+            Ok(d) => d,
+            Err(e) => return fail(&ready_tx, e),
+        },
+        None => match host.default_input_device() {
+            Some(d) => d,
+            None => return fail(&ready_tx, "No microphone found on this PC".into()),
+        },
+    };
+
+    let cfg = match dev.default_input_config() {
+        Ok(c) => c,
+        Err(e) => return fail(&ready_tx, es(e)),
+    };
+    let (sample_rate, channels) = (cfg.sample_rate().0, cfg.channels());
+
+    let (tx, rx) = mpsc::channel::<Vec<i16>>();
+    let last_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let cb_error = last_error.clone();
+
+    let stream = match cfg.sample_format() {
+        cpal::SampleFormat::F32 => dev.build_input_stream(
+            &cfg.config(),
+            move |data: &[f32], _| {
+                let v: Vec<i16> = data
+                    .iter()
+                    .map(|s| (s.clamp(-1.0, 1.0) * 32_767.0) as i16)
+                    .collect();
+                let _ = tx.send(v);
+            },
+            move |err| {
+                *cb_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(err.to_string());
+            },
+            None,
+        ),
+        cpal::SampleFormat::I16 => dev.build_input_stream(
+            &cfg.config(),
+            move |data: &[i16], _| {
+                let _ = tx.send(data.to_vec());
+            },
+            move |err| {
+                *cb_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(err.to_string());
+            },
+            None,
+        ),
+        cpal::SampleFormat::U16 => dev.build_input_stream(
+            &cfg.config(),
+            move |data: &[u16], _| {
+                let v: Vec<i16> = data.iter().map(|s| (*s as i32 - 32_768) as i16).collect();
+                let _ = tx.send(v);
+            },
+            move |err| {
+                *cb_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(err.to_string());
+            },
+            None,
+        ),
+        other => {
+            return fail(&ready_tx, format!("Unsupported mic sample format: {other}"));
+        }
+    };
+
+    let mut stream = match stream {
+        Ok(s) => s,
+        Err(e) => return fail(&ready_tx, es(e)),
+    };
+    if let Err(e) = stream.play() {
+        return fail(&ready_tx, es(e));
+    }
+
+    let mut file = match File::create(&path) {
+        Ok(f) => f,
+        Err(e) => return fail(&ready_tx, es(e)),
+    };
+    if let Err(e) = write_wav_header(&mut file, sample_rate, channels) {
+        return fail(&ready_tx, es(e));
+    }
+
+    // microphone is live — tell the caller
+    let _ = ready_tx.send(Ok(()));
+
+    let mut total: u64 = 0;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(150)) {
+            Ok(chunk) => {
+                let mut bytes = Vec::with_capacity(chunk.len() * 2);
+                for s in chunk {
+                    bytes.extend_from_slice(&s.to_le_bytes());
+                }
+                if file.write_all(&bytes).is_ok() {
+                    total += bytes.len() as u64;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    let _ = patch_wav_header(&mut file, total);
+    drop(stream); // stops the capture on the thread that created it
+
+    let _ = out_tx.send(match std::fs::metadata(&path) {
+        Ok(meta) => Ok(RecordingInfo {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_string_lossy().into_owned(),
+            bytes: meta.len() as i64,
+            duration_ms: wav_duration_ms(&path),
+            created_at: now_ms(),
+        }),
+        Err(e) => Err(es(e)),
+    });
+    rec.store(false, Ordering::Relaxed);
 }
 
 // --------------------------------------------------------------- commands ----
@@ -197,20 +331,6 @@ pub fn recorder_start(
         return Err("Already recording".into());
     }
 
-    let host = cpal::default_host();
-    let dev = match device.as_deref().filter(|s| !s.is_empty()) {
-        Some(name) => host
-            .input_devices()
-            .map_err(es)?
-            .find(|d| d.name().map(|n| n == name).unwrap_or(false))
-            .ok_or_else(|| format!("Microphone \"{name}\" not found"))?,
-        None => host
-            .default_input_device()
-            .ok_or("No microphone found on this PC")?,
-    };
-    let cfg = dev.default_input_config().map_err(es)?;
-    let (sample_rate, channels) = (cfg.sample_rate().0, cfg.channels());
-
     let dir = recordings_dir(&app)?;
     let (y, m, d) = civil_from_days(now_ms().div_euclid(86_400_000));
     let secs = now_ms().rem_euclid(86_400_000);
@@ -220,90 +340,41 @@ pub fn recorder_start(
         &format!("rec-{y:04}{m:02}{d:02}-{hh:02}{mm:02}{ss:02}.wav"),
     );
 
-    let file = File::create(&path).map_err(es)?;
-
-    let (tx, rx) = mpsc::channel::<Vec<i16>>();
-    let last_error = state.last_error.clone();
-    *last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
-
-    let stream = match cfg.sample_format() {
-        cpal::SampleFormat::F32 => dev.build_input_stream(
-            &cfg.config(),
-            move |data: &[f32], _| {
-                let v: Vec<i16> = data
-                    .iter()
-                    .map(|s| (s.clamp(-1.0, 1.0) * 32_767.0) as i16)
-                    .collect();
-                let _ = tx.send(v);
-            },
-            move |err| {
-                *last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(err.to_string());
-            },
-            None,
-        ),
-        cpal::SampleFormat::I16 => dev.build_input_stream(
-            &cfg.config(),
-            move |data: &[i16], _| {
-                let _ = tx.send(data.to_vec());
-            },
-            move |err| {
-                *last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(err.to_string());
-            },
-            None,
-        ),
-        cpal::SampleFormat::U16 => dev.build_input_stream(
-            &cfg.config(),
-            move |data: &[u16], _| {
-                let v: Vec<i16> = data.iter().map(|s| (*s as i32 - 32_768) as i16).collect();
-                let _ = tx.send(v);
-            },
-            move |err| {
-                *last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(err.to_string());
-            },
-            None,
-        ),
-        other => return Err(format!("Unsupported mic sample format: {other}")),
-    }
-    .map_err(es)?;
-    stream.play().map_err(es)?;
-
-    state.recording.store(true, Ordering::Relaxed);
     state.stop_flag.store(false, Ordering::Relaxed);
-    state.started_at.store(now_ms(), Ordering::Relaxed);
-    *state.current_path.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.clone());
+    state.recording.store(true, Ordering::Relaxed);
 
-    // the stream must stay alive for as long as we write — move it into the
-    // writer thread; dropping it is what stops the capture.
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+    let (out_tx, out_rx) = mpsc::channel::<Result<RecordingInfo, String>>();
+
     let stop = state.stop_flag.clone();
     let rec = state.recording.clone();
     let handle = std::thread::spawn(move || {
-        let mut file = file;
-        let _ = write_wav_header(&mut file, sample_rate, channels);
-        let mut total: u64 = 0;
-        loop {
-            match rx.recv_timeout(Duration::from_millis(150)) {
-                Ok(chunk) => {
-                    let mut bytes = Vec::with_capacity(chunk.len() * 2);
-                    for s in chunk {
-                        bytes.extend_from_slice(&s.to_le_bytes());
-                    }
-                    if file.write_all(&bytes).is_ok() {
-                        total += bytes.len() as u64;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if stop.load(Ordering::Relaxed) {
-                        break;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-        let _ = patch_wav_header(&mut file, total);
-        rec.store(false, Ordering::Relaxed);
+        capture_session(device, path.clone(), stop, rec, ready_tx, out_tx);
     });
-    *state.stream.lock().unwrap_or_else(|p| p.into_inner()) = Some(stream);
+
+    // wait (briefly) for the microphone handshake
+    match ready_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            let _ = handle.join();
+            state.recording.store(false, Ordering::Relaxed);
+            *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.clone());
+            return Err(e);
+        }
+        Err(_) => {
+            state.stop_flag.store(true, Ordering::Relaxed);
+            let _ = handle.join();
+            state.recording.store(false, Ordering::Relaxed);
+            let msg = "Recorder could not start in time".to_string();
+            *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg.clone());
+            return Err(msg);
+        }
+    }
+
+    state.started_at.store(now_ms(), Ordering::Relaxed);
     *state.thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
+    *state.result_rx.lock().unwrap_or_else(|p| p.into_inner()) = Some(out_rx);
+    *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
     Ok(())
 }
 
@@ -313,37 +384,32 @@ pub fn recorder_stop(state: State<'_, RecorderState>) -> CmdResult<Option<Record
         return Ok(None);
     }
     state.stop_flag.store(true, Ordering::Relaxed);
-    if let Some(h) = state
+    let handle = state
         .thread
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .take()
-    {
-        let _ = h.join();
-    }
-    let path = state
-        .current_path
+        .take();
+    let rx = state
+        .result_rx
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .take();
-    let Some(path) = path else { return Ok(None) };
-    let meta = std::fs::metadata(&path).map_err(es)?;
-    let created_at = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_else(now_ms);
-    Ok(Some(RecordingInfo {
-        name: path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        path: path.to_string_lossy().into_owned(),
-        bytes: meta.len() as i64,
-        duration_ms: wav_duration_ms(&path),
-        created_at,
-    }))
+
+    let mut info = None;
+    if let Some(rx) = rx {
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(i)) => info = Some(i),
+            Ok(Err(e)) => {
+                *state.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+            }
+            Err(_) => {}
+        }
+    }
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+    state.recording.store(false, Ordering::Relaxed);
+    Ok(info)
 }
 
 #[tauri::command]
@@ -392,8 +458,8 @@ pub fn list_recordings(app: AppHandle) -> CmdResult<Vec<RecordingInfo>> {
 pub fn rename_recording(app: AppHandle, from: String, to: String) -> CmdResult<()> {
     let dir = recordings_dir(&app)?;
     let from_name = safe_name(&from).ok_or("Invalid file name")?;
-    let from = rec_file(&dir, &from_name);
     let to_name = safe_name(&to).ok_or("Invalid new name")?;
+    let from = rec_file(&dir, &from_name);
     let to = rec_file(&dir, &to_name);
     std::fs::rename(from, to).map_err(es)?;
     Ok(())
