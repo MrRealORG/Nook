@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ComponentType } from "react";
+import { installSystemTheme } from "@/lib/systemTheme";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Dashboard } from "@/components/Dashboard";
 import { DesktopPet } from "@/components/DesktopPet";
@@ -185,6 +186,7 @@ export function App({ initial }: { initial: InitialData }) {
     useStore.getState().hydrate(initial);
     hydrated.current = true;
   }
+  useEffect(() => installSystemTheme(), []);
   const view = useStore((s) => s.view);
   const searchOpen = useUi11((s) => s.searchOpen);
   const versionsFor = useUi11((s) => s.versionsFor);

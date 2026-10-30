@@ -12,7 +12,7 @@ import { activity } from "@/lib/activity";
 import { useStore, type EditorMode } from "@/lib/store";
 import { countWords, parseNote, timeAgo, titleKey } from "@/lib/util";
 import { exportNote, printNote } from "@/lib/noteExport";
-import { useUi11 } from "@/lib/ui11";
+import { askMyNotes, useUi11 } from "@/lib/ui11";
 import { SelectionAI } from "@/components/SelectionAI";
 
 const COVERS = [null, "/art/cover-peaks.webp", "/art/cover-city.webp", "/art/cover-forest.webp"];
@@ -537,6 +537,12 @@ export function Editor({ id }: { id: string }) {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(pop.idx); return; }
       if (e.key === "Escape") { e.preventDefault(); setPop(null); return; }
     }
+    if (mod && e.shiftKey && (e.key === "K" || e.key === "k")) {
+      e.preventDefault();
+      e.stopPropagation();
+      askMyNotes({ selection: ta.value.slice(ta.selectionStart, ta.selectionEnd), noteId: id }, st().setView);
+      return;
+    }
     if (mod && (e.key === "b" || e.key === "i")) {
       e.preventDefault();
       e.stopPropagation();
@@ -672,6 +678,18 @@ export function Editor({ id }: { id: string }) {
                 </div>
               )}
             </div>
+            <button
+              className="icon-btn !h-7 !w-7"
+              title="Ask my notes (Ctrl+Shift+K) — uses the selected text as the question"
+              aria-label="Ask my notes"
+              data-testid="ask-my-notes"
+              onClick={() => {
+                const ta = taRef.current;
+                askMyNotes({ selection: ta ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : "", noteId: id }, st().setView);
+              }}
+            >
+              <Icon name="sparkles" size={15} />
+            </button>
             <button className="icon-btn !h-7 !w-7" data-on={note.pinned} onClick={() => st().updateNote(id, { pinned: !note.pinned })} title={note.pinned ? "Unpin" : "Pin"}>
               <Icon name="bookmark" size={15} />
             </button>

@@ -20,9 +20,11 @@ import { WALLPAPERS, wallpaperCss } from "@/lib/wallpapers";
 import { getMcpToken, setMcpToken } from "@/lib/mcpTokens";
 import { AiProviderCard } from "@/components/settings/AiProviderCard";
 import { DesktopSection } from "@/components/settings/DesktopSection";
+import { getFollow, onFollowChange, rememberThemeChoice, setFollow, systemIsDark } from "@/lib/systemTheme";
+import { BackupSettings, ImportSettings, TimelensSettings } from "@/components/settings/TimelensSettings";
 import { useDesktopInfo } from "@/lib/desktop";
 
-type Section = "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys";
+type Section = "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import";
 
 const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "account", label: "Profile & account", icon: "user" },
@@ -37,6 +39,9 @@ const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "notif", label: "Notifications", icon: "bell" },
   { id: "pet", label: "Companion", icon: "heart" },
   { id: "ai", label: "AI harness", icon: "sparkles" },
+  { id: "timelens", label: "Timelens", icon: "clock" },
+  { id: "backup", label: "Backup", icon: "shield" },
+  { id: "import", label: "Import", icon: "upload" },
   { id: "data", label: "Data & logs", icon: "database" },
   { id: "keys", label: "Shortcuts", icon: "keyboard" },
 ];
@@ -835,6 +840,13 @@ export function SettingsView() {
   const [googleOpen, setGoogleOpen] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
   const [voiceCached, setVoiceCached] = useState(false);
+  const [sysFollow, setFollowState] = useState(getFollow);
+  useEffect(() => {
+    const off = onFollowChange(() => setFollowState(getFollow()));
+    return () => {
+      off();
+    };
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
   const st = useStore.getState;
@@ -1325,7 +1337,13 @@ export function SettingsView() {
             </div>
             <div className="paper p-5">
               <div className="label mb-3">Theme</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Toggle
+                on={sysFollow.on}
+                onChange={(v) => setFollow({ on: v })}
+                label="Follow system light / dark"
+                hint={sysFollow.on ? `Light: ${THEMES[sysFollow.light].name} · Dark: ${THEMES[sysFollow.dark].name} — now ${systemIsDark() ? "dark" : "light"}. Picking a theme below sets that mode's slot.` : "Switch themes automatically with your OS appearance"}
+              />
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {(Object.keys(THEMES) as ThemeId[]).map((id) => {
                   const t = THEMES[id];
                   const locked = isPremiumTheme(id) && !pet.owned.includes(id);
@@ -1334,7 +1352,7 @@ export function SettingsView() {
                       key={id}
                       className="theme-card"
                       data-on={theme === id}
-                      onClick={() => (locked ? st().toast(`“${t.name}” is a rare theme — win it in the Marketplace!`, "lock") : st().setTheme(id))}
+                      onClick={() => (locked ? st().toast(`“${t.name}” is a rare theme — win it in the Marketplace!`, "lock") : (st().setTheme(id), rememberThemeChoice(id)))}
                       style={{ ["--tc" as string]: t.accent }}
                     >
                       <span className="theme-swatch" style={{ background: `linear-gradient(135deg, ${t.ramp[4]}, ${t.ramp[2]})` }}>
@@ -1441,6 +1459,10 @@ export function SettingsView() {
         )}
 
         {/* ---------------- data ---------------- */}
+        {section === "timelens" && <TimelensSettings />}
+        {section === "backup" && <BackupSettings />}
+        {section === "import" && <ImportSettings />}
+
         {section === "data" && (
           <div className="space-y-4">
             <div className="paper p-5">

@@ -17,7 +17,7 @@ type Ctx = {
 const INLINE =
   /(\[\[[^\]\n]+\]\])|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(\*[^*\s][^*\n]*\*)|(!\[[^\]\n]*\]\([^)\n]+\))|(\[[^\]\n]+\]\([^)\n]+\))|((?<=^|\s|\()#[A-Za-z][\w-]{1,30})|((?<=^|\s|\()@[A-Za-z][\w .-]{0,28}[\w])|(https?:\/\/[^\s<)]+)/g;
 
-const safe = (u: string) => /^(https?:|mailto:|\/|#|task:|note:)/i.test(u.trim());
+const safe = (u: string) => /^(https?:|mailto:|nook:|\/|#|task:|note:)/i.test(u.trim());
 
 function inline(text: string, ctx: Ctx, kp = ""): ReactNode[] {
   const out: ReactNode[] = [];

@@ -1395,6 +1395,20 @@ export const useStore = create<S>()((set, get) => {
         const fkeys = Object.keys(trimmedLog);
         if (fkeys.length > 60) fkeys.sort().slice(0, fkeys.length - 60).forEach((k) => delete trimmedLog[k]);
         get().set({ focusLog: trimmedLog });
+        // v1.1: count sessions per day (Focus stats) and hand the block to Timelens so it shows as focus time
+        try {
+          const sk = "nook:focusSessions";
+          const ss = JSON.parse(localStorage.getItem(sk) ?? "{}") as Record<string, number>;
+          ss[fk] = (ss[fk] ?? 0) + 1;
+          const keep = Object.keys(ss).sort().slice(-90);
+          localStorage.setItem(sk, JSON.stringify(Object.fromEntries(keep.map((k) => [k, ss[k]]))));
+        } catch {}
+        const activeTitle = get().notes.find((n) => n.id === get().activeId)?.title;
+        void fetch("/api/timelens/focus", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ start: Date.now() - t.total * 1000, end: Date.now(), label: activeTitle ? `Focus: ${activeTitle}` : "Focus session" }),
+        }).catch(() => {});
         sfx("win");
         get().toast("Focus session complete  +10 coins", "hourglass");
         get().notify("Focus session complete — +10 coins", "hourglass", "info");

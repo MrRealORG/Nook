@@ -46,6 +46,74 @@ function FocusWeek() {
   );
 }
 
+
+/** Pomodoro stats: today, streak, best day, 30-day average, plus Timelens' view of today's focus. */
+export function focusStats(focusLog: Record<string, number>, sessions: Record<string, number>, now = new Date()) {
+  const key = (i: number) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i));
+  let streak = 0;
+  for (let i = (focusLog[key(0)] ?? 0) > 0 ? 0 : 1; i < 400 && (focusLog[key(i)] ?? 0) > 0; i++) streak++;
+  let month = 0, monthSessions = 0, best = 0, bestKey = "";
+  for (let i = 0; i < 30; i++) {
+    const m = focusLog[key(i)] ?? 0;
+    month += m;
+    monthSessions += sessions[key(i)] ?? 0;
+    if (m > best) { best = m; bestKey = key(i); }
+  }
+  return { todayMins: focusLog[key(0)] ?? 0, todaySessions: sessions[key(0)] ?? 0, streak, best, bestKey, avg: Math.round(month / 30), monthSessions, total: Object.values(focusLog).reduce((a, b) => a + b, 0) };
+}
+
+function FocusStats() {
+  const focusLog = useStore((s) => s.focusLog);
+  const sessionsToday = useStore((s) => s.timer.sessions);
+  const [tlFocus, setTlFocus] = useState<number | null>(null);
+  const sessions = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("nook:focusSessions") ?? "{}") as Record<string, number>;
+    } catch {
+      return {};
+    }
+    // re-read when a session completes
+  }, [sessionsToday, focusLog]);
+  useEffect(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    let live = true;
+    fetch(`/api/timelens/summary?from=${d.getTime()}&to=${Date.now() + 1}`)
+      .then((r) => r.json())
+      .then((x: { focusSecs?: number }) => live && setTlFocus(Math.round((x.focusSecs ?? 0) / 60)))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [focusLog]);
+  const s = focusStats(focusLog, sessions);
+  const tiles: [string, string, string][] = [
+    ["Today", `${s.todayMins}m`, `${s.todaySessions} session${s.todaySessions === 1 ? "" : "s"}`],
+    ["Streak", `${s.streak}d`, s.streak > 0 ? "days in a row" : "start one today"],
+    ["Best day", `${s.best}m`, s.bestKey || "—"],
+    ["30-day avg", `${s.avg}m`, `${s.monthSessions} sessions`],
+  ];
+  return (
+    <div className="paper w-full max-w-[560px] p-4" data-testid="focus-stats">
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <Icon name="star" size={13} className="text-accent" />
+        <span className="label">Pomodoro stats</span>
+        {tlFocus !== null && <span className="chip" title="Focus blocks recorded in Timelens today"><Icon name="clock" size={11} /> Timelens: {tlFocus}m focus</span>}
+        <button className="chip ml-auto" onClick={() => useStore.getState().setView("timelens")}>open Timelens</button>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {tiles.map(([l, v, sub]) => (
+          <div key={l} className="rounded-xl bg-panel2 px-3 py-2">
+            <div className="tiny-font text-[9px] text-faint">{l.toUpperCase()}</div>
+            <div className="pixel-font text-[22px] leading-tight tabular-nums">{v}</div>
+            <div className="truncate text-[11.5px] text-dim">{sub}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---- ambient brown noise (WebAudio, generated — no files) ----
 let ctx: AudioContext | null = null;
 let gain: GainNode | null = null;
@@ -144,6 +212,7 @@ export function FocusView() {
           <span className="chip"><Icon name="coins" size={12} /> +10 coins per focus session</span>
         </div>
 
+        <FocusStats />
         <FocusWeek />
       </div>
 

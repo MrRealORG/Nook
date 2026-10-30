@@ -9,6 +9,7 @@ import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
 import { Markdown } from "@/components/Markdown";
 import { PetView } from "@/components/PetView";
+import { useUi11 } from "@/lib/ui11";
 import { useStore } from "@/lib/store";
 import type { AiResult, AiTool } from "@/lib/types";
 import { uid } from "@/lib/util";
@@ -155,6 +156,22 @@ export default function ChatView() {
     void loadConvs();
     void loadCfg();
   }, [loadConvs, loadCfg]);
+  // "ask my notes" hand-off from the editor
+  const chatSeed = useUi11((s) => s.chatSeed);
+  useEffect(() => {
+    if (!chatSeed) return;
+    const t = setTimeout(() => {
+      useUi11.getState().set({ chatSeed: null });
+      setMode(chatSeed.mode);
+      if (chatSeed.send && chatSeed.text) void run(chatSeed.text, [], chatSeed.mode, []);
+      else {
+        setInput(chatSeed.text);
+        taRef.current?.focus();
+      }
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatSeed]);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [msgs.length, streaming]);
