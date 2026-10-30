@@ -54,11 +54,27 @@ The whole app is now **native Rust** — no servers, no waiting.
       }
     ],
     tasks: [
-      { id: 'task-1', title: 'Water the plants', done: false, position: 1, createdAt: now - 400000 },
-      { id: 'task-2', title: 'Fix the top bar', done: true, position: 2, createdAt: now - 380000 },
-      { id: 'task-3', title: 'Call the electrician', done: false, position: 3, createdAt: now - 300000 }
+      {
+        id: 'task-1', title: 'Water the plants', notes: '', done: false, priority: 1,
+        dueAt: now + 3600000, remindAt: now + 1800000, repeat: 'daily',
+        subtasks: [
+          { id: 's1', title: 'Balcony pots', done: true },
+          { id: 's2', title: 'Fern', done: false }
+        ],
+        reminded: false, position: 1, createdAt: now - 400000, completedAt: null
+      },
+      {
+        id: 'task-2', title: 'Ship the new release', notes: 'Tag the repo, check CI, upload to Gofile.',
+        done: true, priority: 3, dueAt: now - 7200000, remindAt: null, repeat: 'none',
+        subtasks: [], reminded: true, position: 2, createdAt: now - 380000, completedAt: now - 600000
+      },
+      {
+        id: 'task-3', title: 'Call the electrician', notes: '', done: false, priority: 2,
+        dueAt: now - 86400000, remindAt: null, repeat: 'none', subtasks: [],
+        reminded: false, position: 3, createdAt: now - 300000, completedAt: null
+      }
     ],
-    settings: { theme: 'dark', fontSize: '15', initialized: '1' },
+    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', closeToTray: '0', initialized: '1' },
     stats: { notes: 3, favorites: 2, openTasks: 2, folders: 3, trash: 1 }
   };
 }
@@ -157,6 +173,17 @@ function mockCall(cmd, args) {
       mock.notes.unshift(n);
       return Promise.resolve({ ...n });
     }
+    case 'duplicate_note': {
+      const src = mock.notes.find((x) => x.id === a.id);
+      if (!src) return Promise.resolve(null);
+      const n = {
+        id: 'note-' + Date.now(), folderId: src.folderId, title: src.title + ' (copy)',
+        content: src.content, pinned: false, favorite: false, trashed: false,
+        createdAt: Date.now(), updatedAt: Date.now()
+      };
+      mock.notes.unshift(n);
+      return Promise.resolve({ ...n });
+    }
     case 'save_note': {
       const n = mock.notes.find((x) => x.id === a.id);
       if (n) { n.title = a.title; n.content = a.content; n.updatedAt = Date.now(); }
@@ -192,16 +219,41 @@ function mockCall(cmd, args) {
       return Promise.resolve(mock.tasks.slice().sort((x, y) => (x.done - y.done) || (x.position - y.position)));
     case 'create_task': {
       const t = {
-        id: 'task-' + Date.now(), title: (a.title || '').trim(), done: false,
-        position: mock.tasks.length + 1, createdAt: Date.now()
+        id: 'task-' + Date.now(), title: (a.title || '').trim(), notes: '',
+        done: false, priority: a.priority || 0, dueAt: a.dueAt || null,
+        remindAt: a.remindAt || null, repeat: 'none', subtasks: [],
+        reminded: false, position: mock.tasks.length + 1,
+        createdAt: Date.now(), completedAt: null
       };
       mock.tasks.push(t);
       return Promise.resolve({ ...t });
     }
+    case 'update_task': {
+      const t = mock.tasks.find((x) => x.id === a.id);
+      if (!t) return Promise.reject(new Error('task not found'));
+      if (a.title !== undefined) t.title = a.title;
+      if (a.notes !== undefined) t.notes = a.notes;
+      if (a.priority !== undefined) t.priority = a.priority;
+      if (a.dueAt !== undefined) t.dueAt = a.dueAt;
+      if (a.remindAt !== undefined) t.remindAt = a.remindAt;
+      if (a.repeat !== undefined) t.repeat = a.repeat;
+      if (a.subtasks !== undefined) t.subtasks = a.subtasks;
+      if (t.remindAt && t.remindAt > Date.now()) t.reminded = false;
+      return Promise.resolve();
+    }
     case 'set_task': {
       const t = mock.tasks.find((x) => x.id === a.id);
-      if (t) t.done = !!a.done;
-      return Promise.resolve();
+      if (!t) return Promise.resolve(null);
+      if (a.done && t.repeat && t.repeat !== 'none') {
+        const day = 86400000;
+        const base = t.dueAt || Date.now();
+        t.dueAt = t.repeat === 'daily' ? base + day : t.repeat === 'weekly' ? base + 7 * day : base + 30 * day;
+        t.reminded = false;
+        return Promise.resolve({ ...t });
+      }
+      t.done = !!a.done;
+      t.completedAt = t.done ? Date.now() : null;
+      return Promise.resolve({ ...t });
     }
     case 'delete_task':
       mock.tasks = mock.tasks.filter((x) => x.id !== a.id);
@@ -214,6 +266,10 @@ function mockCall(cmd, args) {
     case 'set_setting':
       mock.settings[a.key] = a.value;
       return Promise.resolve();
+    case 'export_backup':
+      return Promise.resolve('C:\\Users\\demo\\Documents\\nook-backup.json');
+    case 'import_backup':
+      return Promise.resolve(mockStats());
     case 'get_stats':
       return Promise.resolve(mockStats());
     case 'data_dir':

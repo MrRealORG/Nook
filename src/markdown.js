@@ -90,6 +90,20 @@ export function renderMarkdown(src) {
       continue;
     }
 
+    const cb = t.match(/^[-*+]\s+\[([ xX])\]\s+(.*)$/);
+    if (cb) {
+      flushPara();
+      flushQuote();
+      if (list !== 'ul') {
+        flushList();
+        out.push('<ul>');
+        list = 'ul';
+      }
+      const on = cb[1] !== ' ';
+      out.push(`<li class="md-task${on ? ' on' : ''}"><span class="md-box">${on ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>' : ''}</span><span>${inline(cb[2])}</span></li>`);
+      continue;
+    }
+
     const ul = t.match(/^[-*+]\s+(.*)$/);
     if (ul) {
       flushPara();

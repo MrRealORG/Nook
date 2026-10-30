@@ -12,10 +12,10 @@
 
     <!-- ======= custom titlebar ======= -->
     <header id="titlebar">
-      <div class="tb-zone tb-left" data-tauri-drag-region>
+      <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.4</span>
+        <span class="tb-ver">v0.5</span>
       </div>
 
       <div class="tb-search">
@@ -24,7 +24,7 @@
         <button id="search-clear" class="hidden" title="Clear search (Esc)">&times;</button>
       </div>
 
-      <div class="tb-zone tb-right" data-tauri-drag-region>
+      <div class="tb-zone tb-right">
         <div class="tb-winbtns">
           <button class="tb-btn" id="win-min" aria-label="Minimize" title="Minimize">
             <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5h10v-1H0z" fill="currentColor"/></svg>
@@ -68,6 +68,7 @@
             <h1 id="nl-title">All Notes</h1>
             <span class="nl-count" id="nl-count"></span>
             <span class="nl-spacer"></span>
+            <button class="btn danger small hidden" id="btn-empty-trash">Empty trash</button>
             <select id="nl-sort" title="Sort notes">
               <option value="updated">Recently edited</option>
               <option value="created">Recently created</option>
@@ -96,10 +97,23 @@
             <span class="tb-spacer"></span>
             <button class="ed-btn" id="btn-pin" title="Pin to top"></button>
             <button class="ed-btn" id="btn-fav" title="Favorite"></button>
+            <button class="ed-btn" id="btn-duplicate" title="Duplicate note (Ctrl+D)"></button>
             <span class="ed-sep"></span>
             <button class="ed-btn" id="btn-preview" title="Markdown preview (Ctrl+E)"></button>
             <button class="ed-btn" id="btn-export" title="Export as Markdown"></button>
             <button class="ed-btn ed-danger" id="btn-trash" title="Move to trash"></button>
+          </div>
+          <div id="md-bar" class="hidden">
+            <button data-md="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+            <button data-md="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+            <button data-md="h1" title="Heading 1">H1</button>
+            <button data-md="h2" title="Heading 2">H2</button>
+            <span class="ed-sep"></span>
+            <button data-md="ul" title="Bullet list">• ―</button>
+            <button data-md="check" title="Checklist">☑</button>
+            <button data-md="quote" title="Quote">❝</button>
+            <button data-md="code" title="Inline code">&lt;&gt;</button>
+            <button data-md="link" title="Link"></button>
           </div>
           <div id="ed-body">
             <textarea id="ed-text" placeholder="Start writing… everything saves itself as you type." spellcheck="false"></textarea>
@@ -113,10 +127,24 @@
           <div class="tv-head">
             <h1>Tasks</h1>
             <span id="tv-progress-label"></span>
+            <span class="tb-spacer"></span>
+            <select id="tv-sort" title="Sort tasks">
+              <option value="manual">Manual order</option>
+              <option value="due">By due date</option>
+              <option value="priority">By priority</option>
+              <option value="newest">Newest first</option>
+            </select>
           </div>
           <div class="tv-progress"><div id="tv-progress-bar"></div></div>
+          <div class="tv-filters" id="tv-filters">
+            <button data-f="all" class="on">All open</button>
+            <button data-f="today">Today</button>
+            <button data-f="upcoming">Upcoming</button>
+            <button data-f="overdue">Overdue</button>
+            <button data-f="done">Done</button>
+          </div>
           <form id="tv-add">
-            <input id="tv-input" type="text" placeholder="Add a task and press Enter…" spellcheck="false" autocomplete="off" maxlength="200" />
+            <input id="tv-input" type="text" placeholder="Add a task and press Enter — details inside ⌄" spellcheck="false" autocomplete="off" maxlength="200" />
             <button class="btn primary" type="submit">Add</button>
           </form>
           <ul id="tv-list"></ul>

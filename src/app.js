@@ -1,10 +1,29 @@
 // Nook — main application logic.
+// v0.5: fixed window dragging, real task manager (due dates, priorities,
+// subtasks, repeat, reminders), 8 themes, realtime autosave, backup,
+// markdown toolbar, close-to-tray.
 
 import { call, IS_TAURI } from './api.js';
 import { renderMarkdown } from './markdown.js';
 import { frogSvg, ico, setIcons } from './art.js';
 
 const $ = (sel) => document.querySelector(sel);
+const DAY = 86400000;
+
+const THEMES = [
+  { id: 'midnight', name: 'Cozy Midnight', dots: ['#171126', '#8fe3a0'], light: false },
+  { id: 'oled',     name: 'OLED Black',    dots: ['#000000', '#3ddc97'], light: false },
+  { id: 'forest',   name: 'Forest Night',  dots: ['#0f1a13', '#7ddb8a'], light: false },
+  { id: 'ocean',    name: 'Ocean Deep',    dots: ['#0c1726', '#5ec8f8'], light: false },
+  { id: 'sunset',   name: 'Sunset Ember',  dots: ['#211318', '#ff9e7d'], light: false },
+  { id: 'paper',    name: 'Paper Light',   dots: ['#f5f2ea', '#379d55'], light: true },
+  { id: 'sepia',    name: 'Warm Sepia',    dots: ['#f4ecdc', '#a4762e'], light: true },
+  { id: 'mint',     name: 'Mint Day',      dots: ['#eef6f0', '#2f9e6e'], light: true }
+];
+const LIGHT_THEMES = THEMES.filter((t) => t.light).map((t) => t.id);
+
+const PRIO_LABEL = ['', 'Low', 'Medium', 'High'];
+const REPEAT_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 
 const state = {
   folders: [],
@@ -14,15 +33,24 @@ const state = {
   stats: null,
   view: { type: 'all' }, // all | favorites | trash | folder | tasks | search
   sort: localStorage.getItem('nook.sort') || 'updated',
+  taskFilter: localStorage.getItem('nook.taskFilter') || 'all',
+  taskSort: localStorage.getItem('nook.taskSort') || 'manual',
+  expandedTask: null,
   currentNoteId: null,
   openNote: null,       // full note object being edited
   preview: false,
   query: '',
-  settings: { theme: 'dark', fontSize: '15' },
+  settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', closeToTray: '0' },
   saveTimer: null,
+  taskSaveTimer: null,
   saving: false,
   bootDone: false
 };
+
+// The keystrokes typed since the last completed save. queueSave() fills it,
+// flushSave() persists it and clears it. NEVER compare the DB copy against
+// the DOM after mutating it first — that made v0.4 autosave a no-op.
+let pending = null;
 
 // ------------------------------------------------------------------ utils ----
 
@@ -34,15 +62,20 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+function startOfDay(ms) {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 function fmtDate(ts) {
   if (!ts) return '';
   const d = new Date(ts);
   const now = new Date();
-  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diff = startOfDay(now) - startOfDay(d);
+  const diff = startOfDay(Date.now()) - startOfDay(ts);
   if (diff <= 0) return 'Today';
-  if (diff <= 86400000) return 'Yesterday';
-  if (diff < 7 * 86400000) return d.toLocaleDateString(undefined, { weekday: 'short' });
+  if (diff <= DAY) return 'Yesterday';
+  if (diff < 7 * DAY) return d.toLocaleDateString(undefined, { weekday: 'short' });
   const sameYear = d.getFullYear() === now.getFullYear();
   return d.toLocaleDateString(undefined, {
     day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' })
@@ -61,11 +94,41 @@ function timeAgo(ts) {
   return fmtDate(ts);
 }
 
+function tsToInput(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function inputToTs(v) {
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function dueLabel(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const diffDays = Math.round((startOfDay(ts) - startOfDay(Date.now())) / DAY);
+  const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0;
+  const timeStr = hasTime
+    ? ' · ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : '';
+  if (diffDays === 0) return 'Today' + timeStr;
+  if (diffDays === 1) return 'Tomorrow' + timeStr;
+  if (diffDays === -1) return 'Yesterday' + timeStr;
+  if (diffDays < -1) return `${-diffDays}d overdue`;
+  const label = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return label + timeStr;
+}
+
 function toast(msg, opts = {}) {
   const root = $('#toast-root');
   const el = document.createElement('div');
   el.className = 'toast';
-  el.innerHTML = `<span class="t-ico">${ico('check')}</span><span>${esc(msg)}</span>`;
+  const icon = opts.icon || 'check';
+  el.innerHTML = `<span class="t-ico">${ico(icon)}</span><span>${esc(msg)}</span>`;
   if (opts.action) {
     const btn = document.createElement('button');
     btn.className = 't-action';
@@ -161,9 +224,16 @@ function promptModal({ title, body = '', value = '', placeholder = '', confirmLa
 }
 
 // ------------------------------------------------------------------ titlebar ----
+// Drag is handled here in JS (startDragging) — works on every pixel of the
+// titlebar, unlike the CSS-only drag region that kept failing.
 
 function wireTitlebar() {
-  const w = () => window.__TAURI_WINDOW__ || null;
+  const getWin = async () => {
+    if (window.__TAURI_WINDOW__) return window.__TAURI_WINDOW__;
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    window.__TAURI_WINDOW__ = getCurrentWindow();
+    return window.__TAURI_WINDOW__;
+  };
   const min = $('#win-min');
   const max = $('#win-max');
   const close = $('#win-close');
@@ -171,8 +241,7 @@ function wireTitlebar() {
   const updateMaxIcon = async () => {
     if (!IS_TAURI) return;
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
+      const win = await getWin();
       const isMax = await win.isMaximized();
       max.querySelector('.ico-max').classList.toggle('hidden', isMax);
       max.querySelector('.ico-restore').classList.toggle('hidden', !isMax);
@@ -183,32 +252,56 @@ function wireTitlebar() {
   window.__nookUpdateMax = updateMaxIcon;
   updateMaxIcon();
 
+  // THE drag fix: mousedown anywhere on the titlebar (except real controls)
+  // starts a native window drag.
+  const tb = $('#titlebar');
+  if (IS_TAURI) {
+    tb.addEventListener('mousedown', async (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('input, button, select, textarea')) return;
+      try {
+        const win = await getWin();
+        await win.startDragging();
+      } catch {
+        /* ignore */
+      }
+    });
+    tb.addEventListener('dblclick', async (e) => {
+      if (e.target.closest('input, button, select, textarea')) return;
+      try {
+        const win = await getWin();
+        await win.toggleMaximize();
+        setTimeout(updateMaxIcon, 120);
+      } catch {
+        /* ignore */
+      }
+    });
+    getWin().then((win) => win.onResized(() => updateMaxIcon())).catch(() => {});
+  }
+
   min.addEventListener('click', async () => {
     if (!IS_TAURI) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().minimize();
+    try {
+      (await getWin()).minimize();
+    } catch { /* ignore */ }
   });
 
   max.addEventListener('click', async () => {
     if (!IS_TAURI) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    const win = getCurrentWindow();
-    await win.toggleMaximize();
-    setTimeout(updateMaxIcon, 120);
+    try {
+      const win = await getWin();
+      await win.toggleMaximize();
+      setTimeout(updateMaxIcon, 120);
+    } catch { /* ignore */ }
   });
 
   close.addEventListener('click', async () => {
     if (!IS_TAURI) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().close();
+    try {
+      await flushSave(); // never lose a keystroke
+      (await getWin()).close();
+    } catch { /* ignore */ }
   });
-
-  if (IS_TAURI) {
-    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      window.__TAURI_WINDOW__ = getCurrentWindow();
-      getCurrentWindow().onResized(() => updateMaxIcon());
-    });
-  }
 
   // search
   const input = $('#search-input');
@@ -362,6 +455,8 @@ function renderListHeader() {
   $('#nl-count').textContent = state.view.type === 'tasks' ? '' : `${state.notes.length}`;
   $('#nl-sort').value = state.sort;
   $('#nl-sort').style.display = state.view.type === 'tasks' ? 'none' : '';
+  const emptyBtn = $('#btn-empty-trash');
+  emptyBtn.classList.toggle('hidden', !(state.view.type === 'trash' && state.notes.length > 0));
 }
 
 function renderNoteList() {
@@ -443,15 +538,17 @@ function renderEditorToolbar() {
   $('#btn-pin').classList.toggle('on', !!(n && n.pinned));
   $('#btn-fav').innerHTML = ico(n && n.favorite ? 'starFill' : 'star');
   $('#btn-fav').classList.toggle('on-fav', !!(n && n.favorite));
+  $('#btn-duplicate').innerHTML = ico('copy');
   $('#btn-preview').innerHTML = ico('eye');
   $('#btn-preview').classList.toggle('on', state.preview);
   $('#btn-export').innerHTML = ico('export');
   $('#btn-trash').innerHTML = ico('trash');
 
-  ['#btn-pin', '#btn-fav', '#btn-preview', '#btn-export', '#btn-trash'].forEach((s) => {
+  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-preview', '#btn-export', '#btn-trash'].forEach((s) => {
     $(s).style.display = editable ? '' : 'none';
   });
   $('.ed-folder-wrap').style.display = editable ? '' : 'none';
+  $('#md-bar').classList.toggle('hidden', !editable || state.preview);
   $('#ed-text').readOnly = !editable;
   $('#ed-title').readOnly = !editable;
   $('#ed-trash-banner').classList.toggle('hidden', !trashMode);
@@ -494,20 +591,173 @@ function applyPreviewMode() {
   const pv = $('#ed-preview');
   pv.classList.toggle('hidden', !showPreview);
   if (showPreview) pv.innerHTML = renderMarkdown(state.openNote ? state.openNote.content : '');
+  $('#md-bar').classList.toggle('hidden', !state.openNote || showPreview || !!state.openNote.trashed);
 }
 
-function updateWordCount() {
+function updateWordCount(text) {
   if (!state.openNote) {
     $('#stats-right').textContent = '';
     return;
   }
-  const text = state.openNote.content;
-  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  const chars = text.length;
-  $('#stats-right').textContent = `${words} words · ${chars} chars`;
+  const body = text !== undefined ? text : state.openNote.content;
+  const words = body.trim() ? body.trim().split(/\s+/).length : 0;
+  const chars = body.length;
+  const mins = words > 0 ? Math.max(1, Math.round(words / 200)) : 0;
+  $('#stats-right').textContent =
+    `${words} words · ${chars} chars${mins ? ` · ${mins} min read` : ''}`;
+}
+
+// -------- markdown toolbar --------
+
+function mdAction(kind) {
+  const ta = $('#ed-text');
+  if (!ta || ta.readOnly) return;
+  const s = ta.selectionStart;
+  const e = ta.selectionEnd;
+  const v = ta.value;
+  const sel = v.slice(s, e);
+
+  const replace = (text, selStart, selEnd) => {
+    ta.value = v.slice(0, s) + text + v.slice(e);
+    ta.focus();
+    ta.setSelectionRange(selStart, selEnd);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  if (kind === 'bold') {
+    const t = sel || 'bold text';
+    replace(`**${t}**`, s + 2, s + 2 + t.length);
+  } else if (kind === 'italic') {
+    const t = sel || 'italic text';
+    replace(`*${t}*`, s + 1, s + 1 + t.length);
+  } else if (kind === 'code') {
+    const t = sel || 'code';
+    replace(`\`${t}\``, s + 1, s + 1 + t.length);
+  } else if (kind === 'link') {
+    const t = sel || 'link text';
+    replace(`[${t}](https://)`, s + 1, s + 1 + t.length);
+  } else {
+    // line-prefix actions: h1, h2, ul, check, quote
+    const ls = v.lastIndexOf('\n', s - 1) + 1;
+    let le = v.indexOf('\n', e);
+    if (le === -1) le = v.length;
+    const block = v.slice(ls, le);
+    const prefix = { h1: '# ', h2: '## ', ul: '- ', check: '- [ ] ', quote: '> ' }[kind] || '';
+    const lines = block.split('\n').map((l) => prefix + l.replace(/^(#{1,4} |> |- \[[ xX]\] |- )/, ''));
+    const newText = lines.join('\n');
+    ta.value = v.slice(0, ls) + newText + v.slice(le);
+    ta.focus();
+    ta.setSelectionRange(ls, ls + newText.length);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
 }
 
 // ------------------------------------------------------------------ tasks ----
+
+function startOfToday() {
+  return startOfDay(Date.now());
+}
+
+function taskMatchesFilter(t, f) {
+  const start = startOfToday();
+  const end = start + DAY - 1;
+  switch (f) {
+    case 'today': return !t.done && t.dueAt != null && t.dueAt >= start && t.dueAt <= end;
+    case 'upcoming': return !t.done && t.dueAt != null && t.dueAt > end;
+    case 'overdue': return !t.done && t.dueAt != null && t.dueAt < start;
+    case 'done': return t.done;
+    default: return !t.done;
+  }
+}
+
+const TASK_SORTS = {
+  manual: (a, b) => (a.done - b.done) || (a.position - b.position),
+  due: (a, b) => (a.done - b.done) || ((a.dueAt ?? Infinity) - (b.dueAt ?? Infinity)) || (a.position - b.position),
+  priority: (a, b) => (a.done - b.done) || (b.priority - a.priority) || (a.position - b.position),
+  newest: (a, b) => (a.done - b.done) || (b.createdAt - a.createdAt)
+};
+
+function taskBadges(t) {
+  const b = [];
+  if (t.priority > 0) {
+    b.push(`<span class="badge b-prio p${t.priority}">${PRIO_LABEL[t.priority]}</span>`);
+  }
+  if (t.dueAt != null) {
+    const today = t.dueAt >= startOfToday() && t.dueAt < startOfToday() + DAY;
+    const overdue = t.dueAt < startOfToday();
+    const cls = overdue ? ' b-overdue' : today ? ' b-today' : '';
+    b.push(`<span class="badge b-due${cls}">${ico('calendar')}${esc(dueLabel(t.dueAt))}</span>`);
+  }
+  if (t.repeat && t.repeat !== 'none') {
+    b.push(`<span class="badge b-repeat">${ico('repeat')}${REPEAT_LABEL[t.repeat] || ''}</span>`);
+  }
+  const subs = t.subtasks || [];
+  if (subs.length) {
+    const d = subs.filter((x) => x.done).length;
+    b.push(`<span class="badge b-subs${d === subs.length ? ' b-done' : ''}">${ico('checkSq')}${d}/${subs.length}</span>`);
+  }
+  if (t.remindAt != null) {
+    b.push(`<span class="badge b-bell" title="Reminder set">${ico('bell')}</span>`);
+  }
+  if (t.notes && t.notes.trim()) {
+    b.push(`<span class="badge" title="Has notes">${ico('all')}</span>`);
+  }
+  return b.join('');
+}
+
+function subtaskRow(s) {
+  return `
+    <div class="td-sub${s.done ? ' done' : ''}" data-sid="${esc(s.id)}">
+      <button class="td-sub-check" title="Toggle">${ico('check')}</button>
+      <span class="td-sub-title">${esc(s.title)}</span>
+      <button class="td-sub-del" title="Remove subtask">&times;</button>
+    </div>`;
+}
+
+function taskDetailsHtml(t) {
+  const subs = t.subtasks || [];
+  const subsDone = subs.filter((x) => x.done).length;
+  return `
+    <div class="tv-details">
+      <input type="text" class="td-title-input" value="${esc(t.title)}" placeholder="Task title" spellcheck="false" maxlength="200" />
+      <div class="td-grid">
+        <label>Due date
+          <input type="datetime-local" class="td-due" value="${tsToInput(t.dueAt)}" />
+        </label>
+        <label>Remind me at
+          <input type="datetime-local" class="td-remind" value="${tsToInput(t.remindAt)}" />
+        </label>
+        <label>Priority
+          <select class="td-prio">
+            <option value="0"${t.priority === 0 ? ' selected' : ''}>None</option>
+            <option value="1"${t.priority === 1 ? ' selected' : ''}>Low</option>
+            <option value="2"${t.priority === 2 ? ' selected' : ''}>Medium</option>
+            <option value="3"${t.priority === 3 ? ' selected' : ''}>High</option>
+          </select>
+        </label>
+        <label>Repeat
+          <select class="td-repeat">
+            <option value="none"${t.repeat === 'none' ? ' selected' : ''}>Never</option>
+            <option value="daily"${t.repeat === 'daily' ? ' selected' : ''}>Daily</option>
+            <option value="weekly"${t.repeat === 'weekly' ? ' selected' : ''}>Weekly</option>
+            <option value="monthly"${t.repeat === 'monthly' ? ' selected' : ''}>Monthly</option>
+          </select>
+        </label>
+      </div>
+      <textarea class="td-notes" placeholder="Notes — details, links, anything…">${esc(t.notes || '')}</textarea>
+      <div class="td-subs">
+        <div class="td-subs-head">
+          <span>Checklist</span>
+          <span>${subs.length ? `${subsDone}/${subs.length}` : ''}</span>
+        </div>
+        <div class="td-sub-rows">${subs.map(subtaskRow).join('')}</div>
+        <form class="td-sub-add">
+          <input type="text" placeholder="Add a subtask and press Enter…" spellcheck="false" maxlength="200" />
+          <button type="submit">+</button>
+        </form>
+      </div>
+    </div>`;
+}
 
 function renderTasks() {
   const view = $('#tasks-view');
@@ -526,42 +776,196 @@ function renderTasks() {
   $('#tv-progress-label').textContent =
     total === 0 ? 'A clean slate' : `${done} of ${total} done`;
   $('#tv-progress-bar').style.width = total === 0 ? '0%' : `${Math.round((done / total) * 100)}%`;
+  $('#tv-sort').value = state.taskSort;
+
+  // filter buttons with live counts
+  const counts = { all: 0, today: 0, upcoming: 0, overdue: 0, done: 0 };
+  state.tasks.forEach((t) => {
+    if (taskMatchesFilter(t, 'all')) counts.all++;
+    if (taskMatchesFilter(t, 'today')) counts.today++;
+    if (taskMatchesFilter(t, 'upcoming')) counts.upcoming++;
+    if (taskMatchesFilter(t, 'overdue')) counts.overdue++;
+    if (taskMatchesFilter(t, 'done')) counts.done++;
+  });
+  $('#tv-filters').querySelectorAll('button').forEach((b) => {
+    const f = b.dataset.f;
+    b.classList.toggle('on', f === state.taskFilter);
+    b.textContent = `${{ all: 'All open', today: 'Today', upcoming: 'Upcoming', overdue: 'Overdue', done: 'Done' }[f]} (${counts[f]})`;
+  });
+
+  const visible = state.tasks
+    .filter((t) => taskMatchesFilter(t, state.taskFilter))
+    .sort(TASK_SORTS[state.taskSort] || TASK_SORTS.manual);
 
   const list = $('#tv-list');
-  if (!total) {
-    list.innerHTML = `<div class="tv-empty">${frogSvg}<div>Nothing to do — enjoy the quiet. ☕</div></div>`;
+  if (!visible.length) {
+    const emptyMsg = {
+      all: 'Nothing to do — enjoy the quiet. ☕',
+      today: 'Nothing due today. Sip your chai. ☕',
+      upcoming: 'Nothing scheduled ahead yet.',
+      overdue: 'Nothing overdue. You are on top of it! 🎉',
+      done: 'Nothing completed yet — go finish something!'
+    };
+    list.innerHTML = `<div class="tv-empty">${frogSvg}<div>${emptyMsg[state.taskFilter] || emptyMsg.all}</div></div>`;
   } else {
-    list.innerHTML = state.tasks
-      .map(
-        (t) => `
-      <li class="tv-item${t.done ? ' done' : ''}" data-tid="${esc(t.id)}">
-        <button class="tv-check" title="Toggle">${ico('check')}</button>
-        <span class="tv-title">${esc(t.title)}</span>
-        <button class="tv-del" title="Delete task">&times;</button>
-      </li>`
-      )
+    list.innerHTML = visible
+      .map((t) => {
+        const open = state.expandedTask === t.id ? ' open' : '';
+        return `
+      <li class="tv-item${t.done ? ' done' : ''}${open}" data-tid="${esc(t.id)}">
+        <div class="tv-row">
+          <button class="tv-check" title="Toggle done">${ico('check')}</button>
+          <div class="tv-main">
+            <div class="tv-line">
+              <span class="tv-title">${esc(t.title)}</span>
+              ${taskBadges(t)}
+            </div>
+          </div>
+          <button class="tv-expand" title="Details">${ico('chevronD')}</button>
+          <button class="tv-del" title="Delete task">&times;</button>
+        </div>
+        ${state.expandedTask === t.id ? taskDetailsHtml(t) : ''}
+      </li>`;
+      })
       .join('');
 
     list.querySelectorAll('.tv-item').forEach((item) => {
-      const tid = item.dataset.tid;
-      item.querySelector('.tv-check').addEventListener('click', async () => {
-        const t = state.tasks.find((x) => x.id === tid);
-        await call('set_task', { id: tid, done: !t.done });
-        t.done = !t.done;
-        state.tasks.sort((x, y) => (x.done - y.done) || (x.position - y.position));
-        renderTasks();
-        refreshStatsOnly();
-      });
-      item.querySelector('.tv-del').addEventListener('click', async () => {
-        await call('delete_task', { id: tid });
-        state.tasks = state.tasks.filter((x) => x.id !== tid);
-        renderTasks();
-        refreshStatsOnly();
-      });
+      wireTaskItem(item);
     });
   }
 
   $('#btn-clear-done').classList.toggle('hidden', done === 0);
+}
+
+function wireTaskItem(item) {
+  const tid = item.dataset.tid;
+  const t = () => state.tasks.find((x) => x.id === tid);
+
+  item.querySelector('.tv-check').addEventListener('click', async () => {
+    const task = t();
+    if (!task) return;
+    try {
+      const res = await call('set_task', { id: tid, done: !task.done });
+      const idx = state.tasks.findIndex((x) => x.id === tid);
+      if (idx !== -1 && res) state.tasks[idx] = res;
+      if (res && !task.done && task.repeat !== 'none' && res.done === false) {
+        toast(`Repeats ${task.repeat} — next: ${dueLabel(res.dueAt) || 'scheduled'}`, { icon: 'repeat' });
+      }
+      renderTasks();
+      refreshStatsOnly();
+    } catch (err) {
+      toast('Could not update task: ' + err.message);
+    }
+  });
+
+  item.querySelector('.tv-del').addEventListener('click', async () => {
+    await call('delete_task', { id: tid });
+    if (state.expandedTask === tid) state.expandedTask = null;
+    state.tasks = state.tasks.filter((x) => x.id !== tid);
+    renderTasks();
+    refreshStatsOnly();
+  });
+
+  item.querySelector('.tv-expand').addEventListener('click', () => {
+    state.expandedTask = state.expandedTask === tid ? null : tid;
+    renderTasks();
+  });
+
+  if (state.expandedTask !== tid) return;
+
+  // ------- details panel wiring -------
+  const pushUpdate = (patch, immediate = false) => {
+    clearTimeout(state.taskSaveTimer);
+    const run = async () => {
+      const task = t();
+      if (!task) return;
+      const merged = {
+        id: task.id,
+        title: task.title,
+        notes: task.notes || '',
+        priority: task.priority || 0,
+        dueAt: task.dueAt ?? null,
+        remindAt: task.remindAt ?? null,
+        repeat: task.repeat || 'none',
+        subtasks: task.subtasks || [],
+        ...patch
+      };
+      try {
+        await call('update_task', merged);
+        const idx = state.tasks.findIndex((x) => x.id === task.id);
+        if (idx !== -1) state.tasks[idx] = { ...state.tasks[idx], ...merged };
+        renderTasks();
+      } catch (err) {
+        toast('Could not save task: ' + err.message);
+      }
+    };
+    if (immediate) run();
+    else state.taskSaveTimer = setTimeout(run, 300);
+  };
+
+  item.querySelector('.td-title-input').addEventListener('input', (e) => {
+    const task = t();
+    if (task) task.title = e.target.value;
+    pushUpdate({ title: e.target.value });
+  });
+
+  item.querySelector('.td-due').addEventListener('change', (e) => {
+    pushUpdate({ dueAt: inputToTs(e.target.value) }, true);
+  });
+
+  item.querySelector('.td-remind').addEventListener('change', (e) => {
+    const v = inputToTs(e.target.value);
+    pushUpdate({ remindAt: v }, true);
+    if (v) toast('Reminder set for ' + dueLabel(v), { icon: 'bell' });
+  });
+
+  item.querySelector('.td-prio').addEventListener('change', (e) => {
+    pushUpdate({ priority: Number(e.target.value) }, true);
+  });
+
+  item.querySelector('.td-repeat').addEventListener('change', (e) => {
+    pushUpdate({ repeat: e.target.value }, true);
+  });
+
+  const notesEl = item.querySelector('.td-notes');
+  notesEl.addEventListener('input', () => {
+    const task = t();
+    if (task) task.notes = notesEl.value;
+    pushUpdate({ notes: notesEl.value });
+  });
+
+  const subInput = item.querySelector('.td-sub-add input');
+  item.querySelector('.td-sub-add').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const title = subInput.value.trim();
+    if (!title) return;
+    const task = t();
+    if (!task) return;
+    const subs = (task.subtasks || []).concat([{ id: 's' + Date.now().toString(36) + Math.floor(Math.random() * 999), title, done: false }]);
+    task.subtasks = subs;
+    subInput.value = '';
+    pushUpdate({ subtasks: subs }, true);
+  });
+
+  item.querySelectorAll('.td-sub').forEach((row) => {
+    const sid = row.dataset.sid;
+    row.querySelector('.td-sub-check').addEventListener('click', () => {
+      const task = t();
+      if (!task) return;
+      const subs = (task.subtasks || []).map((s) =>
+        s.id === sid ? { ...s, done: !s.done } : s
+      );
+      task.subtasks = subs;
+      pushUpdate({ subtasks: subs }, true);
+    });
+    row.querySelector('.td-sub-del').addEventListener('click', () => {
+      const task = t();
+      if (!task) return;
+      const subs = (task.subtasks || []).filter((s) => s.id !== sid);
+      task.subtasks = subs;
+      pushUpdate({ subtasks: subs }, true);
+    });
+  });
 }
 
 // ------------------------------------------------------------------ data flow ----
@@ -612,23 +1016,13 @@ function renderStatusStats() {
     $('#stats-right').textContent =
       `${state.stats.notes} notes · ${state.stats.openTasks} open tasks`;
   } else {
-    $('#stats-right').textContent =
-      `${state.stats.notes} notes · ${state.stats.openTasks} open tasks`;
+    // word count fills stats-right while editing; keep the counters after it
+    updateWordCount();
   }
 }
 
 function setView(view, opts = {}) {
   state.view = view;
-  if (view.type !== 'search') {
-    // leaving search clears the box
-    const inp = $('#search-input');
-    if (!opts.keepQuery) {
-      // keep input text if we're entering search, clear when leaving
-      if (view.type !== 'search' && state.query && !opts.fromSearch) {
-        // no-op: input stays as typed until Esc
-      }
-    }
-  }
   if (view.type === 'tasks') {
     state.currentNoteId = null;
     state.openNote = null;
@@ -667,6 +1061,7 @@ async function selectNote(id) {
     renderEditor();
     return;
   }
+  state.preview = false;
   renderNoteList();
   renderEditor();
   renderStatusStats();
@@ -692,26 +1087,47 @@ async function createNote() {
   return note;
 }
 
-// -------- autosave --------
+async function duplicateCurrent() {
+  const n = state.openNote;
+  if (!n) return;
+  await flushSave();
+  try {
+    const copy = await call('duplicate_note', { id: n.id });
+    if (!copy) return;
+    await refreshAll();
+    state.currentNoteId = copy.id;
+    const full = await call('get_note', { id: copy.id });
+    state.openNote = full || copy;
+    renderNoteList();
+    renderEditor();
+    toast('Note duplicated', { icon: 'copy' });
+  } catch (err) {
+    toast('Could not duplicate: ' + err.message);
+  }
+}
+
+// -------- autosave (realtime: 250ms debounce + flush on blur/hide/close) --------
 
 function queueSave() {
   if (!state.openNote) return;
-  state.openNote.title = $('#ed-title').value;
-  state.openNote.content = $('#ed-text').value;
-  updateWordCount();
+  pending = {
+    title: $('#ed-title').value,
+    content: $('#ed-text').value
+  };
+  updateWordCount(pending.content);
   setSaveState('saving', 'Saving…');
   clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(flushSave, 450);
+  state.saveTimer = setTimeout(flushSave, 250);
 }
 
 async function flushSave() {
   clearTimeout(state.saveTimer);
   const n = state.openNote;
-  if (!n) return;
-  const title = $('#ed-title').value;
-  const content = $('#ed-text').value;
-  if (n.title === title && n.content === content && !state.saving) {
-    return;
+  if (!n || !pending) return;
+  const { title, content } = pending;
+  pending = null;
+  if (n.title === title && n.content === content) {
+    return; // nothing new since the last save
   }
   n.title = title;
   n.content = content;
@@ -857,6 +1273,22 @@ async function purgeCurrent() {
   toast('Deleted forever');
 }
 
+async function emptyTrash() {
+  const ok = await confirmModal({
+    title: 'Empty the trash?',
+    body: `All ${state.notes.length} trashed note(s) will be deleted forever. There is no undo.`,
+    confirmLabel: 'Empty trash',
+    danger: true
+  });
+  if (!ok) return;
+  await call('empty_trash');
+  state.currentNoteId = null;
+  state.openNote = null;
+  await refreshAll();
+  renderEditor();
+  toast('Trash emptied');
+}
+
 async function exportCurrent() {
   const n = state.openNote;
   if (!n) return;
@@ -892,29 +1324,70 @@ async function openSettings() {
   const root = $('#overlay-root');
   const theme = state.settings.theme;
   const fs = state.settings.fontSize;
+  const ef = state.settings.editorFont;
+  const ctt = state.settings.closeToTray === '1';
+
   root.innerHTML = `
     <div class="overlay">
-      <div class="modal" style="width:480px">
+      <div class="modal wide">
         <h3>Settings</h3>
-        <div class="set-row">
-          <div>
-            <div class="set-label">Theme</div>
-            <div class="set-sub">Cozy Midnight or Paper Light.</div>
-          </div>
-          <div class="seg" id="seg-theme">
-            <button data-v="dark" class="${theme !== 'light' ? 'on' : ''}">Cozy Midnight</button>
-            <button data-v="light" class="${theme === 'light' ? 'on' : ''}">Paper Light</button>
+
+        <div class="set-row" style="display:block">
+          <div class="set-label">Theme</div>
+          <div class="set-sub">Eight cozy looks — pick your mood.</div>
+          <div class="theme-grid" id="theme-grid">
+            ${THEMES.map((t) => `
+              <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
+                <span class="theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
+                <span class="t-name">${t.name}</span>
+              </button>`).join('')}
           </div>
         </div>
+
         <div class="set-row">
           <div>
             <div class="set-label">Editor text size</div>
             <div class="set-sub">Comfortable reading, your call.</div>
           </div>
           <div class="seg" id="seg-font">
-            ${['14', '15', '16', '18'].map((v) => `<button data-v="${v}" class="${fs === v ? 'on' : ''}">${v}px</button>`).join('')}
+            ${['13', '14', '15', '16', '18', '20'].map((v) => `<button data-v="${v}" class="${fs === v ? 'on' : ''}">${v}px</button>`).join('')}
           </div>
         </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Editor font</div>
+            <div class="set-sub">How your words look while you write.</div>
+          </div>
+          <div class="seg" id="seg-edfont">
+            <button data-v="sans" class="${ef === 'sans' ? 'on' : ''}">Sans</button>
+            <button data-v="serif" class="${ef === 'serif' ? 'on' : ''}">Serif</button>
+            <button data-v="mono" class="${ef === 'mono' ? 'on' : ''}">Mono</button>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Close button hides to tray</div>
+            <div class="set-sub">Nook keeps running (reminders still fire) — reopen it from the tray icon.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="set-ctt"${ctt ? ' checked' : ''} />
+            <span class="track"></span>
+          </label>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Backup</div>
+            <div class="set-sub">Save everything to a file, or restore it on another PC.</div>
+          </div>
+          <div class="set-actions">
+            <button class="btn ghost" id="btn-backup-export">${ico('download')}Export</button>
+            <button class="btn ghost" id="btn-backup-import">${ico('upload')}Import</button>
+          </div>
+        </div>
+
         <div class="set-row">
           <div>
             <div class="set-label">Your data</div>
@@ -923,11 +1396,13 @@ async function openSettings() {
           </div>
           <button class="btn ghost" id="btn-open-data">Open folder</button>
         </div>
+
         <div class="about-box">
           ${frogSvg}
-          <div class="ab-text"><b>Nook v0.4.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · 100% offline. Made cozy for Mr Real 🐸</div>
+          <div class="ab-text"><b>Nook v0.5.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · 100% offline. Made cozy for Mr Real 🐸</div>
         </div>
         <div class="modal-actions">
+          <button class="btn ghost" data-x="shortcuts">Shortcuts</button>
           <button class="btn primary" data-x="close">Done</button>
         </div>
       </div>
@@ -935,19 +1410,21 @@ async function openSettings() {
 
   const done = () => closeModal();
   root.querySelector('[data-x="close"]').addEventListener('click', done);
+  root.querySelector('[data-x="shortcuts"]').addEventListener('click', () => openShortcuts());
   root.querySelector('.overlay').addEventListener('mousedown', (e) => {
     if (e.target === e.currentTarget) done();
   });
   root.querySelector('#btn-open-data').addEventListener('click', () => call('reveal_data_dir'));
 
-  root.querySelectorAll('#seg-theme button').forEach((b) => {
+  root.querySelectorAll('#theme-grid .theme-chip').forEach((b) => {
     b.addEventListener('click', async () => {
-      state.settings.theme = b.dataset.v;
-      root.querySelectorAll('#seg-theme button').forEach((x) => x.classList.toggle('on', x === b));
-      await call('set_setting', { key: 'theme', value: b.dataset.v });
+      state.settings.theme = b.dataset.t;
+      root.querySelectorAll('#theme-grid .theme-chip').forEach((x) => x.classList.toggle('on', x === b));
+      await call('set_setting', { key: 'theme', value: b.dataset.t });
       applySettings();
     });
   });
+
   root.querySelectorAll('#seg-font button').forEach((b) => {
     b.addEventListener('click', async () => {
       state.settings.fontSize = b.dataset.v;
@@ -956,11 +1433,106 @@ async function openSettings() {
       applySettings();
     });
   });
+
+  root.querySelectorAll('#seg-edfont button').forEach((b) => {
+    b.addEventListener('click', async () => {
+      state.settings.editorFont = b.dataset.v;
+      root.querySelectorAll('#seg-edfont button').forEach((x) => x.classList.toggle('on', x === b));
+      await call('set_setting', { key: 'editorFont', value: b.dataset.v });
+      applySettings();
+    });
+  });
+
+  root.querySelector('#set-ctt').addEventListener('change', async (e) => {
+    state.settings.closeToTray = e.target.checked ? '1' : '0';
+    await call('set_setting', { key: 'closeToTray', value: state.settings.closeToTray });
+    toast(e.target.checked ? 'Nook will hide to the tray' : 'Nook will quit when closed');
+  });
+
+  root.querySelector('#btn-backup-export').addEventListener('click', async () => {
+    try {
+      const path = await call('export_backup');
+      if (path) toast(`Backup saved: ${path.split(/[\\/]/).pop()}`, { icon: 'download' });
+    } catch (err) {
+      if (!/cancel/i.test(err.message)) toast('Backup failed: ' + err.message);
+    }
+  });
+
+  root.querySelector('#btn-backup-import').addEventListener('click', async () => {
+    const ok = await confirmModal({
+      title: 'Import backup?',
+      body: 'Everything currently in Nook will be REPLACED by the backup file. This cannot be undone.',
+      confirmLabel: 'Choose backup file',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      const stats = await call('import_backup');
+      if (stats) {
+        await loadSettings();
+        applySettings();
+        state.expandedTask = null;
+        await refreshTasks();
+        await refreshAll();
+        state.currentNoteId = null;
+        state.openNote = null;
+        renderEditor();
+        toast(`Backup restored — ${stats.notes} notes, ${stats.openTasks} open tasks`, { icon: 'upload' });
+      }
+    } catch (err) {
+      if (!/cancel/i.test(err.message)) toast('Import failed: ' + err.message);
+    }
+  });
+}
+
+function openShortcuts() {
+  const rows = [
+    ['New note', 'Ctrl + N'],
+    ['Search notes', 'Ctrl + F'],
+    ['Save now', 'Ctrl + S'],
+    ['Preview markdown', 'Ctrl + E'],
+    ['Bold / Italic', 'Ctrl + B / I'],
+    ['Duplicate note', 'Ctrl + D'],
+    ['Open settings', 'Ctrl + ,'],
+    ['This list', 'Ctrl + /'],
+    ['Hide sidebar (focus mode)', 'Ctrl + \\'],
+    ['Close dialog', 'Esc']
+  ];
+  const root = $('#overlay-root');
+  root.innerHTML = `
+    <div class="overlay">
+      <div class="modal">
+        <h3>Keyboard shortcuts</h3>
+        <div class="kbd-list">
+          ${rows.map(([label, keys]) => `<span>${label}</span><span class="kbd">${keys}</span>`).join('')}
+        </div>
+        <div class="modal-actions">
+          <button class="btn primary" data-x="close">Got it</button>
+        </div>
+      </div>
+    </div>`;
+  root.querySelector('[data-x="close"]').addEventListener('click', closeModal);
+  root.querySelector('.overlay').addEventListener('mousedown', (e) => {
+    if (e.target === e.currentTarget) closeModal();
+  });
+}
+
+async function loadSettings() {
+  state.settings.theme = (await call('get_setting', { key: 'theme' })) || 'midnight';
+  // v0.4 → v0.5 theme migration
+  if (state.settings.theme === 'dark') state.settings.theme = 'midnight';
+  if (state.settings.theme === 'light') state.settings.theme = 'paper';
+  state.settings.fontSize = (await call('get_setting', { key: 'fontSize' })) || '15';
+  state.settings.editorFont = (await call('get_setting', { key: 'editorFont' })) || 'sans';
+  state.settings.closeToTray = (await call('get_setting', { key: 'closeToTray' })) || '0';
 }
 
 function applySettings() {
-  document.body.classList.toggle('light', state.settings.theme === 'light');
+  const t = LIGHT_THEMES.includes(state.settings.theme) ? state.settings.theme : state.settings.theme;
+  document.body.dataset.theme = t;
+  document.body.classList.toggle('light', LIGHT_THEMES.includes(t));
   document.documentElement.style.setProperty('--font-size', `${state.settings.fontSize}px`);
+  document.body.dataset.edfont = state.settings.editorFont || 'sans';
 }
 
 // ------------------------------------------------------------------ shortcuts ----
@@ -993,9 +1565,33 @@ function wireShortcuts() {
           renderEditorToolbar();
         }
         break;
+      case 'b':
+        e.preventDefault();
+        if (state.openNote && !state.preview && !state.openNote.trashed) mdAction('bold');
+        break;
+      case 'i':
+        e.preventDefault();
+        if (state.openNote && !state.preview && !state.openNote.trashed) mdAction('italic');
+        break;
+      case 'd':
+        e.preventDefault();
+        duplicateCurrent();
+        break;
       case 's':
         e.preventDefault();
         flushSave().then(() => toast('Saved'));
+        break;
+      case ',':
+        e.preventDefault();
+        openSettings();
+        break;
+      case '/':
+        e.preventDefault();
+        openShortcuts();
+        break;
+      case '\\':
+        e.preventDefault();
+        document.body.classList.toggle('zen');
         break;
       default:
         break;
@@ -1003,32 +1599,36 @@ function wireShortcuts() {
   });
 }
 
-// ------------------------------------------------------------------ boot ----
+// ------------------------------------------------------------------ events ----
 
-const WELCOME_CONTENT = `# Welcome to Nook 🐸
-
-Your cozy little corner for notes and tasks — **100% offline**, everything stays on this PC.
-
-## Quick tips
-- Press **Ctrl+N** to start a new note
-- **Ctrl+F** searches every note instantly
-- Hit the **pin** to keep a note on top, the **star** to favorite it
-- Everything **auto-saves** while you type — no save button needed
-
-## What's inside
-- **Notes** — write in Markdown, tap the eye to preview
-- **Folders** — keep things tidy from the sidebar
-- **Tasks** — your little to-do desk
-- **Trash** — deleted notes rest here until you empty it
-
-Cozy up and start writing. ☕`;
-
-async function ensureWelcome() {
-  const initialized = await call('get_setting', { key: 'initialized' });
-  if (initialized) return;
-  const note = await call('create_note', { folderId: null });
-  await call('save_note', { id: note.id, title: 'Welcome to Nook 🐸', content: WELCOME_CONTENT });
-  await call('set_setting', { key: 'initialized', value: '1' });
+function wireReminderListener() {
+  if (!IS_TAURI) return;
+  import('@tauri-apps/api/event')
+    .then(({ listen }) => {
+      listen('reminder', (e) => {
+        const { id, title } = e.payload || {};
+        toast(`⏰ ${title || 'Task reminder'}`, {
+          icon: 'bell',
+          ms: 10000,
+          action: {
+            label: 'Mark done',
+            fn: async () => {
+              try {
+                await call('set_task', { id, done: true });
+                await refreshTasks();
+                renderTasks();
+                refreshStatsOnly();
+                toast('Task completed', { icon: 'checkSq' });
+              } catch { /* ignore */ }
+            }
+          }
+        });
+      });
+      listen('settings-changed', () => {
+        loadSettings().then(applySettings).catch(() => {});
+      });
+    })
+    .catch(() => {});
 }
 
 function wireEditor() {
@@ -1042,6 +1642,7 @@ function wireEditor() {
   });
   $('#btn-pin').addEventListener('click', togglePin);
   $('#btn-fav').addEventListener('click', toggleFavorite);
+  $('#btn-duplicate').addEventListener('click', duplicateCurrent);
   $('#btn-trash').addEventListener('click', trashCurrent);
   $('#btn-restore').addEventListener('click', restoreCurrent);
   $('#btn-purge').addEventListener('click', purgeCurrent);
@@ -1067,6 +1668,15 @@ function wireEditor() {
   });
   $('#btn-new-folder').addEventListener('click', newFolder);
   $('#btn-settings').addEventListener('click', openSettings);
+  $('#btn-empty-trash').addEventListener('click', emptyTrash);
+
+  // markdown toolbar
+  const mdBar = $('#md-bar');
+  mdBar.addEventListener('mousedown', (e) => e.preventDefault()); // keep text selection
+  mdBar.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-md]');
+    if (b) mdAction(b.dataset.md);
+  });
 
   // tasks
   $('#tv-add').addEventListener('submit', async (e) => {
@@ -1076,9 +1686,29 @@ function wireEditor() {
     if (!title) return;
     await call('create_task', { title });
     input.value = '';
+    // if the new task can't be seen under the current filter, show everything
+    const visible = state.tasks.some(
+      (t) => t.title === title && taskMatchesFilter(t, state.taskFilter)
+    );
+    if (state.taskFilter !== 'all' && state.taskFilter !== 'done' && !visible) {
+      state.taskFilter = 'all';
+      localStorage.setItem('nook.taskFilter', 'all');
+    }
     await refreshTasks();
     renderTasks();
     refreshStatsOnly();
+  });
+  $('#tv-sort').addEventListener('change', (e) => {
+    state.taskSort = e.target.value;
+    localStorage.setItem('nook.taskSort', state.taskSort);
+    renderTasks();
+  });
+  $('#tv-filters').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-f]');
+    if (!b) return;
+    state.taskFilter = b.dataset.f;
+    localStorage.setItem('nook.taskFilter', state.taskFilter);
+    renderTasks();
   });
   $('#btn-clear-done').addEventListener('click', async () => {
     await call('clear_done_tasks');
@@ -1087,21 +1717,50 @@ function wireEditor() {
     refreshStatsOnly();
   });
 
-  // flush pending save when the window loses focus / closes
+  // realtime save: flush whenever the app is hidden or loses focus
   window.addEventListener('blur', () => {
-    if (state.saving) return;
     flushSave();
   });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) flushSave();
+  });
   window.addEventListener('beforeunload', () => {
-    if (state.openNote) {
-      const title = $('#ed-title').value;
-      const content = $('#ed-text').value;
-      if (state.openNote.title !== title || state.openNote.content !== content) {
+    if (state.openNote && pending) {
+      if (state.openNote.title !== pending.title || state.openNote.content !== pending.content) {
         // fire and forget — best effort on close
-        call('save_note', { id: state.openNote.id, title, content });
+        call('save_note', { id: state.openNote.id, title: pending.title, content: pending.content });
       }
     }
   });
+}
+
+// ------------------------------------------------------------------ boot ----
+
+const WELCOME_CONTENT = `# Welcome to Nook 🐸
+
+Your cozy little corner for notes and tasks — **100% offline**, everything stays on this PC.
+
+## Quick tips
+- Press **Ctrl+N** to start a new note, **Ctrl+F** to search
+- **Tasks** now have due dates, priorities, checklists and repeat
+- Set a **reminder** on any task — Nook will notify you
+- Try the **8 themes** in Settings (Ctrl+,)
+
+## What's inside
+- **Notes** — Markdown with a formatting toolbar, pin, favorite, duplicate
+- **Folders** — keep things tidy from the sidebar
+- **Tasks** — due dates, priorities, subtasks, repeat, reminders
+- **Backup** — export/import everything as a file
+- **Trash** — deleted notes rest here until you empty it
+
+Cozy up and start writing. ☕`;
+
+async function ensureWelcome() {
+  const initialized = await call('get_setting', { key: 'initialized' });
+  if (initialized) return;
+  const note = await call('create_note', { folderId: null });
+  await call('save_note', { id: note.id, title: 'Welcome to Nook 🐸', content: WELCOME_CONTENT });
+  await call('set_setting', { key: 'initialized', value: '1' });
 }
 
 async function boot() {
@@ -1109,10 +1768,10 @@ async function boot() {
   wireTitlebar();
   wireEditor();
   wireShortcuts();
+  wireReminderListener();
 
   // settings first so the theme applies before first paint of content
-  state.settings.theme = (await call('get_setting', { key: 'theme' })) || 'dark';
-  state.settings.fontSize = (await call('get_setting', { key: 'fontSize' })) || '15';
+  await loadSettings();
   applySettings();
 
   await ensureWelcome();
