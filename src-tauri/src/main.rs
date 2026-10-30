@@ -75,6 +75,11 @@ struct NoteSummary {
     trashed: bool,
     created_at: i64,
     updated_at: i64,
+    tags: String,
+}
+
+fn empty_tags() -> String {
+    "[]".into()
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -89,6 +94,8 @@ struct Note {
     trashed: bool,
     created_at: i64,
     updated_at: i64,
+    #[serde(default = "empty_tags")]
+    tags: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -208,7 +215,8 @@ fn init_db(path: &PathBuf) -> Result<Connection, rusqlite::Error> {
             favorite   INTEGER NOT NULL DEFAULT 0,
             trashed    INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            tags       TEXT NOT NULL DEFAULT '[]'
         );
 
         CREATE INDEX IF NOT EXISTS idx_notes_list ON notes(trashed, updated_at DESC);
@@ -286,6 +294,7 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) {
 }
 
 fn migrate(conn: &Connection) {
+    ensure_column(conn, "notes", "tags", "TEXT NOT NULL DEFAULT '[]'");
     ensure_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''");
     ensure_column(conn, "tasks", "status", "INTEGER NOT NULL DEFAULT 0");
     ensure_column(conn, "tasks", "priority", "INTEGER NOT NULL DEFAULT 0");
@@ -502,11 +511,12 @@ fn row_to_summary(r: &rusqlite::Row) -> rusqlite::Result<NoteSummary> {
         trashed: r.get::<_, i64>(6)? != 0,
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
+        tags: r.get(9).unwrap_or_else(|_| "[]".into()),
     })
 }
 
 const NOTE_COLS: &str =
-    "id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at";
+    "id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at, tags";
 
 fn row_to_note(r: &rusqlite::Row) -> rusqlite::Result<Note> {
     Ok(Note {
@@ -519,6 +529,7 @@ fn row_to_note(r: &rusqlite::Row) -> rusqlite::Result<Note> {
         trashed: r.get::<_, i64>(6)? != 0,
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
+        tags: r.get(9).unwrap_or_else(|_| "[]".into()),
     })
 }
 
@@ -529,6 +540,7 @@ async fn list_notes(
     folder_id: Option<String>,
     query: Option<String>,
     sort: Option<String>,
+    tag: Option<String>,
 ) -> CmdResult<Vec<NoteSummary>> {
     let conn = db(&state);
     let order = match sort.as_deref().unwrap_or("updated") {
@@ -540,47 +552,72 @@ async fn list_notes(
     let q = query
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let tag_like: Option<String> = tag
+        .map(|t| t.trim().replace(['"', '%', '_'], ""))
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("%\"{t}\"%"));
 
     if let Some(q) = &q {
-        let sql = format!(
-            "SELECT {NOTE_COLS} FROM notes
-             WHERE trashed = 0 AND (title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\')
-             {tail}"
-        );
         let like = format!(
             "%{}%",
             q.replace('\\', "\\\\")
                 .replace('%', "\\%")
                 .replace('_', "\\_")
         );
+        let sql = if tag_like.is_some() {
+            format!(
+                "SELECT {NOTE_COLS} FROM notes
+                 WHERE trashed = 0 AND (title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\')
+                 AND tags LIKE ?2 ESCAPE '\\' {tail}"
+            )
+        } else {
+            format!(
+                "SELECT {NOTE_COLS} FROM notes
+                 WHERE trashed = 0 AND (title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\')
+                 {tail}"
+            )
+        };
         let mut stmt = conn.prepare(&sql).map_err(es)?;
-        let rows = stmt.query_map(params![like], row_to_summary).map_err(es)?;
+        let rows = match &tag_like {
+            Some(tl) => stmt.query_map(params![like, tl], row_to_summary).map_err(es)?,
+            None => stmt.query_map(params![like], row_to_summary).map_err(es)?,
+        };
         return Ok(rows.filter_map(|r| r.ok()).collect());
     }
 
-    let sql: String;
+    let mut sql: String;
     let mut bind_folder = false;
 
     match view.as_str() {
         "favorites" => {
-            sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 0 AND favorite = 1 {tail}")
+            sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 0 AND favorite = 1")
         }
-        "trash" => sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 1 {tail}"),
+        "trash" => sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 1"),
         "folder" => {
             bind_folder = true;
-            sql = format!(
-                "SELECT {NOTE_COLS} FROM notes WHERE trashed = 0 AND folder_id IS ?1 {tail}"
-            );
+            sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 0 AND folder_id IS ?1");
         }
-        _ => sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 0 {tail}"),
+        _ => sql = format!("SELECT {NOTE_COLS} FROM notes WHERE trashed = 0"),
     }
+    if let Some(tl) = &tag_like {
+        if bind_folder {
+            sql = sql.replace("WHERE ", "WHERE tags LIKE ?2 AND ");
+        } else {
+            sql = sql.replace("WHERE ", "WHERE tags LIKE ?1 AND ");
+        }
+    }
+    sql = format!("{sql} {tail}");
 
     let mut stmt = conn.prepare(&sql).map_err(es)?;
-    let rows = if bind_folder {
-        stmt.query_map(params![folder_id], row_to_summary)
-            .map_err(es)?
-    } else {
-        stmt.query_map([], row_to_summary).map_err(es)?
+    let rows = match (&tag_like, bind_folder) {
+        (Some(tl), true) => {
+            stmt.query_map(params![folder_id, tl], row_to_summary).map_err(es)?
+        }
+        (Some(tl), false) => stmt.query_map(params![tl], row_to_summary).map_err(es)?,
+        (None, true) => {
+            stmt.query_map(params![folder_id], row_to_summary).map_err(es)?
+        }
+        (None, false) => stmt.query_map([], row_to_summary).map_err(es)?,
     };
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
@@ -612,10 +649,11 @@ async fn create_note(state: State<'_, Db>, folder_id: Option<String>) -> CmdResu
         trashed: false,
         created_at: now_ms(),
         updated_at: now_ms(),
+        tags: empty_tags(),
     };
     conn.execute(
-        "INSERT INTO notes(id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at)
-         VALUES(?1, ?2, ?3, ?4, 0, 0, 0, ?5, ?6)",
+        "INSERT INTO notes(id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at, tags)
+         VALUES(?1, ?2, ?3, ?4, 0, 0, 0, ?5, ?6, '[]')",
         params![n.id, n.folder_id, n.title, n.content, n.created_at, n.updated_at],
     )
     .map_err(es)?;
@@ -623,11 +661,18 @@ async fn create_note(state: State<'_, Db>, folder_id: Option<String>) -> CmdResu
 }
 
 #[tauri::command]
-async fn save_note(state: State<'_, Db>, id: String, title: String, content: String) -> CmdResult<()> {
+async fn save_note(
+    state: State<'_, Db>,
+    id: String,
+    title: String,
+    content: String,
+    tags: Option<String>,
+) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
-        "UPDATE notes SET title = ?2, content = ?3, updated_at = ?4 WHERE id = ?1",
-        params![id, title, content, now_ms()],
+        "UPDATE notes SET title = ?2, content = ?3, updated_at = ?4,
+         tags = COALESCE(?5, tags) WHERE id = ?1",
+        params![id, title, content, now_ms(), tags],
     )
     .map_err(es)?;
     Ok(())
@@ -650,6 +695,7 @@ async fn duplicate_note(state: State<'_, Db>, id: String) -> CmdResult<Option<No
         folder_id: src.folder_id,
         title: format!("{} (copy)", src.title),
         content: src.content,
+        tags: src.tags.clone(),
         pinned: false,
         favorite: false,
         trashed: false,
@@ -657,9 +703,9 @@ async fn duplicate_note(state: State<'_, Db>, id: String) -> CmdResult<Option<No
         updated_at: now_ms(),
     };
     conn.execute(
-        "INSERT INTO notes(id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at)
-         VALUES(?1, ?2, ?3, ?4, 0, 0, 0, ?5, ?6)",
-        params![n.id, n.folder_id, n.title, n.content, n.created_at, n.updated_at],
+        "INSERT INTO notes(id, folder_id, title, content, pinned, favorite, trashed, created_at, updated_at, tags)
+         VALUES(?1, ?2, ?3, ?4, 0, 0, 0, ?5, ?6, ?7)",
+        params![n.id, n.folder_id, n.title, n.content, n.created_at, n.updated_at, n.tags],
     )
     .map_err(es)?;
     Ok(Some(n))
@@ -714,6 +760,7 @@ async fn delete_note_forever(state: State<'_, Db>, id: String) -> CmdResult<()> 
     let conn = db(&state);
     conn.execute("DELETE FROM notes WHERE id = ?1", params![id])
         .map_err(es)?;
+    purge_orphan_images(&conn);
     Ok(())
 }
 
@@ -722,6 +769,7 @@ async fn empty_trash(state: State<'_, Db>) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute("DELETE FROM notes WHERE trashed = 1", [])
         .map_err(es)?;
+    purge_orphan_images(&conn);
     Ok(())
 }
 
@@ -841,6 +889,7 @@ async fn update_task(
     repeat: String,
     subtasks: Vec<Subtask>,
     status: Option<i64>,
+    position: Option<i64>,
 ) -> CmdResult<()> {
     let title = title.trim().to_string();
     if title.is_empty() {
@@ -860,7 +909,7 @@ async fn update_task(
     conn.execute(
         &format!(
             "UPDATE tasks SET title = ?2, notes = ?3, priority = ?4, due_at = ?5,
-             remind_at = ?6, repeat = ?7, subtasks = ?8,
+             remind_at = ?6, repeat = ?7, subtasks = ?8, position = COALESCE(?10, position),
              reminded = CASE WHEN ?9 = 0 THEN 0 ELSE reminded END
              WHERE id = ?1"
         ),
@@ -873,7 +922,8 @@ async fn update_task(
             remind_at,
             repeat,
             subs,
-            rearm
+            rearm,
+            position
         ],
     )
     .map_err(es)?;
@@ -888,6 +938,45 @@ async fn update_task(
         .map_err(es)?;
     }
     Ok(())
+}
+
+// ---------------------------------------------- note image bytes (v0.9) ----
+
+/// One note image as base64 — the preview renderer turns these into data:
+/// URLs in the webview. This replaces the old scheme where <img> tags pulled
+/// every image through the nookimg:// protocol on the UI thread, which could
+/// stall the whole window while a save held the database lock (the v0.8
+/// "click preview and everything freezes" bug).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageData {
+    mime: String,
+    data: String,
+}
+
+#[tauri::command]
+async fn get_note_image_data(state: State<'_, Db>, id: String) -> CmdResult<Option<ImageData>> {
+    let conn = db(&state);
+    let row = conn
+        .query_row(
+            "SELECT mime, bytes FROM note_images WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(es)?;
+    Ok(row.map(|(mime, bytes)| ImageData {
+        mime,
+        data: b64_encode(&bytes),
+    }))
+}
+
+/// v0.9 hygiene — image blobs whose note is gone are dead weight in the DB.
+fn purge_orphan_images(conn: &Connection) {
+    let _ = conn.execute(
+        "DELETE FROM note_images WHERE note_id NOT IN (SELECT id FROM notes)",
+        [],
+    );
 }
 
 #[tauri::command]
@@ -1413,7 +1502,7 @@ async fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option
         for n in &data.notes {
             let _ = tx.execute(
                 &format!(
-                    "INSERT INTO notes({NOTE_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                    "INSERT INTO notes({NOTE_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
                 ),
                 params![
                     n.id,
@@ -1424,7 +1513,8 @@ async fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option
                     n.favorite as i64,
                     n.trashed as i64,
                     n.created_at,
-                    n.updated_at
+                    n.updated_at,
+                    n.tags
                 ],
             );
         }
@@ -1811,44 +1901,50 @@ fn main() {
         // nookimg:// — serves note images straight from the local SQLite db.
         // <img src="nookimg://<id>"> in the preview never touches the disk
         // outside the app's own database.
-        .register_uri_scheme_protocol("nookimg", |ctx, request| {
-            let id = request
-                .uri()
-                .path()
-                .trim_start_matches('/')
-                .to_string();
-            let not_found = || -> tauri::http::Response<Cow<'static, [u8]>> {
-                tauri::http::Response::builder()
-                    .status(404)
-                    .header("Content-Type", "text/plain")
-                    .body(Cow::Borrowed("image not found".as_bytes()))
-                    .unwrap()
-            };
-            if id.is_empty() || id.contains("..") || id.contains('/') {
-                return not_found();
-            }
-            let app = ctx.app_handle();
-            let conn = {
-                let state = app.state::<Db>();
-                let guard = state.0.lock().unwrap_or_else(|p| p.into_inner());
-                guard
-                    .query_row(
-                        "SELECT mime, bytes FROM note_images WHERE id = ?1",
-                        params![id],
-                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
-                    )
-                    .optional()
-                    .ok()
-                    .flatten()
-            };
-            match conn {
-                Some((mime, bytes)) => tauri::http::Response::builder()
-                    .header("Content-Type", mime)
-                    .header("Cache-Control", "max-age=31536000, immutable")
-                    .body(Cow::Owned(bytes))
-                    .unwrap(),
-                None => not_found(),
-            }
+        .register_asynchronous_uri_scheme_protocol("nookimg", |ctx, request, responder| {
+            // v0.9: runs fully off the main thread now. Before, every image in
+            // the preview locked the DB on the UI thread — clicking Preview
+            // while anything else touched the database froze the whole window.
+            let app = ctx.app_handle().clone();
+            std::thread::spawn(move || {
+                let id = request
+                    .uri()
+                    .path()
+                    .trim_start_matches('/')
+                    .to_string();
+                let not_found = || -> tauri::http::Response<Cow<'static, [u8]>> {
+                    tauri::http::Response::builder()
+                        .status(404)
+                        .header("Content-Type", "text/plain")
+                        .body(Cow::Borrowed("image not found".as_bytes()))
+                        .unwrap()
+                };
+                let response = if id.is_empty() || id.contains("..") || id.contains('/') {
+                    not_found()
+                } else {
+                    let state = app.state::<Db>();
+                    let guard = state.0.lock().unwrap_or_else(|p| p.into_inner());
+                    let row = guard
+                        .query_row(
+                            "SELECT mime, bytes FROM note_images WHERE id = ?1",
+                            params![id],
+                            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
+                        )
+                        .optional()
+                        .ok()
+                        .flatten();
+                    drop(guard);
+                    match row {
+                        Some((mime, bytes)) => tauri::http::Response::builder()
+                            .header("Content-Type", mime)
+                            .header("Cache-Control", "max-age=31536000, immutable")
+                            .body(Cow::Owned(bytes))
+                            .unwrap(),
+                        None => not_found(),
+                    }
+                };
+                responder.respond(response);
+            });
         })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
@@ -1902,6 +1998,25 @@ fn main() {
             // reminders
             spawn_reminder_engine(app.handle().clone(), db_path);
 
+            // v0.9: trash auto-cleanup — notes in the trash older than the
+            // chosen number of days are removed on startup (setting: trashDays,
+            // '0' = keep forever).
+            {
+                let state = app.state::<Db>();
+                let conn = db(&state);
+                let days: i64 = get_kv(&conn, "trashDays")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if days > 0 {
+                    let cutoff = now_ms() - days * 86_400_000;
+                    let _ = conn.execute(
+                        "DELETE FROM notes WHERE trashed = 1 AND updated_at < ?1",
+                        params![cutoff],
+                    );
+                    purge_orphan_images(&conn);
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1945,6 +2060,7 @@ fn main() {
             insert_note_image,
             delete_note_image,
             note_images,
+            get_note_image_data,
             note_backlinks,
             get_setting,
             set_setting,

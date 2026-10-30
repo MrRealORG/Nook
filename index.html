@@ -15,7 +15,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.8</span>
+        <span class="tb-ver">v0.9</span>
       </div>
 
       <div class="tb-search">
@@ -54,6 +54,8 @@
         <div class="sb-scroll">
           <div class="sb-label">Library</div>
           <nav id="sb-views"></nav>
+          <div class="sb-label" id="sb-tags-wrap"><span>Tags</span></div>
+          <nav id="sb-tags"></nav>
           <div class="sb-label sb-folders-label">
             <span>Folders</span>
             <button id="btn-new-folder" title="New folder">+</button>
@@ -78,6 +80,7 @@
             <h1 id="nl-title">All Notes</h1>
             <span class="nl-count" id="nl-count"></span>
             <span class="nl-spacer"></span>
+            <button class="btn ghost small" id="btn-daily" title="Open (or create) today's daily note">📅 Today</button>
             <button class="btn danger small hidden" id="btn-empty-trash">Empty trash</button>
             <select id="nl-sort" title="Sort notes">
               <option value="updated">Recently edited</option>
@@ -131,10 +134,23 @@
             <button data-md="image" title="Insert image"></button>
             <button data-md="mention" title="Mention another note (@)"></button>
           </div>
+          <div id="find-bar" class="hidden">
+            <input id="find-input" type="text" placeholder="Find" spellcheck="false" autocomplete="off" />
+            <span id="find-count"></span>
+            <button id="find-prev" title="Previous match (Shift+Enter)">↑</button>
+            <button id="find-next" title="Next match (Enter)">↓</button>
+            <span class="ed-sep"></span>
+            <input id="replace-input" type="text" placeholder="Replace with" spellcheck="false" autocomplete="off" />
+            <button id="replace-one" title="Replace current match">Replace</button>
+            <button id="replace-all" title="Replace everything">All</button>
+            <span class="tb-spacer"></span>
+            <button id="find-close" title="Close (Esc)">✕</button>
+          </div>
           <div id="ed-body">
             <textarea id="ed-text" placeholder="Start writing… everything saves itself as you type.  ·  / for commands  ·  @ to link a note  ·  paste images straight in" spellcheck="false"></textarea>
             <div id="ed-preview" class="md hidden"></div>
           </div>
+          <div id="ed-tags" class="hidden"></div>
           <div id="ed-backlinks" class="hidden"></div>
         </div>
         <input type="file" id="ed-img-file" accept="image/png, image/jpeg, image/gif, image/webp, image/svg+xml" multiple class="hidden" />
@@ -216,7 +232,13 @@
       <section id="chat-view" class="hidden">
         <div class="cv-col">
           <div class="cv-head">
-            <h1>AI Chat</h1>
+            <div class="cv-brand">
+              <span class="cv-logo"></span>
+              <div>
+                <h1>AI Chat</h1>
+                <span class="cv-brand-sub">your keys, your chat — saved on this PC</span>
+              </div>
+            </div>
             <span class="tb-spacer"></span>
             <select id="cv-chat-select" title="Chat history"></select>
             <button class="btn ghost small" id="cv-new">+ New chat</button>
@@ -226,7 +248,7 @@
           <form id="cv-composer">
             <button type="button" id="cv-use-note" title="Attach the current note as context for the next message">📎 Note</button>
             <textarea id="cv-input" rows="1" placeholder="Ask anything… Enter sends · Shift+Enter new line" spellcheck="false"></textarea>
-            <button class="btn primary" type="submit" id="cv-send">Send</button>
+            <button class="btn primary cv-send" type="submit" id="cv-send" title="Send (Enter)"></button>
             <button class="btn danger hidden" type="button" id="cv-stop">Stop</button>
           </form>
           <div class="cv-foot" id="cv-status">Choose an AI provider & model in Settings — keys stay on this PC.</div>

@@ -81,7 +81,7 @@ The whole app is now **native Rust** — no servers, no waiting.
         reminded: false, position: 3, createdAt: now - 300000, completedAt: null
       }
     ],
-    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal', closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy', defaultFolder: '', initialized: '1' },
+    settings: { theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal', closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy', defaultFolder: '', initialized: '1', edLine: '1.6', defaultView: 'all', zoom: '100', trashDays: '0' },
     stats: { notes: 3, favorites: 2, openTasks: 2, folders: 3, trash: 1 },
     recordings: [
       { name: 'rec-20261029-101500.wav', path: 'C:\\recordings\\rec-20261029-101500.wav', bytes: 1875000, durationMs: 93500, createdAt: now - 86400000 },
@@ -158,6 +158,9 @@ function mockCall(cmd, args) {
       } else {
         list = list.filter((n) => !n.trashed);
       }
+      if (a.tag) {
+        list = list.filter((n) => (n.tags || []).includes(a.tag));
+      }
       const sort = a.sort || 'updated';
       list.sort((x, y) => {
         if (x.pinned !== y.pinned) return x.pinned ? -1 : 1;
@@ -169,7 +172,8 @@ function mockCall(cmd, args) {
         list.map((n) => ({
           id: n.id, folderId: n.folderId, title: n.title,
           snippet: mockSnippet(n.content), pinned: n.pinned, favorite: n.favorite,
-          trashed: n.trashed, createdAt: n.createdAt, updatedAt: n.updatedAt
+          trashed: n.trashed, createdAt: n.createdAt, updatedAt: n.updatedAt,
+          tags: JSON.stringify(n.tags || [])
         }))
       );
     }
@@ -199,7 +203,14 @@ function mockCall(cmd, args) {
     }
     case 'save_note': {
       const n = mock.notes.find((x) => x.id === a.id);
-      if (n) { n.title = a.title; n.content = a.content; n.updatedAt = Date.now(); }
+      if (n) {
+        n.title = a.title;
+        n.content = a.content;
+        n.updatedAt = Date.now();
+        if (a.tags) {
+          try { n.tags = JSON.parse(a.tags); } catch { /* keep old */ }
+        }
+      }
       return Promise.resolve();
     }
     case 'pin_note': {
@@ -240,6 +251,12 @@ function mockCall(cmd, args) {
       return Promise.resolve();
     case 'note_images':
       return Promise.resolve(Object.entries(mockImages()).filter(([, v]) => v.noteId === a.noteId).map(([id, v]) => ({ id, noteId: v.noteId, mime: v.mime, name: v.name, bytes: v.bytes, createdAt: v.createdAt })));
+    case 'get_note_image_data': {
+      const im = mockImages()[a.id];
+      if (!im) return Promise.resolve(null);
+      const b64 = (im.dataUrl || '').split(',')[1] || '';
+      return Promise.resolve({ mime: im.mime, data: b64 });
+    }
     case 'note_backlinks': {
       const me = mock.notes.find((x) => x.id === a.id);
       if (!me) return Promise.resolve([]);
@@ -248,7 +265,7 @@ function mockCall(cmd, args) {
       return Promise.resolve(
         mock.notes
           .filter((n) => n.id !== a.id && !n.trashed && (n.content || '').includes(`[[${t}]]`))
-          .map((n) => ({ id: n.id, folderId: n.folderId, title: n.title, snippet: mockSnippet(n.content), pinned: n.pinned, favorite: n.favorite, trashed: n.trashed, createdAt: n.createdAt, updatedAt: n.updatedAt }))
+          .map((n) => ({ id: n.id, folderId: n.folderId, title: n.title, snippet: mockSnippet(n.content), pinned: n.pinned, favorite: n.favorite, trashed: n.trashed, createdAt: n.createdAt, updatedAt: n.updatedAt, tags: JSON.stringify(n.tags || []) }))
       );
     }
     case 'create_task': {
@@ -278,6 +295,7 @@ function mockCall(cmd, args) {
         t.done = t.status === 2;
         t.completedAt = t.done ? Date.now() : null;
       }
+      if (a.position !== undefined && a.position !== null) t.position = a.position;
       if (t.remindAt && t.remindAt > Date.now()) t.reminded = false;
       return Promise.resolve();
     }

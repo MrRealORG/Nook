@@ -1,8 +1,9 @@
 // Tiny, safe markdown renderer. Escapes HTML first, then formats.
 // Supports: # headings, **bold**, *italic*, `code`, ``` blocks,
 // - / 1. lists, > quotes, --- rules, [links](url),
-// v0.8: ![alt](nookimg://id) images · ![alt](https://…) web images ·
-//       [[Note title]] wiki-links between notes.
+// ==highlight== · ~~strikethrough~~ · | tables |,
+// ![alt](nookimg://id) images · ![alt](https://…) web images ·
+// [[Note title]] wiki-links between notes.
 
 function esc(s) {
   return s
@@ -32,7 +33,9 @@ function inline(s) {
       const safeAlt = alt;
       if (/^nookimg:\/\/([A-Za-z0-9_-]+)$/.test(src)) {
         const id = src.replace(/^nookimg:\/\//, '');
-        return `<img class="md-img" src="${esc(imgSrc(id))}" alt="${esc(safeAlt)}" loading="lazy" />`;
+        // data-nook-img lets the app patch in the real bytes once the
+        // async cache has them (keeps preview instant, never blocking)
+        return `<img class="md-img" data-nook-img="${esc(id)}" src="${esc(imgSrc(id))}" alt="${esc(safeAlt)}" loading="lazy" />`;
       }
       if (/^https?:\/\/[^)\s]+$/.test(src)) {
         return `<img class="md-img md-img-web" src="${esc(src)}" alt="${esc(safeAlt)}" loading="lazy" />`;
@@ -41,6 +44,8 @@ function inline(s) {
     })
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+    .replace(/==([^=\n]+)==/g, '<mark>$1</mark>')
+    .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
     .replace(/\[\[([^\[\]]+)\]\]/g, (m, title) => {
       const clean = title.trim();
       if (!clean) return m;
@@ -48,6 +53,17 @@ function inline(s) {
     })
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
+
+function splitTableRow(line) {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
+}
+
+const TABLE_SEP = /^[\s|:-]+$/;
 
 export function renderMarkdown(src) {
   const lines = esc(String(src || '')).split(/\r?\n/);
@@ -81,7 +97,8 @@ export function renderMarkdown(src) {
     flushQuote();
   };
 
-  for (const raw of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
     const line = raw;
 
     if (code !== null) {
@@ -100,6 +117,31 @@ export function renderMarkdown(src) {
       flushAll();
       code = [];
       continue;
+    }
+
+    // | tables | — a row followed by a ---|--- separator line
+    if (t.includes('|') && li + 1 < lines.length) {
+      const nxt = lines[li + 1].trim();
+      if (nxt.includes('-') && nxt.includes('|') && TABLE_SEP.test(nxt)) {
+        flushAll();
+        const head = splitTableRow(t);
+        let ri = li + 2;
+        const rows = [];
+        while (ri < lines.length && lines[ri].trim() !== '' && lines[ri].includes('|')) {
+          rows.push(splitTableRow(lines[ri]));
+          ri++;
+        }
+        out.push(
+          `<div class="md-tablewrap"><table>` +
+            `<thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead>` +
+            `<tbody>${rows
+              .map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`)
+              .join('')}</tbody>` +
+            `</table></div>`
+        );
+        li = ri - 1;
+        continue;
+      }
     }
 
     if (t === '') {

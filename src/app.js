@@ -10,14 +10,57 @@ import { frogSvg, ico, setIcons } from './art.js';
 const $ = (sel) => document.querySelector(sel);
 const DAY = 86400000;
 
-// ---- image serving: nookimg://<id> comes straight out of the local DB ----
-if (IS_TAURI) {
-  import('@tauri-apps/api/core')
-    .then(({ convertFileSrc }) => setImgResolver((id) => convertFileSrc(id, 'nookimg')))
-    .catch(() => setImgResolver((id) => `nookimg://${id}`));
-} else {
-  setImgResolver((id) => mockImageSrc(id) || `nookimg://${id}`);
+// ---- image serving (v0.9): images become data: URLs in an async cache ----
+// The old scheme fetched every preview image through the nookimg:// protocol,
+// which locked the database on the UI thread — clicking Preview could freeze
+// the whole window. Now markdown renders instantly with a placeholder and
+// each image patches itself in as its bytes arrive; nothing ever blocks.
+const IMG_PLACEHOLDER =
+  'data:image/svg+xml;base64,' +
+  btoa('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3"><rect width="4" height="3" fill="rgba(128,128,128,0.18)"/></svg>');
+const imageCache = new Map();   // id -> data URL
+const imageInflight = new Map(); // id -> Promise
+
+function resolveImg(id) {
+  if (imageCache.has(id)) return imageCache.get(id);
+  if (!IS_TAURI) {
+    const m = mockImageSrc(id);
+    if (m) {
+      imageCache.set(id, m);
+      return m;
+    }
+  } else {
+    loadImageData(id);
+  }
+  return IMG_PLACEHOLDER;
 }
+
+async function loadImageData(id) {
+  if (imageInflight.has(id)) return imageInflight.get(id);
+  const p = (async () => {
+    try {
+      const d = await call('get_note_image_data', { id });
+      if (d && d.data) {
+        const url = `data:${d.mime};base64,${d.data}`;
+        imageCache.set(id, url);
+        document.querySelectorAll('img[data-nook-img]').forEach((el) => {
+          if (el.dataset.nookImg === id && el.getAttribute('src') !== url) {
+            el.src = url;
+            el.classList.add('img-in');
+          }
+        });
+      }
+    } catch { /* image stays a placeholder */ }
+  })();
+  imageInflight.set(id, p);
+  try {
+    await p;
+  } finally {
+    imageInflight.delete(id);
+  }
+}
+
+setImgResolver(resolveImg);
 
 const THEMES = [
   { id: 'midnight', name: 'Cozy Midnight', dots: ['#171126', '#8fe3a0'], light: false },
@@ -39,7 +82,11 @@ const THEMES = [
   { id: 'lavender', name: 'Lavender',      dots: ['#f3f1fb', '#7c5cd6'], light: true },
   { id: 'coffee',   name: 'Coffee Cream',  dots: ['#f1e7dc', '#8a5a3b'], light: true },
   { id: 'rose',     name: 'Rose Quartz',   dots: ['#faf0f2', '#d16a8a'], light: true },
-  { id: 'matcha',   name: 'Matcha Latte',  dots: ['#f2f5ea', '#6b9b37'], light: true }
+  { id: 'matcha',   name: 'Matcha Latte',  dots: ['#f2f5ea', '#6b9b37'], light: true },
+  { id: 'cloud',    name: 'Cloud Nine',    dots: ['#eef2f7', '#3b82c4'], light: true },
+  { id: 'peach',    name: 'Peach Orchard', dots: ['#fdf1ea', '#e07a3f'], light: true },
+  { id: 'aurora',   name: 'Aurora',        dots: ['#0d1b1e', '#4de3c1'], light: false },
+  { id: 'carbon',   name: 'Carbon',        dots: ['#161616', '#e0e0e0'], light: false }
 ];
 const LIGHT_THEMES = THEMES.filter((t) => t.light).map((t) => t.id);
 
@@ -72,6 +119,7 @@ const state = {
   tasks: [],
   stats: null,
   view: { type: 'all' }, // all | favorites | trash | folder | tasks | recordings | chat | search
+  activeTag: null,       // tag filter for the note list
   sort: localStorage.getItem('nook.sort') || 'updated',
   taskFilter: localStorage.getItem('nook.taskFilter') || 'all',
   taskSort: localStorage.getItem('nook.taskSort') || 'manual',
@@ -108,6 +156,11 @@ const state = {
 // flushSave() persists it and clears it. NEVER compare the DB copy against
 // the DOM after mutating it first — that made v0.4 autosave a no-op.
 let pending = null;
+// v0.9: tags JSON as of the last successful save, per note. The tag editor
+// mutates state.openNote.tags directly, so comparing against the note object
+// itself can never detect a tags-only change (that froze the status on
+// "Saving…" and silently dropped tags).
+const savedTagsMap = new Map();
 
 // ------------------------------------------------------------------ utils ----
 
@@ -409,12 +462,30 @@ const VIEW_META = [
   { type: 'trash', label: 'Trash', icon: 'trash' }
 ];
 
+function tagsOf(n) {
+  try {
+    const raw = n.tags;
+    const t = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+    return Array.isArray(t) ? t.filter((x) => typeof x === 'string' && x.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function allTags() {
+  const map = new Map();
+  for (const n of state.notes) {
+    for (const t of tagsOf(n)) map.set(t, (map.get(t) || 0) + 1);
+  }
+  return [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
 function renderSidebar() {
   const s = state.stats || { notes: 0, favorites: 0, openTasks: 0, trash: 0 };
 
   const viewsEl = $('#sb-views');
   viewsEl.innerHTML = VIEW_META.map((v) => {
-    const active = state.view.type === v.type ? ' active' : '';
+    const active = state.view.type === v.type && !state.activeTag ? ' active' : '';
     const count = v.type === 'all' ? s.notes : v.type === 'favorites' ? s.favorites : v.type === 'tasks' ? s.openTasks : v.type === 'board' ? (state.tasks.filter((x) => !x.done).length || s.openTasks) : s.trash;
     const showCount = v.type !== 'tasks' && v.type !== 'board' && v.type !== 'recordings' && v.type !== 'chat';
     return `
@@ -426,7 +497,36 @@ function renderSidebar() {
   }).join('');
 
   viewsEl.querySelectorAll('[data-view]').forEach((el) => {
-    el.addEventListener('click', () => setView({ type: el.dataset.view }));
+    el.addEventListener('click', () => {
+      state.activeTag = null;
+      setView({ type: el.dataset.view });
+    });
+  });
+
+  // v0.9 — tags section in the sidebar
+  const tagsWrap = $('#sb-tags-wrap');
+  const tagsEl = $('#sb-tags');
+  const tags = allTags();
+  tagsWrap.classList.toggle('hidden', !tags.length || state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat');
+  tagsEl.innerHTML = tags
+    .slice(0, 12)
+    .map(
+      ([t, c]) => `
+      <button class="sb-row tag-row${state.activeTag === t ? ' active' : ''}" data-tag="${esc(t)}">
+        <span class="sb-ico">${ico('tag')}</span>
+        <span class="sb-name">${esc(t)}</span>
+        <span class="sb-count">${c}</span>
+      </button>`
+    )
+    .join('');
+  tagsEl.querySelectorAll('[data-tag]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const t = el.dataset.tag;
+      state.activeTag = state.activeTag === t ? null : t;
+      renderSidebar();
+      await refreshNotes();
+      renderNoteList();
+    });
   });
 
   const folEl = $('#sb-folders');
@@ -509,6 +609,7 @@ function renderSidebar() {
 // ------------------------------------------------------------------ note list ----
 
 function currentViewTitle() {
+  if (state.activeTag) return `#${state.activeTag}`;
   switch (state.view.type) {
     case 'favorites': return 'Favorites';
     case 'trash': return 'Trash';
@@ -572,6 +673,7 @@ function renderNoteList(opts = {}) {
       if (n.pinned) flags.push(`<span class="f-pin" title="Pinned">${ico('pin')}</span>`);
       if (n.favorite) flags.push(`<span class="f-fav" title="Favorite">${ico('starFill')}</span>`);
       const titleText = n.title.trim() || 'Untitled note';
+      const tags = tagsOf(n).slice(0, 3);
       return `
       <div class="note-card${selected}" data-nid="${esc(n.id)}" style="--i:${Math.min(14, i)}">
         <div class="nc-title">${esc(titleText)}${
@@ -581,6 +683,7 @@ function renderNoteList(opts = {}) {
         <div class="nc-meta">
           <span>${fmtDate(n.updatedAt)}</span>
           ${folder ? `<span>·</span><span class="nc-folder-name">${esc(folder.name)}</span>` : ''}
+          ${tags.length ? `<span class="nc-tags">${tags.map((t) => `<span class="nc-tag">#${esc(t)}</span>`).join('')}</span>` : ''}
         </div>
       </div>`;
     })
@@ -697,10 +800,69 @@ function renderEditor() {
   $('#ed-text').value = n.content;
   renderFolderSelect();
   renderEditorToolbar();
+  renderEditorTags();
   applyPreviewMode();
   updateWordCount();
   closeMention();
+  closeFindBar();
   loadBacklinks();
+}
+
+// ---- v0.9: tag chips under the editor toolbar ----
+
+function renderEditorTags() {
+  const wrap = $('#ed-tags');
+  const n = state.openNote;
+  if (!wrap) return;
+  const trashMode = !!(n && n.trashed);
+  const tags = n ? tagsOf(n) : [];
+  wrap.classList.toggle('hidden', !n || trashMode);
+  if (!n || trashMode) return;
+  wrap.innerHTML = `
+    ${tags
+      .map(
+        (t) => `
+      <span class="ed-tag" data-t="${esc(t)}">
+        #${esc(t)}
+        <button class="ed-tag-x" title="Remove tag" data-x="${esc(t)}">&times;</button>
+      </span>`
+      )
+      .join('')}
+    <input id="ed-tag-input" type="text" placeholder="+ tag" maxlength="24" spellcheck="false" autocomplete="off" />
+  `;
+  wrap.querySelectorAll('.ed-tag-x').forEach((b) => {
+    b.addEventListener('click', () => {
+      const t = b.dataset.x;
+      const cur = tagsOf(state.openNote);
+      state.openNote.tags = JSON.stringify(cur.filter((x) => x !== t));
+      renderEditorTags();
+      renderSidebar();
+      renderNoteList({ animate: false });
+      queueSave();
+    });
+  });
+  const input = wrap.querySelector('#ed-tag-input');
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const t = input.value.trim().replace(/^#/, '').replace(/[",]/g, '').slice(0, 24);
+      if (!t) return;
+      const cur = tagsOf(state.openNote);
+      if (!cur.some((x) => x.toLowerCase() === t.toLowerCase())) {
+        state.openNote.tags = JSON.stringify([...cur, t]);
+        renderEditorTags();
+        renderSidebar();
+        renderNoteList({ animate: false });
+        queueSave();
+      }
+    } else if (e.key === 'Backspace' && !input.value && tags.length) {
+      state.openNote.tags = JSON.stringify(tags.slice(0, -1));
+      renderEditorTags();
+      renderSidebar();
+      renderNoteList({ animate: false });
+      queueSave();
+    }
+  });
 }
 
 function applyPreviewMode() {
@@ -711,8 +873,20 @@ function applyPreviewMode() {
   if (showPreview) {
     // THE v0.7 "preview shows old text" fix: always render the LIVE textarea
     // content (state.openNote can lag one autosave tick behind).
-    pv.innerHTML = renderMarkdown($('#ed-text') ? $('#ed-text').value : (state.openNote ? state.openNote.content : ''));
+    // v0.9: rendering never blocks — embedded images arrive through the async
+    // cache and patch themselves in, so clicking Preview can't freeze anymore.
+    const text = $('#ed-text') ? $('#ed-text').value : (state.openNote ? state.openNote.content : '');
+    pv.innerHTML = renderMarkdown(text);
     pv.scrollTop = 0;
+    if (IS_TAURI) {
+      const ids = new Set();
+      const re = /nookimg:\/\/([A-Za-z0-9_-]+)/g;
+      let m;
+      while ((m = re.exec(text)) !== null) ids.add(m[1]);
+      ids.forEach((id) => {
+        if (!imageCache.has(id)) loadImageData(id);
+      });
+    }
   }
   $('#md-bar').classList.toggle('hidden', !state.openNote || showPreview || !!state.openNote.trashed);
 }
@@ -1136,19 +1310,22 @@ async function refreshFolders() {
 }
 
 async function refreshNotes() {
+  const tag = state.activeTag || undefined;
   if (state.view.type === 'search') {
     state.notes = await call('list_notes', {
       view: 'all',
-      query: state.query.trim()
+      query: state.query.trim(),
+      tag
     });
   } else if (state.view.type === 'folder') {
     state.notes = await call('list_notes', {
       view: 'folder',
       folderId: state.view.folderId,
-      sort: state.sort
+      sort: state.sort,
+      tag
     });
   } else {
-    state.notes = await call('list_notes', { view: state.view.type, sort: state.sort });
+    state.notes = await call('list_notes', { view: state.view.type, sort: state.sort, tag });
   }
 }
 
@@ -1276,6 +1453,9 @@ async function selectNote(id) {
     return;
   }
   state.preview = false;
+  // snapshot tags as they exist in the DB right now — flushSave compares
+  // against this to detect tags-only edits
+  savedTagsMap.set(id, typeof state.openNote.tags === 'string' ? state.openNote.tags : JSON.stringify(state.openNote.tags || []));
   openTab(id, state.openNote.title.trim() || 'Untitled note');
   renderNoteList();
   renderEditor();
@@ -1294,6 +1474,7 @@ async function createNote() {
   state.openNote = note;
   state.currentNoteId = note.id;
   state.preview = false;
+  savedTagsMap.set(note.id, '[]');
   openTab(note.id, 'Untitled note');
   if (state.view.type !== 'all' && state.view.type !== 'folder' && state.view.type !== 'search') {
     setView({ type: 'all' });
@@ -1341,7 +1522,9 @@ function queueSave() {
     setSaveState('saving', 'Unsaved — Ctrl+S to save');
     return;
   }
-  setSaveState('saving', 'Saving…');
+  // neutral hint here — flushSave flips it to "Saving…" only when a real
+  // write happens (an early return must never leave a stuck "Saving…")
+  setSaveState('idle', 'Editing…');
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(flushSave, 250);
 }
@@ -1352,14 +1535,24 @@ async function flushSave() {
   if (!n || !pending) return;
   const { title, content } = pending;
   pending = null;
-  if (n.title === title && n.content === content) {
+  // v0.9: tags ride along with every save — and a tags-only change must
+  // still save, so tags join the "anything new?" comparison (against the
+  // last SAVED tags, not the live object the tag editor just mutated).
+  const tagsJson = JSON.stringify(tagsOf(n));
+  // compare against the tags snapshot taken when this note was opened /
+  // last saved — never against n.tags itself (the tag editor mutates it
+  // before flushSave runs, so that compare could not detect anything)
+  const prevTags = savedTagsMap.has(n.id) ? savedTagsMap.get(n.id) : tagsJson;
+  if (n.title === title && n.content === content && prevTags === tagsJson) {
     return; // nothing new since the last save
   }
   n.title = title;
   n.content = content;
+  n.tags = tagsJson;
   state.saving = true;
+  setSaveState('saving', 'Saving…');
   try {
-    await call('save_note', { id: n.id, title, content });
+    await call('save_note', { id: n.id, title, content, tags: n.tags });
   } catch (err) {
     setSaveState('error', 'Save failed');
     toast('Could not save: ' + err.message);
@@ -1367,11 +1560,13 @@ async function flushSave() {
     return;
   }
   state.saving = false;
+  savedTagsMap.set(n.id, tagsJson);
 
   // sync summary + tab label in the list
   const s = state.notes.find((x) => x.id === n.id);
   if (s) {
     s.title = title;
+    s.tags = n.tags;
     const flat = content.replace(/[\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
     s.snippet = flat.length > 180 ? flat.slice(0, 180) + '…' : flat;
     s.updatedAt = Date.now();
@@ -1389,6 +1584,7 @@ async function flushSave() {
       }
     }
     renderNoteList({ animate: false });
+    renderSidebar(); // tags section + counts live here too
   } else {
     refreshNotes().then(() => renderNoteList({ animate: false }));
   }
@@ -1402,6 +1598,139 @@ async function flushSave() {
 }
 
 // ------------------------------------------------------------------ actions ----
+
+// ---- v0.9: Find & Replace (Ctrl+H) ----
+
+let findState = { matches: [], idx: -1 };
+
+function toggleFindBar() {
+  const bar = $('#find-bar');
+  if (!bar) return;
+  if (bar.classList.contains('hidden')) {
+    bar.classList.remove('hidden');
+    $('#find-input').focus();
+    $('#find-input').select();
+    runFind();
+  } else {
+    closeFindBar();
+  }
+}
+
+function closeFindBar() {
+  const bar = $('#find-bar');
+  if (bar) bar.classList.add('hidden');
+  findState = { matches: [], idx: -1 };
+}
+
+function findMatches(text, q) {
+  const res = [];
+  if (!q) return res;
+  const t = text.toLowerCase();
+  const s = q.toLowerCase();
+  let i = 0;
+  while ((i = t.indexOf(s, i)) !== -1) {
+    res.push(i);
+    i += s.length;
+  }
+  return res;
+}
+
+function runFind(jump = true) {
+  const ta = $('#ed-text');
+  const q = $('#find-input').value;
+  if (!ta) return;
+  findState.matches = findMatches(ta.value, q);
+  if (!findState.matches.length) {
+    findState.idx = -1;
+    $('#find-count').textContent = q ? 'No matches' : '';
+    return;
+  }
+  if (jump) {
+    // first match at/after the cursor, else the first one
+    const at = ta.selectionStart || 0;
+    findState.idx = findState.matches.findIndex((p) => p >= at);
+    if (findState.idx === -1) findState.idx = 0;
+  } else {
+    findState.idx = Math.min(findState.idx, findState.matches.length - 1);
+    if (findState.idx < 0) findState.idx = 0;
+  }
+  gotoMatch();
+}
+
+function gotoMatch() {
+  const ta = $('#ed-text');
+  const q = $('#find-input').value;
+  if (!ta || findState.idx < 0 || !findState.matches.length) {
+    $('#find-count').textContent = q ? 'No matches' : '';
+    return;
+  }
+  const start = findState.matches[findState.idx];
+  ta.focus();
+  ta.setSelectionRange(start, start + q.length);
+  $('#find-count').textContent = `${findState.idx + 1} of ${findState.matches.length}`;
+}
+
+function findStep(dir) {
+  if (!findState.matches.length) return;
+  findState.idx = (findState.idx + dir + findState.matches.length) % findState.matches.length;
+  gotoMatch();
+}
+
+function replaceOne() {
+  const ta = $('#ed-text');
+  const q = $('#find-input').value;
+  const r = $('#replace-input').value;
+  if (!ta || !q || !findState.matches.length || findState.idx < 0) return;
+  const start = findState.matches[findState.idx];
+  ta.value = ta.value.slice(0, start) + r + ta.value.slice(start + q.length);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  runFind(false);
+  toast('Replaced', { icon: 'pencil' });
+}
+
+function replaceAll() {
+  const ta = $('#ed-text');
+  const q = $('#find-input').value;
+  const r = $('#replace-input').value;
+  if (!ta || !q) return;
+  const count = findMatches(ta.value, q).length;
+  if (!count) return;
+  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  ta.value = ta.value.replace(re, r);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  $('#find-count').textContent = '';
+  findState = { matches: [], idx: -1 };
+  toast(`Replaced ${count} match${count === 1 ? '' : 'es'}`, { icon: 'pencil' });
+}
+
+// ---- v0.9: daily note — one note per day, made on demand ----
+
+async function openDailyNote() {
+  await flushSave();
+  const d = new Date();
+  const pad = (x) => String(x).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const title = `Daily note — ${stamp}`;
+  const existing = state.notes.find((n) => n.title === title);
+  if (existing) {
+    await selectNote(existing.id);
+    toast('Today\'s note is already here', { icon: 'calendar' });
+    return;
+  }
+  let folderId = state.view.type === 'folder' ? state.view.folderId : state.settings.defaultFolder || null;
+  const note = await call('create_note', { folderId });
+  const content = `# ${title}\n\n## Good things\n- \n\n## To do\n- [ ] \n\n## Notes\n`;
+  await call('save_note', { id: note.id, title, content, tags: '["daily"]' });
+  note.title = title;
+  note.content = content;
+  note.tags = '["daily"]';
+  savedTagsMap.set(note.id, '["daily"]');
+  await refreshAll();
+  await selectNote(note.id);
+  const ta = $('#ed-text');
+  if (ta) ta.setSelectionRange(ta.value.length, ta.value.length);
+  toast('Daily note ready — write away', { icon: 'calendar' });
+}
 
 async function togglePin() {
   const n = state.openNote;
@@ -1571,6 +1900,8 @@ async function openSettings(section) {
   const auto = state.settings.autostart === '1';
   const dline = state.settings.edLine || '1.6';
   const dview = state.settings.defaultView || 'all';
+  const zoom = state.settings.zoom || '100';
+  const tdays = state.settings.trashDays || '0';
   const ai = state.settings.ai;
   const activeId = ai.active || 'openrouter';
 
@@ -1582,30 +1913,32 @@ async function openSettings(section) {
     const apiKey = conf.apiKey || '';
     const needsKey = !!meta.key;
     const suggest = meta.suggestModels || [];
+    const configured = !!model.trim() && (!needsKey || !!apiKey.trim());
     return `
-      <div class="prov-panel">
+      <div class="prov-panel${configured ? ' configured' : ''}">
+        ${configured ? '<div class="prov-ready">' + ico('check') + ' This provider is set up — you can chat right away.</div>' : ''}
         <div class="prov-row">
-          <label>API key ${needsKey ? '' : '<span class="prov-opt">(not needed)</span>'}</label>
+          <label>Step 1 · API key ${needsKey ? '' : '<span class="prov-opt">(not needed)</span>'}</label>
           <div class="prov-keywrap">
-            <input type="password" id="pv-key" value="${esc(apiKey)}" placeholder="${needsKey ? 'Paste your key — it never leaves this PC' : 'No key needed'}" spellcheck="false" autocomplete="off" ${needsKey ? '' : 'disabled'} />
+            <input type="password" id="pv-key" value="${esc(apiKey)}" placeholder="${needsKey ? 'Paste your key — it saves itself' : 'No key needed'}" spellcheck="false" autocomplete="off" ${needsKey ? '' : 'disabled'} />
             <button type="button" class="prov-eye" id="pv-eye" title="Show / hide">${ico('eye')}</button>
           </div>
         </div>
         <div class="prov-row">
-          <label>API base URL</label>
-          <input type="text" id="pv-url" value="${esc(url)}" placeholder="${esc(meta.url || 'https://…')}" spellcheck="false" />
-        </div>
-        <div class="prov-row">
-          <label>Model</label>
+          <label>Step 2 · Model</label>
           <input type="text" id="pv-model" value="${esc(model)}" placeholder="e.g. ${pid === 'zai' ? 'glm-4.6' : pid === 'openai' ? 'gpt-4o-mini' : pid === 'openrouter' ? 'openai/gpt-4o-mini' : 'model-name'}" spellcheck="false" />
         </div>
         <div id="pv-models" class="prov-models"></div>
         ${suggest.length ? `<div class="prov-suggest"><span class="ps-label">Popular models — click one:</span>${suggest.map((m) => `<button type="button" class="pv-model${m === model ? ' on' : ''}" data-m="${esc(m)}">${esc(m)}</button>`).join('')}</div>` : ''}
+        <div class="prov-row">
+          <label>Advanced · API base URL</label>
+          <input type="text" id="pv-url" value="${esc(url)}" placeholder="${esc(meta.url || 'https://…')}" spellcheck="false" />
+        </div>
         <div class="prov-hint">${esc(meta.hint || '')}</div>
         <div class="prov-actions">
           ${meta.models ? '<button class="btn ghost small" id="pv-fetch">Fetch models</button>' : ''}
-          <button class="btn ghost small" id="pv-test">Test connection</button>
-          <span id="pv-status"></span>
+          <button class="btn primary small" id="pv-connect">Save &amp; connect</button>
+          <span id="pv-status">${configured ? '<span style="color:var(--accent)">Ready ✓</span>' : ''}</span>
         </div>
         <div class="prov-note">🔑 Keys are stored only in the local Nook database on this PC — never in backups, never sent anywhere except the provider you picked.</div>
       </div>`;
@@ -1613,201 +1946,244 @@ async function openSettings(section) {
 
   root.innerHTML = `
     <div class="overlay">
-      <div class="modal wide">
-        <h3>Settings</h3>
+      <div class="modal wide set-modal">
+        <h3>${ico('settings')} Settings</h3>
+        <div class="set-tabs" id="set-tabs">
+          <button class="set-tab on" data-tab="look">${ico('palette')}Look</button>
+          <button class="set-tab" data-tab="editor">${ico('pencil')}Editor</button>
+          <button class="set-tab" data-tab="general">${ico('settings')}General</button>
+          <button class="set-tab" data-tab="ai">${ico('sparkle')}AI</button>
+          <button class="set-tab" data-tab="data">${ico('download')}Data</button>
+        </div>
 
-        <div class="set-row" style="display:block">
-          <div class="set-label">Theme</div>
-          <div class="set-sub">Twenty cozy looks — pick your mood.</div>
-          <div class="theme-grid" id="theme-grid">
-            ${THEMES.map((t) => `
-              <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
-                <span class="theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
-                <span class="t-name">${t.name}</span>
-              </button>`).join('')}
+        <div class="set-pages">
+        <!-- ================= LOOK ================= -->
+        <div class="set-page" data-page="look">
+          <div class="set-row" style="display:block">
+            <div class="set-label">Theme</div>
+            <div class="set-sub">24 cozy looks — pick your mood. Applies instantly.</div>
+            <div class="theme-group"><div class="tg-label">🌙 Dark</div>
+              <div class="theme-grid">${THEMES.filter((t) => !t.light).map((t) => `
+                <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
+                  <span class="theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
+                  <span class="t-name">${t.name}</span>
+                </button>`).join('')}
+              </div>
+            </div>
+            <div class="theme-group"><div class="tg-label">☀️ Light</div>
+              <div class="theme-grid">${THEMES.filter((t) => t.light).map((t) => `
+                <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
+                  <span class="theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
+                  <span class="t-name">${t.name}</span>
+                </button>`).join('')}
+              </div>
+            </div>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Note list density</div>
+              <div class="set-sub">Roomy cards or a compact list.</div>
+            </div>
+            <div class="seg" id="seg-density">
+              <button data-v="cozy" class="${den === 'cozy' ? 'on' : ''}">Cozy</button>
+              <button data-v="compact" class="${den === 'compact' ? 'on' : ''}">Compact</button>
+            </div>
           </div>
         </div>
 
-        <div class="set-row">
-          <div>
-            <div class="set-label">Editor text size</div>
-            <div class="set-sub">Comfortable reading, your call.</div>
+        <!-- ================= EDITOR ================= -->
+        <div class="set-page hidden" data-page="editor">
+          <div class="set-row">
+            <div>
+              <div class="set-label">Text size</div>
+              <div class="set-sub">Comfortable reading, your call.</div>
+            </div>
+            <div class="seg" id="seg-font">
+              ${['13', '14', '15', '16', '18', '20'].map((v) => `<button data-v="${v}" class="${fs === v ? 'on' : ''}">${v}px</button>`).join('')}
+            </div>
           </div>
-          <div class="seg" id="seg-font">
-            ${['13', '14', '15', '16', '18', '20'].map((v) => `<button data-v="${v}" class="${fs === v ? 'on' : ''}">${v}px</button>`).join('')}
+          <div class="set-row">
+            <div>
+              <div class="set-label">Editor font</div>
+              <div class="set-sub">How your words look while you write.</div>
+            </div>
+            <div class="seg" id="seg-edfont">
+              <button data-v="sans" class="${ef === 'sans' ? 'on' : ''}">Sans</button>
+              <button data-v="serif" class="${ef === 'serif' ? 'on' : ''}">Serif</button>
+              <button data-v="mono" class="${ef === 'mono' ? 'on' : ''}">Mono</button>
+            </div>
           </div>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Editor font</div>
-            <div class="set-sub">How your words look while you write.</div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Editor width</div>
+              <div class="set-sub">Cozy column or full display.</div>
+            </div>
+            <div class="seg" id="seg-width">
+              <button data-v="normal" class="${ew === 'normal' ? 'on' : ''}">Normal</button>
+              <button data-v="wide" class="${ew === 'wide' ? 'on' : ''}">Wide</button>
+              <button data-v="full" class="${ew === 'full' ? 'on' : ''}">Full</button>
+            </div>
           </div>
-          <div class="seg" id="seg-edfont">
-            <button data-v="sans" class="${ef === 'sans' ? 'on' : ''}">Sans</button>
-            <button data-v="serif" class="${ef === 'serif' ? 'on' : ''}">Serif</button>
-            <button data-v="mono" class="${ef === 'mono' ? 'on' : ''}">Mono</button>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Line spacing</div>
+              <div class="set-sub">How airy your paragraphs feel.</div>
+            </div>
+            <div class="seg" id="seg-edline">
+              <button data-v="1.5" class="${dline === '1.5' ? 'on' : ''}">Snug</button>
+              <button data-v="1.6" class="${dline === '1.6' ? 'on' : ''}">Cozy</button>
+              <button data-v="1.8" class="${dline === '1.8' ? 'on' : ''}">Airy</button>
+              <button data-v="2" class="${dline === '2' ? 'on' : ''}">Roomy</button>
+            </div>
           </div>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Editor width</div>
-            <div class="set-sub">Cozy column or full display.</div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Realtime autosave</div>
+              <div class="set-sub">Save as you type (also on blur & close). Off = save manually with Ctrl+S.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-autosave"${asv ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
           </div>
-          <div class="seg" id="seg-width">
-            <button data-v="normal" class="${ew === 'normal' ? 'on' : ''}">Normal</button>
-            <button data-v="wide" class="${ew === 'wide' ? 'on' : ''}">Wide</button>
-            <button data-v="full" class="${ew === 'full' ? 'on' : ''}">Full</button>
-          </div>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Note list density</div>
-            <div class="set-sub">Roomy cards or a compact list.</div>
-          </div>
-          <div class="seg" id="seg-density">
-            <button data-v="cozy" class="${den === 'cozy' ? 'on' : ''}">Cozy</button>
-            <button data-v="compact" class="${den === 'compact' ? 'on' : ''}">Compact</button>
-          </div>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Editor line spacing</div>
-            <div class="set-sub">How airy your paragraphs feel.</div>
-          </div>
-          <div class="seg" id="seg-edline">
-            <button data-v="1.5" class="${dline === '1.5' ? 'on' : ''}">Snug</button>
-            <button data-v="1.6" class="${dline === '1.6' ? 'on' : ''}">Cozy</button>
-            <button data-v="1.8" class="${dline === '1.8' ? 'on' : ''}">Airy</button>
-            <button data-v="2" class="${dline === '2' ? 'on' : ''}">Roomy</button>
-          </div>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Open Nook on</div>
-            <div class="set-sub">Where the app lands when it starts.</div>
-          </div>
-          <select id="set-defaultview" class="set-select">
-            <option value="all"${dview === 'all' ? ' selected' : ''}>All Notes</option>
-            <option value="favorites"${dview === 'favorites' ? ' selected' : ''}>Favorites</option>
-            <option value="tasks"${dview === 'tasks' ? ' selected' : ''}>Tasks</option>
-            <option value="board"${dview === 'board' ? ' selected' : ''}>Board</option>
-          </select>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Realtime autosave</div>
-            <div class="set-sub">Save as you type (also on blur & close). Off = save manually with Ctrl+S.</div>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="set-autosave"${asv ? ' checked' : ''} />
-            <span class="track"></span>
-          </label>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Spell check</div>
-            <div class="set-sub">Browser spellcheck inside the editor.</div>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="set-spellcheck"${spc ? ' checked' : ''} />
-            <span class="track"></span>
-          </label>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Default folder for new notes</div>
-            <div class="set-sub">New notes land here (unless you're inside a folder).</div>
-          </div>
-          <select id="set-deffolder" class="set-select">
-            <option value="">Unfiled</option>
-            ${state.folders.map((f) => `<option value="${esc(f.id)}"${state.settings.defaultFolder === f.id ? ' selected' : ''}>${esc(f.name)}</option>`).join('')}
-          </select>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Close button hides to tray</div>
-            <div class="set-sub">Nook keeps running (reminders still fire) — reopen it from the tray icon.</div>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="set-ctt"${ctt ? ' checked' : ''} />
-            <span class="track"></span>
-          </label>
-        </div>
-
-        <div class="set-row">
-          <div>
-            <div class="set-label">Start Nook when I log in</div>
-            <div class="set-sub">Launches quietly in the background with Windows.</div>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="set-autostart"${auto ? ' checked' : ''} />
-            <span class="track"></span>
-          </label>
-        </div>
-
-        <div class="set-row" style="display:block" id="sec-ai">
-          <div class="set-label">Nook AI — bring your own key</div>
-          <div class="set-sub">Chat with an AI, summarize notes, pull action items into tasks. Works with OpenRouter, Z.ai (GLM), OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio — any OpenAI-compatible endpoint.</div>
-          <div class="prov-grid" id="prov-grid">
-            ${AI_PROVIDERS.map((p) => {
-              const conf = ai.providers[p.id] || {};
-              const configured = !!(conf.model || '').trim() && (!p.key || !!(conf.apiKey || '').trim());
-              return `<button class="prov-chip${activeId === p.id ? ' on' : ''}${configured ? ' ready' : ''}" data-p="${p.id}" title="${esc(p.name)}">
-                <span class="pc-name">${esc(p.name)}</span>
-                ${configured ? '<span class="pc-dot"></span>' : ''}
-              </button>`;
-            }).join('')}
-          </div>
-          <div id="prov-panel">${providerPanel(activeId)}</div>
-          <div class="prov-row" style="margin-top:10px">
-            <label>AI personality (system prompt)</label>
-            <textarea id="ai-sysprompt" rows="2" spellcheck="false" class="prov-sys">${esc(ai.systemPrompt || '')}</textarea>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Spell check</div>
+              <div class="set-sub">Browser spellcheck inside the editor.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-spellcheck"${spc ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
           </div>
         </div>
 
-        <div class="set-row">
-          <div>
-            <div class="set-label">Import notes</div>
-            <div class="set-sub">Bring in .md or .txt files as notes.</div>
+        <!-- ================= GENERAL ================= -->
+        <div class="set-page hidden" data-page="general">
+          <div class="set-row">
+            <div>
+              <div class="set-label">Zoom</div>
+              <div class="set-sub">Make the whole app bigger or smaller.</div>
+            </div>
+            <div class="seg" id="seg-zoom">
+              ${['90', '100', '110', '125'].map((v) => `<button data-v="${v}" class="${zoom === v ? 'on' : ''}">${v}%</button>`).join('')}
+            </div>
           </div>
-          <div class="set-actions">
-            <button class="btn ghost" id="btn-import-notes">${ico('upload')}Import files</button>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Open Nook on</div>
+              <div class="set-sub">Where the app lands when it starts.</div>
+            </div>
+            <select id="set-defaultview" class="set-select">
+              <option value="all"${dview === 'all' ? ' selected' : ''}>All Notes</option>
+              <option value="favorites"${dview === 'favorites' ? ' selected' : ''}>Favorites</option>
+              <option value="tasks"${dview === 'tasks' ? ' selected' : ''}>Tasks</option>
+              <option value="board"${dview === 'board' ? ' selected' : ''}>Board</option>
+            </select>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Default folder for new notes</div>
+              <div class="set-sub">New notes land here (unless you're inside a folder).</div>
+            </div>
+            <select id="set-deffolder" class="set-select">
+              <option value="">Unfiled</option>
+              ${state.folders.map((f) => `<option value="${esc(f.id)}"${state.settings.defaultFolder === f.id ? ' selected' : ''}>${esc(f.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Empty trash automatically</div>
+              <div class="set-sub">Notes in the trash get removed after this many days.</div>
+            </div>
+            <select id="set-trashdays" class="set-select">
+              <option value="0"${tdays === '0' ? ' selected' : ''}>Never</option>
+              <option value="7"${tdays === '7' ? ' selected' : ''}>After 7 days</option>
+              <option value="30"${tdays === '30' ? ' selected' : ''}>After 30 days</option>
+              <option value="90"${tdays === '90' ? ' selected' : ''}>After 90 days</option>
+            </select>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Close button hides to tray</div>
+              <div class="set-sub">Nook keeps running (reminders still fire) — reopen it from the tray icon.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-ctt"${ctt ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Start Nook when I log in</div>
+              <div class="set-sub">Launches quietly in the background with Windows.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-autostart"${auto ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
           </div>
         </div>
 
-        <div class="set-row">
-          <div>
-            <div class="set-label">Backup</div>
-            <div class="set-sub">Save everything to a file, or restore it on another PC. (API keys are never included.)</div>
-          </div>
-          <div class="set-actions">
-            <button class="btn ghost" id="btn-backup-export">${ico('download')}Export</button>
-            <button class="btn ghost" id="btn-backup-import">${ico('upload')}Import</button>
+        <!-- ================= AI ================= -->
+        <div class="set-page hidden" data-page="ai">
+          <div class="set-row" style="display:block" id="sec-ai">
+            <div class="set-label">Nook AI — bring your own key</div>
+            <div class="set-sub">Pick a provider, paste the key, hit <b>Save &amp; connect</b>. Works with OpenRouter, Z.ai (GLM), OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio.</div>
+            <div class="prov-grid" id="prov-grid">
+              ${AI_PROVIDERS.map((p) => {
+                const conf = ai.providers[p.id] || {};
+                const configured = !!(conf.model || '').trim() && (!p.key || !!(conf.apiKey || '').trim());
+                return `<button class="prov-chip${activeId === p.id ? ' on' : ''}${configured ? ' ready' : ''}" data-p="${p.id}" title="${esc(p.name)}">
+                  <span class="pc-name">${esc(p.name)}</span>
+                  ${configured ? '<span class="pc-dot"></span>' : ''}
+                </button>`;
+              }).join('')}
+            </div>
+            <div id="prov-panel">${providerPanel(activeId)}</div>
+            <div class="prov-row" style="margin-top:10px">
+              <label>AI personality (system prompt)</label>
+              <textarea id="ai-sysprompt" rows="2" spellcheck="false" class="prov-sys">${esc(ai.systemPrompt || '')}</textarea>
+            </div>
           </div>
         </div>
 
-        <div class="set-row">
-          <div>
-            <div class="set-label">Your data</div>
-            <div class="set-sub">Everything lives right here on this PC — notes never leave it.</div>
-            <div class="data-path">${esc(dataPath)}\\nook.db</div>
+        <!-- ================= DATA ================= -->
+        <div class="set-page hidden" data-page="data">
+          <div class="set-row">
+            <div>
+              <div class="set-label">Import notes</div>
+              <div class="set-sub">Bring in .md or .txt files as notes.</div>
+            </div>
+            <div class="set-actions">
+              <button class="btn ghost" id="btn-import-notes">${ico('upload')}Import files</button>
+            </div>
           </div>
-          <button class="btn ghost" id="btn-open-data">Open folder</button>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Backup</div>
+              <div class="set-sub">Save everything to a file, or restore it on another PC. (API keys are never included.)</div>
+            </div>
+            <div class="set-actions">
+              <button class="btn ghost" id="btn-backup-export">${ico('download')}Export</button>
+              <button class="btn ghost" id="btn-backup-import">${ico('upload')}Import</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Your data</div>
+              <div class="set-sub">Everything lives right here on this PC — notes never leave it.</div>
+              <div class="data-path">${esc(dataPath)}\\nook.db</div>
+            </div>
+            <button class="btn ghost" id="btn-open-data">Open folder</button>
+          </div>
+          <div class="about-box">
+            ${frogSvg}
+            <div class="ab-text"><b>Nook v0.9.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real 🐸</div>
+          </div>
+        </div>
         </div>
 
-        <div class="about-box">
-          ${frogSvg}
-          <div class="ab-text"><b>Nook v0.8.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real 🐸</div>
-        </div>
         <div class="modal-actions">
           <button class="btn ghost" data-x="shortcuts">Shortcuts</button>
           <button class="btn primary" data-x="close">Done</button>
@@ -1823,21 +2199,24 @@ async function openSettings(section) {
   });
   root.querySelector('#btn-open-data').addEventListener('click', () => call('reveal_data_dir'));
 
-  if (section === 'ai') {
-    setTimeout(() => {
-      const el = root.querySelector('#sec-ai');
-      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); }
-    }, 60);
-  }
+  // v0.9 — tabbed settings: one clear page per topic
+  const showTab = (name) => {
+    root.querySelectorAll('.set-tab').forEach((el) => el.classList.toggle('on', el.dataset.tab === name));
+    root.querySelectorAll('.set-page').forEach((el) => el.classList.toggle('hidden', el.dataset.page !== name));
+  };
+  root.querySelectorAll('.set-tab').forEach((el) => {
+    el.addEventListener('click', () => showTab(el.dataset.tab));
+  });
+  showTab(section === 'ai' ? 'ai' : section === 'data' ? 'data' : section === 'editor' ? 'editor' : 'look');
 
   const setSetting = async (key, value) => {
     await call('set_setting', { key, value });
   };
 
-  root.querySelectorAll('#theme-grid .theme-chip').forEach((b) => {
+  root.querySelectorAll('.theme-chip').forEach((b) => {
     b.addEventListener('click', async () => {
       state.settings.theme = b.dataset.t;
-      root.querySelectorAll('#theme-grid .theme-chip').forEach((x) => x.classList.toggle('on', x === b));
+      root.querySelectorAll('.theme-chip').forEach((x) => x.classList.toggle('on', x === b));
       await setSetting('theme', b.dataset.t);
       applySettings();
     });
@@ -1886,6 +2265,23 @@ async function openSettings(section) {
       await setSetting('edLine', b.dataset.v);
       applySettings();
     });
+  });
+
+  // v0.9 — zoom + trash auto-cleanup
+  root.querySelectorAll('#seg-zoom button').forEach((b) => {
+    b.addEventListener('click', async () => {
+      state.settings.zoom = b.dataset.v;
+      root.querySelectorAll('#seg-zoom button').forEach((x) => x.classList.toggle('on', x === b));
+      await setSetting('zoom', b.dataset.v);
+      applySettings();
+      toast(`Zoom ${b.dataset.v}%`);
+    });
+  });
+
+  root.querySelector('#set-trashdays').addEventListener('change', async (e) => {
+    state.settings.trashDays = e.target.value;
+    await setSetting('trashDays', state.settings.trashDays);
+    toast(e.target.value === '0' ? 'Trash keeps notes forever' : `Trash empties after ${e.target.value} days`);
   });
 
   root.querySelector('#set-defaultview').addEventListener('change', async (e) => {
@@ -1973,6 +2369,7 @@ async function openSettings(section) {
     };
 
     const keyInput = panel.querySelector('#pv-key');
+    const modelInput2 = panel.querySelector('#pv-model');
     if (keyInput && !keyInput.disabled) {
       // v0.8 FIX: save WHILE typing (debounced) — not only on blur. Before,
       // a pasted key could be lost if the panel was re-rendered first, and
@@ -1984,7 +2381,19 @@ async function openSettings(section) {
         refreshProvChips();
         status.innerHTML = '<span style="color:var(--accent)">Key saved ✓</span>';
         const meta2 = AI_PROVIDERS.find((p) => p.id === pid);
-        if (meta2?.models && confOf().apiKey) {
+        // v0.9: no model picked yet? fetch one automatically — a bare key
+        // used to sit there "not working" until a model was chosen by hand.
+        if (!confOf().model) {
+          if (meta2?.models && confOf().apiKey) {
+            fetchModelsSilently(true);
+          } else if (meta2?.suggestModels?.length) {
+            confOf().model = meta2.suggestModels[0];
+            if (modelInput2) modelInput2.value = meta2.suggestModels[0];
+            await saveAi();
+            refreshProvChips();
+            status.innerHTML = `<span style="color:var(--accent)">Key saved ✓ · model auto-set to ${esc(meta2.suggestModels[0])}</span>`;
+          }
+        } else if (meta2?.models && confOf().apiKey) {
           fetchModelsSilently();
         }
       };
@@ -2022,7 +2431,7 @@ async function openSettings(section) {
       await saveAi();
     });
 
-    const fetchModelsSilently = async () => {
+    const fetchModelsSilently = async (autoPick = false) => {
       const box = panel.querySelector('#pv-models');
       if (!box) return;
       box.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Fetching models…</span>';
@@ -2033,6 +2442,15 @@ async function openSettings(section) {
           return;
         }
         renderModelButtons(models);
+        if (autoPick && !confOf().model) {
+          confOf().model = models[0];
+          const mi = panel.querySelector('#pv-model');
+          if (mi) mi.value = models[0];
+          await saveAi();
+          renderModelButtons(models);
+          refreshProvChips();
+          status.innerHTML = `<span style="color:var(--accent)">Model auto-set to ${esc(models[0])}</span>`;
+        }
       } catch (err) {
         box.innerHTML = `<span class="pv-mini" style="color:var(--danger)">${esc(err.message)}</span>`;
       }
@@ -2078,25 +2496,28 @@ async function openSettings(section) {
       });
     }
 
-    const testBtn = panel.querySelector('#pv-test');
-    testBtn.addEventListener('click', async () => {
-      confOf().url = urlInput.value.trim();
-      confOf().model = modelInput.value.trim();
-      confOf().apiKey = keyInput && !keyInput.disabled ? keyInput.value.trim() : confOf().apiKey;
-      await saveAi();
-      if (!confOf().model) {
-        status.innerHTML = '<span style="color:var(--warn)">Pick a model first</span>';
-        return;
-      }
-      status.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Testing…</span>';
-      try {
-        const reply = await call('ai_test', { baseUrl: confOf().url, apiKey: confOf().apiKey || null, model: confOf().model });
-        status.innerHTML = `<span style="color:var(--accent)">${esc(reply)}</span>`;
-        refreshProvChips();
-      } catch (err) {
-        status.innerHTML = `<span style="color:var(--danger)">${esc(err.message)}</span>`;
-      }
-    });
+    const connectBtn = panel.querySelector('#pv-connect');
+    if (connectBtn) {
+      connectBtn.addEventListener('click', async () => {
+        confOf().url = urlInput.value.trim();
+        confOf().model = modelInput2 ? modelInput2.value.trim() : confOf().model;
+        confOf().apiKey = keyInput && !keyInput.disabled ? keyInput.value.trim() : confOf().apiKey;
+        await saveAi();
+        if (!confOf().model) {
+          status.innerHTML = '<span style="color:var(--warn)">Pick a model first (or click a popular one below)</span>';
+          return;
+        }
+        status.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Connecting…</span>';
+        try {
+          const reply = await call('ai_test', { baseUrl: confOf().url, apiKey: confOf().apiKey || null, model: confOf().model });
+          status.innerHTML = `<span style="color:var(--accent)">${esc(reply)}</span>`;
+          refreshProvChips();
+          toast('AI connected — you can chat now!', { icon: 'sparkle' });
+        } catch (err) {
+          status.innerHTML = `<span style="color:var(--danger)">${esc(err.message)}</span>`;
+        }
+      });
+    }
   };
 
   root.querySelectorAll('#prov-grid .prov-chip').forEach((chip) => {
@@ -2155,6 +2576,7 @@ function openShortcuts() {
     ['Quick switcher', 'Ctrl + K'],
     ['Save now', 'Ctrl + S'],
     ['Preview markdown', 'Ctrl + E'],
+    ['Find & replace', 'Ctrl + H'],
     ['Bold / Italic', 'Ctrl + B / I'],
     ['Duplicate note', 'Ctrl + D'],
     ['Open settings', 'Ctrl + ,'],
@@ -2197,6 +2619,8 @@ async function loadSettings() {
   state.settings.defaultFolder = (await call('get_setting', { key: 'defaultFolder' })) || '';
   state.settings.edLine = (await call('get_setting', { key: 'edLine' })) || '1.6';
   state.settings.defaultView = (await call('get_setting', { key: 'defaultView' })) || 'all';
+  state.settings.zoom = (await call('get_setting', { key: 'zoom' })) || '100';
+  state.settings.trashDays = (await call('get_setting', { key: 'trashDays' })) || '0';
   // AI providers (JSON blob; API keys stay in the local DB, never in backups)
   let ai = null;
   try {
@@ -2245,6 +2669,9 @@ function applySettings() {
   document.body.dataset.edwidth = state.settings.editorWidth || 'normal';
   document.body.dataset.edline = state.settings.edLine || '1.6';
   document.body.dataset.density = state.settings.density || 'cozy';
+  // v0.9: whole-UI zoom
+  const z = Number(state.settings.zoom || '100');
+  document.body.style.zoom = z && z !== 100 ? String(z / 100) : '';
   const ed = $('#ed-text');
   if (ed) ed.spellcheck = state.settings.spellcheck === '1';
 }
@@ -2281,6 +2708,10 @@ function wireShortcuts() {
           applyPreviewMode();
           renderEditorToolbar();
         }
+        break;
+      case 'h':
+        e.preventDefault();
+        if (state.openNote && !state.openNote.trashed) toggleFindBar();
         break;
       case 'b':
         e.preventDefault();
@@ -2383,6 +2814,32 @@ function wireEditor() {
     if (!state.openNote) return;
     queueSave();
   });
+  // v0.9 — find & replace bar
+  $('#find-input').addEventListener('input', () => runFind());
+  $('#find-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      findStep(e.shiftKey ? -1 : 1);
+    } else if (e.key === 'Escape') {
+      closeFindBar();
+      $('#ed-text').focus();
+    }
+  });
+  $('#replace-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      replaceOne();
+    } else if (e.key === 'Escape') {
+      closeFindBar();
+      $('#ed-text').focus();
+    }
+  });
+  $('#find-prev').addEventListener('click', () => findStep(-1));
+  $('#find-next').addEventListener('click', () => findStep(1));
+  $('#replace-one').addEventListener('click', replaceOne);
+  $('#replace-all').addEventListener('click', replaceAll);
+  $('#find-close').addEventListener('click', () => { closeFindBar(); $('#ed-text').focus(); });
+  $('#btn-daily').addEventListener('click', openDailyNote);
   $('#btn-pin').addEventListener('click', togglePin);
   $('#btn-fav').addEventListener('click', toggleFavorite);
   $('#btn-duplicate').addEventListener('click', duplicateCurrent);
@@ -3366,7 +3823,7 @@ async function boardDrop(status, insertBeforeTid) {
     await call('update_task', {
       id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
       dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
-      subtasks: t.subtasks || [], status
+      subtasks: t.subtasks || [], status, position: t.position ?? null
     });
     await Promise.all(
       ids.map((id) => {
@@ -3375,7 +3832,7 @@ async function boardDrop(status, insertBeforeTid) {
         return call('update_task', {
           id: task.id, title: task.title, notes: task.notes || '', priority: task.priority || 0,
           dueAt: task.dueAt ?? null, remindAt: task.remindAt ?? null, repeat: task.repeat || 'none',
-          subtasks: task.subtasks || [], status: task.status ?? 0
+          subtasks: task.subtasks || [], status: task.status ?? 0, position: task.position ?? null
         }).catch(() => {});
       })
     );
@@ -3717,6 +4174,10 @@ async function aiRun(kind) {
     title: {
       system: 'You write short, clear titles. Reply with the title only.',
       prompt: `Suggest a short title (max 6 words) for this note. Reply with only the title.\n\n---\n${n.content.slice(0, 4000)}`
+    },
+    continue: {
+      system: 'You are a writing partner inside a notes app. Continue the text naturally in the same voice, style and language. Output only the continuation — never repeat what is already written. Match the existing formatting (markdown).',
+      prompt: `Continue writing this note from exactly where it stops. Write 3-6 more sentences (or list items if it's a list).\n\n---\n${n.content.slice(-4000)}`
     }
   };
   const cfg = prompts[kind];
@@ -3756,6 +4217,15 @@ async function aiRun(kind) {
       $('#ed-title').value = title;
       queueSave();
       toast('Title updated', { icon: 'sparkle' });
+    } else if (kind === 'continue') {
+      const ta = $('#ed-text');
+      if (!ta || ta.readOnly) return;
+      const glue = ta.value.endsWith('\n') || !ta.value ? '' : '\n';
+      ta.value = ta.value + glue + out + '\n';
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+      toast('AI continued your writing', { icon: 'sparkle' });
     } else {
       showAiResult(out, n);
     }
@@ -3806,6 +4276,7 @@ function openAiMenu() {
   const btn = $('#btn-ai');
   const r = btn.getBoundingClientRect();
   showMenu(r.left, r.bottom + 6, [
+    { label: 'Continue writing', icon: 'wand', key: 'AI', fn: () => aiRun('continue') },
     { label: 'Summarize note', icon: 'sparkle', fn: () => aiRun('summarize') },
     { label: 'Extract action items → tasks', icon: 'checkSq', fn: () => aiRun('actions') },
     { label: 'Suggest title', icon: 'pencil', fn: () => aiRun('title') },
@@ -3824,16 +4295,21 @@ function updateChatStatus() {
   const el = $('#cv-status');
   if (!el) return;
   const p = activeAiProvider();
-  if (!p) {
-    el.innerHTML = 'No AI provider yet — <button class="linklike" id="cv-goset">open Settings</button> to add a key (OpenRouter, Z.ai, OpenAI, Groq, Gemini, Ollama…).';
-  } else if (!p.ready) {
-    el.innerHTML = `<b>${esc(p.meta ? p.meta.name : p.url)}</b> selected but not configured — add ${p.meta && p.meta.key ? 'a key & ' : ''}a model in <button class="linklike" id="cv-goset">Settings</button>.`;
+  if (!p || !p.ready) {
+    el.innerHTML = `<span class="cv-pill warn">${ico('sparkle')} AI not set up yet — <button class="linklike" id="cv-goset">connect your key in Settings</button></span>`;
   } else {
-    el.innerHTML = `Talking to <b>${esc(p.meta ? p.meta.name : 'AI')}</b> · <span class="cv-model">${esc(p.model)}</span>`;
+    el.innerHTML = `<span class="cv-pill ok">${ico('checkSq')} ${esc(p.meta ? p.meta.name : 'AI')} · <span class="cv-model">${esc(p.model)}</span></span><span class="cv-pill dim">keys stay on this PC</span>`;
   }
   const go = el.querySelector('#cv-goset');
   if (go) go.addEventListener('click', () => openSettings('ai'));
 }
+
+const CHAT_SUGGESTIONS = [
+  'Brainstorm 10 ideas for my next project',
+  'Plan my day in 3 priority blocks',
+  'Explain a hard topic simply',
+  'Write a short email for me'
+];
 
 function chatBubbleHtml(m) {
   const isUser = m.role === 'user';
@@ -3847,8 +4323,8 @@ function chatBubbleHtml(m) {
         <div class="cv-content">${body}</div>
         ${!isUser && m.id ? `
         <div class="cv-msg-actions">
-          <button class="cv-act" data-act="copy" title="Copy">Copy</button>
-          <button class="cv-act" data-act="note" title="Append to the current note">→ Note</button>
+          <button class="cv-act" data-act="copy" title="Copy">${ico('copy')} Copy</button>
+          <button class="cv-act" data-act="note" title="Append to the current note">${ico('pencil')} → Note</button>
         </div>` : ''}
       </div>
     </div>`;
@@ -3863,7 +4339,18 @@ function renderChatMessages() {
         ${frogSvg}
         <div><b>Ask me anything</b></div>
         <div>Draft ideas, summarize your notes, plan your day.<br/>Chats are saved on this PC only.</div>
+        <div class="cv-suggest">
+          ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s)}">${esc(s)}</button>`).join('')}
+        </div>
       </div>`;
+    box.querySelectorAll('.cv-sug').forEach((b) => {
+      b.addEventListener('click', () => {
+        const input = $('#cv-input');
+        input.value = b.dataset.s;
+        input.focus();
+        autoGrowChatInput();
+      });
+    });
     return;
   }
   box.innerHTML = state.chatMsgs.map(chatBubbleHtml).join('');
@@ -3998,7 +4485,7 @@ async function sendChat() {
   box.insertAdjacentHTML('beforeend', `
     <div class="cv-msg bot streaming" id="cv-streaming">
       <div class="cv-avatar">${frogSvg}</div>
-      <div class="cv-bubble"><div class="cv-content"><span class="ai-loading"><span class="ai-spin"></span>Thinking…</span></div></div>
+      <div class="cv-bubble"><div class="cv-content"><span class="cv-typing"><i></i><i></i><i></i></span></div></div>
     </div>`);
   box.scrollTop = box.scrollHeight;
   updateChatComposer();
@@ -4010,7 +4497,7 @@ async function sendChat() {
       await new Promise((r) => setTimeout(r, 40));
       state.aiStreamText += (state.aiStreamText ? ' ' : '') + w;
       const el = $('#cv-streaming .cv-content');
-      if (el) el.innerHTML = renderMarkdown(state.aiStreamText);
+      if (el) el.innerHTML = renderMarkdown(state.aiStreamText) + '<span class="cv-cursor"></span>';
     }
     finishChatStream();
     return;
@@ -4051,7 +4538,7 @@ function handleAiEvent(p) {
     state.aiStreamText += p.delta;
     const el = $('#cv-streaming .cv-content');
     if (el) {
-      el.innerHTML = renderMarkdown(state.aiStreamText);
+      el.innerHTML = renderMarkdown(state.aiStreamText) + '<span class="cv-cursor"></span>';
       const box = $('#cv-messages');
       box.scrollTop = box.scrollHeight;
     }
@@ -4092,6 +4579,11 @@ function autoGrowChatInput() {
 }
 
 function wireChatView() {
+  // v0.9 — chat header logo + send icon
+  const logo = document.querySelector('.cv-logo');
+  if (logo) logo.innerHTML = frogSvg;
+  const sendBtn = $('#cv-send');
+  if (sendBtn) sendBtn.innerHTML = ico('send');
   $('#cv-new').addEventListener('click', async () => {
     if (state.aiStreaming) { toast('Wait for the reply to finish (or press Stop)', { icon: 'sparkle' }); return; }
     const c = await call('create_chat', {});
@@ -4430,13 +4922,17 @@ function openGuide() {
     ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, images and more. Filter by typing.'],
     ['Images in notes', 'Paste an image straight into the editor (<b>Ctrl+V</b>), drag an image file onto the page, or use the 🖼️ button / <b>/image</b>. Images live inside your local database, render in preview, and click to zoom.'],
     ['Mention notes', 'Type <b>@</b> anywhere in a note to link another note — it becomes a [[wiki-link]]. Click one in preview to jump there. Below the editor you\'ll see <b>Linked from</b> — which notes point here.'],
-    ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order, click a card to edit details in Tasks. Each column has its own + button.'],
+    ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order, click a card to edit details in Tasks. Each column has its own + button. Card order sticks after restart.'],
+    ['Tags', 'Under the editor there\'s a <b>+ tag</b> box — type a tag and press Enter. Tags show on note cards and in the sidebar; click one to filter. Backspace in the box removes the last tag.'],
+    ['Find & Replace', 'Press <b>Ctrl+H</b> in any note — find with match counter, Enter/Shift+Enter to hop between matches, replace one or everything. Esc closes.'],
+    ['Daily note', 'The <b>📅 Today</b> button in the list header opens (or creates) today\'s dated note, tagged <b>#daily</b> — one tidy page per day.'],
     ['Tabs', 'Open as many notes as you want — each gets a tab. Drag tabs to reorder, middle-click or × closes one. Right-click a tab to close others.'],
     ['Tasks & reminders', 'Add a task, press the ⌄ to open details: <b>due date</b>, <b>reminder</b>, <b>priority</b>, <b>repeat</b> and <b>subtasks</b>. Nook notifies you at reminder time.'],
     ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Start/stop never freezes the app, even if the mic is slow. Play, rename, export or delete anytime.'],
     ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Paste your key and it saves instantly; models appear to click. The 📎 button gives the AI your current note as context. Keys stay on this PC.'],
-    ['Note tools with AI', 'The ✨ button summarizes the open note, extracts action items straight into Tasks, or suggests a title — through the same provider you configured.'],
-    ['Themes', 'Settings → Theme — <b>20 looks</b>. Dark and light. Plus editor size/font/width/line-spacing, note density, default folder, opening view, autosave and spellcheck toggles, start-with-Windows.'],
+    ['Note tools with AI', 'The ✨ button can <b>continue writing</b> where you stopped, summarize the open note, extract action items straight into Tasks, or suggest a title — through the same provider you configured.'],
+    ['Markdown extras', 'Preview supports tables (<code>| a | b |</code> over <code>|---|---|</code>), <code>==highlight==</code>, <code>~~strikethrough~~</code>, checklists, code blocks and [[wiki-links]].'],
+    ['Themes', 'Settings → Look — <b>24 looks</b>, dark and light, grouped. Plus zoom, editor size/font/width/line-spacing, note density, default folder, opening view, autosave, spellcheck, trash auto-cleanup and start-with-Windows.'],
     ['Backup', 'Settings → Backup — export everything to a file and import it anywhere. Your images come along; API keys never do.'],
     ['Shortcuts', 'Press <b>Ctrl+/</b> anytime for the full list.']
   ];
