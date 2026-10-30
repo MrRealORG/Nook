@@ -163,7 +163,7 @@ fn capture_session(
 
     let host = cpal::default_host();
     let dev = match device.as_deref().filter(|s| !s.is_empty()) {
-        Some(name) => match host.input_devices().map_err(es).and_then(|ds| {
+        Some(name) => match host.input_devices().map_err(es).and_then(|mut ds| {
             ds.find(|d| d.name().map(|n| n == name).unwrap_or(false))
                 .ok_or_else(|| format!("Microphone \"{name}\" not found"))
         }) {
