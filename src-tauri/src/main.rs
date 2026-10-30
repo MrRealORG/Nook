@@ -980,8 +980,7 @@ fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option<Stats
     let stats = {
         let mut conn = db(&state);
         let bounds = get_kv(&conn, "window_bounds");
-        let tx = conn.transaction().map_err(es);
-        let tx = match tx {
+        let tx = match conn.transaction() {
             Ok(t) => t,
             Err(e) => return Err(es(e)),
         };
