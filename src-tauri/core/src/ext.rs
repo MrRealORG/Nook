@@ -914,6 +914,9 @@ pub fn maintenance(c: &Connection, now: i64) -> Vec<Value> {
     out
 }
 
+/// The desktop shell's maintenance loop (reminders, goals, retention, tray text) runs this often.
+pub const MAINTENANCE_SECS: u64 = 60;
+
 pub fn maintenance_db(db: &Db) -> Vec<Value> {
     maintenance(&db.conn(), now_ms())
 }

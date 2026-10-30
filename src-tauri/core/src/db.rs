@@ -251,6 +251,25 @@ CREATE TABLE IF NOT EXISTS "TimeSpan" (
 CREATE INDEX IF NOT EXISTS "TimeSpan_start_idx" ON "TimeSpan"("start");
 CREATE INDEX IF NOT EXISTS "TimeSpan_end_idx" ON "TimeSpan"("end");
 "#,
+    // v1.2 — Timelens app registry (exe path, cached icon, category override, exclusion) + favicon cache
+    r#"
+CREATE TABLE IF NOT EXISTS "TimelensApp" (
+  "app" TEXT NOT NULL PRIMARY KEY,
+  "exe" TEXT NOT NULL DEFAULT '',
+  "icon" TEXT NOT NULL DEFAULT '',
+  "iconAt" INTEGER NOT NULL DEFAULT 0,
+  "category" TEXT,
+  "excluded" INTEGER NOT NULL DEFAULT 0,
+  "firstSeen" INTEGER NOT NULL DEFAULT 0,
+  "lastSeen" INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS "TimelensFavicon" (
+  "domain" TEXT NOT NULL PRIMARY KEY,
+  "data" TEXT NOT NULL DEFAULT '',
+  "fetchedAt" INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS "TimeSpan_app_idx" ON "TimeSpan"("app");
+"#,
 ];
 
 impl Db {

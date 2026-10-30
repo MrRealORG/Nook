@@ -3,6 +3,7 @@
 
 mod desktop;
 mod keystore;
+pub mod perf;
 
 use base64::Engine;
 use desktop::DesktopSettings;
@@ -102,6 +103,7 @@ async fn app_info(app: AppHandle, state: State<'_, AppState>) -> Result<Value, S
         "mcpError": state.server_error.lock().ok().and_then(|e| e.clone()),
         "lanIp": lan_ip(),
         "updaterConfigured": desktop::updater_pubkey().is_some(),
+        "perf": perf::cap_status(),
         "settings": s,
     }))
 }
@@ -133,6 +135,17 @@ async fn desktop_settings_set(app: AppHandle, state: State<'_, AppState>, patch:
     }
     if before.glass != after.glass {
         desktop::apply_glass(&app, &after.glass);
+    }
+    if before.cpu_cap != after.cpu_cap || before.cpu_cap_on != after.cpu_cap_on {
+        let cap = after.cpu_cap_on.then_some(after.cpu_cap);
+        if let Ok(dir) = app.path().app_data_dir() {
+            perf::write_cap(&dir, cap);
+        }
+        perf::set_cap(cap);
+        perf::adopt_children();
+    }
+    if before.widget_on_top != after.widget_on_top {
+        desktop::set_widget_on_top(&app, after.widget_on_top);
     }
     app_info(app.clone(), state).await
 }
@@ -223,6 +236,13 @@ pub fn run() {
     }
     let start_hidden = args.iter().any(|a| a == "--hidden");
 
+    // CPU budget FIRST: the Job Object (hard cap) must exist before Tauri creates the webview,
+    // so the WebView2 processes are born inside it. The cap lives in a tiny file next to the
+    // vault because the vault itself is opened later, in `setup`.
+    let early_dir = perf::early_data_dir("com.realhackers.nook");
+    let cap = if std::env::var_os("NOOK_NO_CPU_CAP").is_some() { None } else { early_dir.as_deref().map(perf::read_cap).unwrap_or(Some(perf::DEFAULT_CAP_PCT)) };
+    perf::apply_at_startup(cap, true);
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             desktop::show_main(app);
@@ -246,6 +266,7 @@ pub fn run() {
         .setup(move |app| {
             let dir = app.path().app_data_dir()?;
             let db = Db::open(&dir.join("nook.db")).map_err(|e| format!("vault: {e}"))?;
+            nook_core::tlapps::set_icon_dir(dir.join("icons"));
             let keys = keystore::OsKeyStore::new(dir.clone());
             let ctx = Ctx::new(db, Arc::new(AiState::new(Box::new(keys))));
             app.manage(AppState { ctx, server: Mutex::new(None), server_error: std::sync::Mutex::new(None), quitting: AtomicBool::new(false) });
@@ -264,12 +285,18 @@ pub fn run() {
             // Timelens: the background tracker + the minute maintenance loop (reminders, goals, backups)
             nook_core::timelens::start(app.state::<AppState>().ctx.db.clone(), nook_core::timelens::platform_sampler());
             desktop::start_maintenance(app.handle());
+            desktop::start_perf_watch(app.handle());
             if !start_hidden {
                 desktop::show_main(app.handle());
+            } else {
+                desktop::window_state_changed(app.handle());
             }
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Destroyed) {
+                desktop::window_state_changed(window.app_handle());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     let state = window.app_handle().state::<AppState>();
@@ -277,6 +304,7 @@ pub fn run() {
                     if close_to_tray && !state.quitting.load(Ordering::SeqCst) {
                         api.prevent_close();
                         let _ = window.hide();
+                        desktop::window_state_changed(window.app_handle());
                     } else {
                         window.app_handle().exit(0);
                     }

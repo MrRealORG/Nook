@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Main window + desktop widget",
-  "windows": ["main", "widget"],
+  "windows": [
+    "main",
+    "widget"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -15,6 +18,14 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-set-always-on-top",
+    "core:window:allow-is-minimized",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-always-on-bottom",
+    "core:window:allow-scale-factor",
+    "core:window:allow-outer-size",
+    "core:window:allow-inner-size",
+    "core:window:allow-set-min-size",
+    "core:window:allow-set-size",
     "notification:default",
     "opener:allow-open-url",
     "opener:allow-default-urls",

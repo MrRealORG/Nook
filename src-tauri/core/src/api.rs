@@ -122,6 +122,41 @@ fn body_obj(req: &ApiRequest) -> Map<String, Value> {
 }
 
 /// Main entry: route a request to its handler.
+/// Fetch `https://<domain>/favicon.ico` once per domain (Privacy can turn this off) and cache it.
+async fn favicons_fetch(ctx: &Ctx, b: &Map<String, Value>) -> ApiResponse {
+    let now = crate::db::now_ms();
+    let domains: Vec<String> = b.get("domains").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let want = {
+        let c = ctx.db.conn();
+        if !crate::timelens::load_config(&c).favicons {
+            return R::json(json!({ "ok": false, "disabled": true, "favicons": crate::tlapps::favicons_map(&c) }));
+        }
+        crate::tlapps::favicons_missing(&c, &domains, now)
+    };
+    let client = ctx.ai.http().clone();
+    let jobs = want.into_iter().map(|d| {
+        let client = client.clone();
+        async move {
+            let url = format!("https://{d}/favicon.ico");
+            let res = client.get(&url).timeout(std::time::Duration::from_secs(6)).send().await;
+            let data = match res {
+                Ok(r) if r.status().is_success() => match r.bytes().await {
+                    Ok(bytes) => crate::tlapps::favicon_mime(&bytes).map(|m| crate::tlapps::data_url(m, &bytes)).unwrap_or_default(),
+                    Err(_) => String::new(),
+                },
+                _ => String::new(),
+            };
+            (d, data)
+        }
+    });
+    let got = futures_util::future::join_all(jobs).await;
+    let c = ctx.db.conn();
+    for (d, data) in &got {
+        crate::tlapps::favicon_store(&c, d, data, now);
+    }
+    R::json(json!({ "ok": true, "fetched": got.iter().filter(|(_, d)| !d.is_empty()).count(), "favicons": crate::tlapps::favicons_map(&c) }))
+}
+
 pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
     let path = req.path.trim_end_matches('/');
     let rest = path.strip_prefix("/api").unwrap_or(path);
@@ -135,6 +170,7 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
         ("POST", ["ai-chat"]) => return ai_chat(ctx, &b).await,
         ("POST", ["agent-tools"]) => return agent_exec(ctx, &b).await,
         ("POST", ["ai-test"]) => return ai_test(ctx).await,
+        ("POST", ["timelens", "favicons", "fetch"]) => return favicons_fetch(ctx, &b).await,
         _ => {}
     }
     if seg.first() == Some(&"mcp") {

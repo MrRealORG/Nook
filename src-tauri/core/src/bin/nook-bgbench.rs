@@ -16,7 +16,7 @@ impl Sampler for Synthetic {
         self.0 += 1;
         let apps = [("C:\\Program Files\\Microsoft VS Code\\Code.exe", "main.rs — nook"), ("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "Rust docs - Google Chrome"), ("C:\\Windows\\explorer.exe", "Downloads")];
         let (exe, title) = apps[(self.0 / 7) as usize % apps.len()];
-        Some(Sample { exe: exe.into(), title: title.into(), idle_ms: 500, locked: false })
+        Some(Sample { exe: exe.into(), title: title.into(), idle_ms: 500, locked: false, pid: 4242, hwnd: 0x1234 })
     }
 }
 
@@ -46,7 +46,7 @@ fn main() {
     // the desktop shell's maintenance loop (reminders, goals, tray text) — same cadence
     let mdb = db.clone();
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(60));
+        std::thread::sleep(Duration::from_secs(nook_core::ext::MAINTENANCE_SECS));
         let _ = nook_core::ext::maintenance_db(&mdb);
         let _ = timelens::tray_status(&mdb.conn());
     });

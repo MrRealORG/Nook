@@ -1,7 +1,8 @@
 //! Timelens — a local, private, lightweight desktop time tracker (ActivityWatch / RescueTime
-//! in spirit). A background thread samples the foreground window every ~2 s, folds samples
-//! into spans (app, title, start, end, afk) and batch-writes them to the `TimeSpan` table.
-//! Nothing ever leaves the machine.
+//! in spirit). A low-priority background thread samples the foreground window every 5 s
+//! (configurable, never faster), folds samples into spans (app, title, start, end, afk) and
+//! batch-writes them to the `TimeSpan` table once a minute. While AFK / locked / paused it backs
+//! off to a 30 s sleep (woken instantly by a config change). Nothing ever leaves the machine.
 //!
 //! The sampler is a trait so the tracker loop, merging, AFK handling, categories, goals and
 //! retention are all unit-tested with a mock. The Windows sampler uses Win32
@@ -31,6 +32,10 @@ pub struct Sample {
     pub idle_ms: u64,
     /// session locked / screensaver / sleeping
     pub locked: bool,
+    /// process id of the foreground window (0 when unknown) — lets samplers cache exe lookups
+    pub pid: u32,
+    /// the foreground window handle as an integer (0 when unknown)
+    pub hwnd: usize,
 }
 
 /// Anything that can look at the desktop. Mocked in tests.
@@ -62,14 +67,19 @@ impl Merger {
     }
     /// Feed one sample at `ts`; returns the span that just closed, if any.
     pub fn push(&mut self, app: &str, title: &str, afk: bool, ts: i64) -> Option<Span> {
+        self.push_for(app, title, afk, ts, self.interval_ms)
+    }
+    /// Like `push`, but the sample stands for `dur_ms` (the tracker sleeps longer while AFK, so
+    /// one AFK sample covers the whole back-off sleep).
+    pub fn push_for(&mut self, app: &str, title: &str, afk: bool, ts: i64, dur_ms: i64) -> Option<Span> {
         if let Some(c) = self.cur.as_mut() {
             if c.app == app && c.title == title && c.afk == afk && ts - c.end <= self.gap_ms - self.interval_ms && ts >= c.start {
-                c.end = ts + self.interval_ms;
+                c.end = c.end.max(ts + dur_ms);
                 return None;
             }
         }
         let closed = self.cur.take();
-        self.cur = Some(Span { app: app.into(), title: title.into(), start: ts, end: ts + self.interval_ms, afk });
+        self.cur = Some(Span { app: app.into(), title: title.into(), start: ts, end: ts + dur_ms, afk });
         closed
     }
     /// Close the open span (pause, exclusion, shutdown).
@@ -97,11 +107,40 @@ pub struct Config {
     pub rules: Vec<Value>,
     pub goals: Vec<Value>,
     pub auto_journal: bool,
+    /// fetch https://<domain>/favicon.ico once per site (Privacy can turn it off)
+    pub favicons: bool,
+    /// apps excluded from the Apps tab (exact names; hidden from all history too)
+    pub exclude_apps: Vec<String>,
+    /// per-app category overrides (as exact-app rules) followed by the user's rules —
+    /// what categorisation actually uses, so overrides re-categorise history
+    pub all_rules: Vec<Value>,
 }
+
+/// Default sampling interval. 5 s keeps the tracker far below 0.1 % CPU; the minimum is 5.
+pub const DEFAULT_INTERVAL_SECS: u64 = 5;
+pub const MIN_INTERVAL_SECS: u64 = 5;
+/// While AFK / locked / paused the tracker sleeps this long between looks.
+pub const IDLE_SLEEP_SECS: u64 = 30;
+/// Spans are written to SQLite in one batch at most this often.
+pub const FLUSH_SECS: u64 = 60;
 
 impl Default for Config {
     fn default() -> Self {
-        Config { enabled: true, paused: false, afk_secs: 180, interval_secs: 2, exclude: vec![], redact_titles: false, retention_days: 90, rules: vec![], goals: default_goals(), auto_journal: false }
+        Config {
+            enabled: true,
+            paused: false,
+            afk_secs: 180,
+            interval_secs: DEFAULT_INTERVAL_SECS,
+            exclude: vec![],
+            redact_titles: false,
+            retention_days: 90,
+            rules: vec![],
+            goals: default_goals(),
+            auto_journal: false,
+            favicons: true,
+            exclude_apps: vec![],
+            all_rules: vec![],
+        }
     }
 }
 
@@ -115,18 +154,25 @@ fn default_goals() -> Vec<Value> {
 pub fn load_config(c: &Connection) -> Config {
     let raw = setting_get(c, CONFIG_KEY).and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or(Value::Null);
     let d = Config::default();
+    let rules = raw["rules"].as_array().cloned().unwrap_or_default();
+    let mut all_rules = crate::tlapps::override_rules(c);
+    all_rules.extend(rules.iter().cloned());
     let strs = |v: &Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect::<Vec<_>>());
     Config {
         enabled: raw["enabled"].as_bool().unwrap_or(d.enabled),
         paused: raw["paused"].as_bool().unwrap_or(d.paused),
         afk_secs: raw["afkSecs"].as_u64().map(|v| v.clamp(30, 3600)).unwrap_or(d.afk_secs),
-        interval_secs: raw["intervalSecs"].as_u64().map(|v| v.clamp(1, 30)).unwrap_or(d.interval_secs),
+        // 1.1 sampled every 2 s; 1.2 never goes below 5 s (old configs are lifted on load)
+        interval_secs: raw["intervalSecs"].as_u64().map(|v| v.clamp(MIN_INTERVAL_SECS, 60)).unwrap_or(d.interval_secs),
         exclude: strs(&raw["exclude"]).unwrap_or_default(),
         redact_titles: raw["redactTitles"].as_bool().unwrap_or(false),
         retention_days: raw["retentionDays"].as_i64().map(|v| v.clamp(1, 3650)).unwrap_or(d.retention_days),
-        rules: raw["rules"].as_array().cloned().unwrap_or_default(),
+        rules,
         goals: raw["goals"].as_array().cloned().unwrap_or(d.goals),
         auto_journal: raw["autoJournal"].as_bool().unwrap_or(false),
+        favicons: raw["favicons"].as_bool().unwrap_or(true),
+        exclude_apps: crate::tlapps::excluded_apps(c),
+        all_rules,
     }
 }
 
@@ -134,7 +180,8 @@ pub fn config_json(cfg: &Config) -> Value {
     json!({
         "enabled": cfg.enabled, "paused": cfg.paused, "afkSecs": cfg.afk_secs, "intervalSecs": cfg.interval_secs,
         "exclude": cfg.exclude, "redactTitles": cfg.redact_titles, "retentionDays": cfg.retention_days,
-        "rules": cfg.rules, "goals": cfg.goals, "autoJournal": cfg.auto_journal,
+        "rules": cfg.rules, "goals": cfg.goals, "autoJournal": cfg.auto_journal, "favicons": cfg.favicons,
+        "excludeApps": cfg.exclude_apps, "minIntervalSecs": MIN_INTERVAL_SECS,
         "defaultRules": default_rules(),
     })
 }
@@ -144,14 +191,16 @@ pub fn patch_config(c: &Connection, patch: &Map<String, Value>) -> Result<Config
     let mut cur = config_json(&load_config(c));
     if let Value::Object(m) = &mut cur {
         m.remove("defaultRules");
-        for k in ["enabled", "paused", "afkSecs", "intervalSecs", "exclude", "redactTitles", "retentionDays", "rules", "goals", "autoJournal"] {
+        m.remove("excludeApps");
+        m.remove("minIntervalSecs");
+        for k in ["enabled", "paused", "afkSecs", "intervalSecs", "exclude", "redactTitles", "retentionDays", "rules", "goals", "autoJournal", "favicons"] {
             if let Some(v) = patch.get(k) {
                 m.insert(k.into(), v.clone());
             }
         }
     }
     setting_put(c, CONFIG_KEY, &cur.to_string())?;
-    CONFIG_DIRTY.store(true, Ordering::SeqCst);
+    mark_config_dirty();
     Ok(load_config(c))
 }
 
@@ -165,6 +214,15 @@ pub fn set_paused(c: &Connection, paused: Option<bool>) -> Result<bool, String> 
 }
 
 static CONFIG_DIRTY: AtomicBool = AtomicBool::new(true);
+static TRACKER_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
+
+/// Config (or app overrides) changed: the tracker reloads it and wakes from a long sleep now.
+pub fn mark_config_dirty() {
+    CONFIG_DIRTY.store(true, Ordering::SeqCst);
+    if let Some(t) = TRACKER_THREAD.get() {
+        t.unpark();
+    }
+}
 
 // ------------------------------------------------------------------ naming + categories
 
@@ -249,13 +307,15 @@ pub fn categorize(app: &str, title: &str, user_rules: &[Value]) -> &'static str 
     let a = app.to_lowercase();
     let t = title.to_lowercase();
     let site = if is_browser(app) { parse_browser_title(title).1.to_lowercase() } else { String::new() };
-    let defaults = default_rules();
+    static DEFAULTS: OnceLock<Vec<Value>> = OnceLock::new();
+    let defaults = DEFAULTS.get_or_init(default_rules);
     for r in user_rules.iter().chain(defaults.iter()) {
         let m = r["match"].as_str().unwrap_or("").trim().to_lowercase();
         if m.is_empty() {
             continue;
         }
         let hit = match r["field"].as_str().unwrap_or("any") {
+            "appexact" => a == m,
             "app" => a.contains(&m),
             "title" => t.contains(&m) || site.contains(&m),
             _ => a.contains(&m) || t.contains(&m),
@@ -271,7 +331,10 @@ pub fn categorize(app: &str, title: &str, user_rules: &[Value]) -> &'static str 
     "neutral"
 }
 
-fn excluded(cfg: &Config, app: &str, title: &str) -> bool {
+pub fn excluded(cfg: &Config, app: &str, title: &str) -> bool {
+    if cfg.exclude_apps.iter().any(|x| x.eq_ignore_ascii_case(app)) {
+        return true;
+    }
     let a = app.to_lowercase();
     let t = title.to_lowercase();
     cfg.exclude.iter().any(|x| {
@@ -448,35 +511,95 @@ pub fn fmt_secs(s: i64) -> String {
 
 // ------------------------------------------------------------------ stats
 
+/// A stretch of uninterrupted productive work at least this long counts as "focused".
+pub const FOCUS_BLOCK_MIN_SECS: i64 = 10 * 60;
+
+/// Focused time: Pomodoro/focus sessions plus productive stretches of ≥ 10 min where nothing
+/// distracting (and no AFK) interrupts; neutral blips under a minute don't break a stretch.
+pub fn focused_secs(rows: &[(i64, i64, &'static str)], focus_sessions: &[(i64, i64)]) -> (i64, Vec<(i64, i64)>) {
+    let mut blocks: Vec<(i64, i64)> = vec![];
+    let mut cur: Option<(i64, i64)> = None;
+    for &(start, end, cat) in rows {
+        let breaks = cat == "distracting" || cat == "afk" || (cat == "neutral" && end - start >= 60_000);
+        match (cur.as_mut(), breaks, cat == "productive") {
+            (Some(c), false, _) if start - c.1 <= 60_000 => {
+                if cat == "productive" {
+                    c.1 = end;
+                }
+            }
+            _ => {
+                if let Some(c) = cur.take() {
+                    if c.1 - c.0 >= FOCUS_BLOCK_MIN_SECS * 1000 {
+                        blocks.push(c);
+                    }
+                }
+                if !breaks && cat == "productive" {
+                    cur = Some((start, end));
+                }
+            }
+        }
+    }
+    if let Some(c) = cur.take() {
+        if c.1 - c.0 >= FOCUS_BLOCK_MIN_SECS * 1000 {
+            blocks.push(c);
+        }
+    }
+    blocks.extend(focus_sessions.iter().copied());
+    blocks.sort();
+    // union of overlapping blocks
+    let mut merged: Vec<(i64, i64)> = vec![];
+    for b in blocks {
+        match merged.last_mut() {
+            Some(l) if b.0 <= l.1 => l.1 = l.1.max(b.1),
+            _ => merged.push(b),
+        }
+    }
+    (merged.iter().map(|(a, b)| (b - a) / 1000).sum(), merged)
+}
+
 /// Full stats for [from, to).
 pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
     let cfg = load_config(c);
-    let rows = spans_in(c, from, to);
+    let rows: Vec<Row> = spans_in(c, from, to).into_iter().filter(|r| r.focus || r.afk || !excluded(&cfg, &r.app, &r.title)).collect();
     let mut per_app: HashMap<String, (i64, &'static str)> = HashMap::new();
     let mut per_title: HashMap<(String, String), i64> = HashMap::new();
+    let mut per_site: HashMap<String, (i64, &'static str, String)> = HashMap::new();
     let mut cats: HashMap<&'static str, i64> = HashMap::from([("productive", 0), ("neutral", 0), ("distracting", 0)]);
     let mut hourly = [0i64; 24];
     let mut hourly_prod = [0i64; 24];
     let (mut active, mut afk, mut focus) = (0i64, 0i64, 0i64);
     let mut timeline: Vec<Value> = vec![];
+    let mut cat_rows: Vec<(i64, i64, &'static str)> = vec![];
+    let mut focus_sessions: Vec<(i64, i64)> = vec![];
+    let (mut first, mut last) = (i64::MAX, i64::MIN);
     for r in &rows {
         let secs = (r.end - r.start) / 1000;
         if r.focus {
             focus += secs;
+            focus_sessions.push((r.start, r.end));
             timeline.push(json!({ "app": "Focus", "title": r.title, "start": r.start, "end": r.end, "afk": false, "focus": true, "cat": "productive" }));
             continue;
         }
         if r.afk {
             afk += secs;
+            cat_rows.push((r.start, r.end, "afk"));
             timeline.push(json!({ "app": "AFK", "title": "", "start": r.start, "end": r.end, "afk": true, "focus": false, "cat": "afk" }));
             continue;
         }
-        let cat = categorize(&r.app, &r.title, &cfg.rules);
+        first = first.min(r.start);
+        last = last.max(r.end);
+        let cat = categorize(&r.app, &r.title, &cfg.all_rules);
+        cat_rows.push((r.start, r.end, cat));
         active += secs;
         *cats.entry(cat).or_default() += secs;
         let e = per_app.entry(r.app.clone()).or_insert((0, cat));
         e.0 += secs;
-        let label = if is_browser(&r.app) { parse_browser_title(&r.title).1 } else { crate::util::take(&r.title, 80) };
+        let browser = is_browser(&r.app);
+        let label = if browser { parse_browser_title(&r.title).1 } else { crate::util::take(&r.title, 80) };
+        if browser && !label.is_empty() {
+            let e = per_site.entry(label.clone()).or_insert((0, cat, r.app.clone()));
+            e.0 += secs;
+        }
         *per_title.entry((r.app.clone(), label)).or_default() += secs;
         // hourly buckets (split across hour edges)
         let mut t = r.start;
@@ -497,11 +620,18 @@ pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
             _ => timeline.push(json!({ "app": r.app, "title": r.title, "start": r.start, "end": r.end, "afk": false, "focus": false, "cat": cat })),
         }
     }
+    cat_rows.sort_by_key(|r| r.0);
+    let (focused, focus_blocks) = focused_secs(&cat_rows, &focus_sessions);
     let mut apps: Vec<Value> = per_app.into_iter().map(|(app, (secs, cat))| json!({ "app": app, "secs": secs, "cat": cat })).collect();
     apps.sort_by(|a, b| b["secs"].as_i64().cmp(&a["secs"].as_i64()));
     let mut titles: Vec<Value> = per_title.into_iter().filter(|((_, t), _)| !t.is_empty()).map(|((app, title), secs)| json!({ "app": app, "title": title, "secs": secs })).collect();
     titles.sort_by(|a, b| b["secs"].as_i64().cmp(&a["secs"].as_i64()));
     titles.truncate(15);
+    let mut sites: Vec<Value> = per_site
+        .into_iter()
+        .map(|(site, (secs, cat, browser))| json!({ "site": site, "domain": crate::tlapps::domain_for_site(&site), "secs": secs, "cat": cat, "browser": browser }))
+        .collect();
+    sites.sort_by(|a, b| b["secs"].as_i64().cmp(&a["secs"].as_i64()));
     let score = score_of(cats["productive"], cats["neutral"], active);
     if timeline.len() > 1500 {
         let step = timeline.len() / 1500 + 1;
@@ -511,11 +641,15 @@ pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
     let l = live().lock().map(|g| g.clone()).unwrap_or_default();
     json!({
         "from": from, "to": to, "activeSecs": active, "afkSecs": afk, "focusSecs": focus,
+        "totalSecs": active + afk, "productiveSecs": cats["productive"], "focusedSecs": focused,
+        "focusBlocks": focus_blocks.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
+        "firstActivity": if first == i64::MAX { Value::Null } else { json!(first) },
+        "lastActivity": if last == i64::MIN { Value::Null } else { json!(last) },
         "categories": { "productive": cats["productive"], "neutral": cats["neutral"], "distracting": cats["distracting"] },
-        "score": score, "apps": apps, "titles": titles, "hourly": hourly.to_vec(), "hourlyProductive": hourly_prod.to_vec(),
+        "score": score, "apps": apps, "titles": titles, "sites": sites, "hourly": hourly.to_vec(), "hourlyProductive": hourly_prod.to_vec(),
         "timeline": timeline, "topApp": apps.first().map(|a| a["app"].clone()).unwrap_or(Value::Null), "peakHour": peak,
         "current": { "app": l.app, "title": if cfg.redact_titles { String::new() } else { l.title }, "afk": l.afk, "since": l.since, "running": l.running },
-        "paused": cfg.paused, "enabled": cfg.enabled,
+        "paused": cfg.paused, "enabled": cfg.enabled, "intervalSecs": cfg.interval_secs,
     })
 }
 
@@ -543,8 +677,8 @@ pub fn history(c: &Connection, days: i64, now: i64) -> Value {
         d = local_day_start(d + 26 * 3_600_000);
     }
     let mut heat = vec![vec![0i64; 24]; 7];
-    for r in rows.iter().filter(|r| !r.afk && !r.focus) {
-        let cat = categorize(&r.app, &r.title, &cfg.rules);
+    for r in rows.iter().filter(|r| !r.afk && !r.focus && !excluded(&cfg, &r.app, &r.title)) {
+        let cat = categorize(&r.app, &r.title, &cfg.all_rules);
         let secs = (r.end - r.start) / 1000;
         if let Some(i) = idx.get(&local_day_key(r.start)) {
             let e = &mut by_day[*i];
@@ -706,14 +840,14 @@ pub fn export(c: &Connection, from: i64, to: i64, format: &str) -> (String, Stri
     if format == "json" {
         let v: Vec<Value> = rows
             .iter()
-            .map(|r| json!({ "app": r.app, "title": r.title, "start": r.start, "end": r.end, "secs": (r.end - r.start) / 1000, "afk": r.afk, "focus": r.focus, "category": if r.afk { "afk" } else { categorize(&r.app, &r.title, &cfg.rules) } }))
+            .map(|r| json!({ "app": r.app, "title": r.title, "start": r.start, "end": r.end, "secs": (r.end - r.start) / 1000, "afk": r.afk, "focus": r.focus, "category": if r.afk { "afk" } else { categorize(&r.app, &r.title, &cfg.all_rules) } }))
             .collect();
         return ("application/json".into(), serde_json::to_string_pretty(&v).unwrap_or_default());
     }
     let esc = |x: &str| format!("\"{}\"", x.replace('"', "\"\""));
     let mut out = String::from("app,title,start,end,secs,afk,focus,category\n");
     for r in rows {
-        let cat = if r.afk { "afk" } else { categorize(&r.app, &r.title, &cfg.rules) };
+        let cat = if r.afk { "afk" } else { categorize(&r.app, &r.title, &cfg.all_rules) };
         out.push_str(&format!("{},{},{},{},{},{},{},{}\n", esc(&r.app), esc(&r.title), crate::db::iso(r.start), crate::db::iso(r.end), (r.end - r.start) / 1000, r.afk, r.focus, cat));
     }
     ("text/csv".into(), out)
@@ -746,11 +880,44 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
     }
     let n = spans.len();
     write_spans(c, &spans)?;
+    // demo app registry with generated icons (stand-ins for the real exe icons on Windows)
+    let demo: &[(&str, &str, [u8; 3])] = &[
+        ("VS Code", "C:\\Users\\demo\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", [0x23, 0x7a, 0xcc]),
+        ("Chrome", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", [0xe8, 0x45, 0x3c]),
+        ("Slack", "C:\\Users\\demo\\AppData\\Local\\slack\\slack.exe", [0x4a, 0x15, 0x4b]),
+        ("Figma", "C:\\Users\\demo\\AppData\\Local\\Figma\\Figma.exe", [0xa2, 0x59, 0xff]),
+        ("Terminal", "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal\\WindowsTerminal.exe", [0x2b, 0x2b, 0x2b]),
+        ("Spotify", "C:\\Users\\demo\\AppData\\Roaming\\Spotify\\Spotify.exe", [0x1d, 0xb9, 0x54]),
+    ];
+    for (app, exe, rgb) in demo {
+        let png = demo_icon(*rgb);
+        let _ = c.execute(
+            r#"INSERT INTO "TimelensApp" ("app","exe","icon","iconAt","firstSeen","lastSeen") VALUES (?1,?2,?3,?4,?4,?4)
+               ON CONFLICT("app") DO UPDATE SET "exe"=excluded."exe", "icon"=CASE WHEN "TimelensApp"."icon"='' THEN excluded."icon" ELSE "TimelensApp"."icon" END"#,
+            params![app, exe, crate::tlapps::data_url("image/png", &png), now],
+        );
+    }
+    let _ = c.execute(r#"INSERT OR IGNORE INTO "TimelensApp" ("app","firstSeen","lastSeen") VALUES ('Nook',?1,?1)"#, params![now]);
     // a focus session + a productive yesterday for the streak
     let _ = add_focus(c, day + 9 * 3_600_000, day + 9 * 3_600_000 + 25 * 60_000, "Pomodoro");
     let y = local_day_start(day - 3_600_000);
     write_spans(c, &[Span { app: "VS Code".into(), title: "yesterday — nook".into(), start: y + 10 * 3_600_000, end: y + 13 * 3_600_000, afk: false }])?;
     Ok(n)
+}
+
+/// A 32×32 rounded square with a soft highlight — the demo vault's stand-in app icons.
+fn demo_icon(rgb: [u8; 3]) -> Vec<u8> {
+    let n = 32u32;
+    let mut px = Vec::with_capacity((n * n * 4) as usize);
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = ((x as i32 - 15).abs().max(9) - 9, (y as i32 - 15).abs().max(9) - 9);
+            let inside = dx * dx + dy * dy <= 49;
+            let lift = if y < 14 { 18 } else { 0 };
+            px.extend_from_slice(&[rgb[0].saturating_add(lift), rgb[1].saturating_add(lift), rgb[2].saturating_add(lift), if inside { 255 } else { 0 }]);
+        }
+    }
+    crate::tlapps::encode_png(n, n, &px)
 }
 
 pub fn tray_status(c: &Connection) -> String {
@@ -774,16 +941,38 @@ pub struct Tracker {
     last_flush: Instant,
     cfg: Config,
     ticks: u64,
+    /// apps seen since the last flush: (app, exe, ts) — registered (and icons extracted) in the batch
+    pub seen: Vec<(String, String, i64)>,
+    /// app → exe already registered this session (so steady state does no DB work per sample)
+    known: HashMap<String, String>,
+    /// how long the last step asked to sleep (ms)
+    pub next_sleep_ms: i64,
 }
 
 impl Tracker {
     pub fn new(cfg: Config) -> Self {
-        Tracker { merger: Merger::new(cfg.interval_secs as i64 * 1000), buffer: vec![], last_flush: Instant::now(), cfg, ticks: 0 }
+        Tracker {
+            merger: Merger::new(cfg.interval_secs as i64 * 1000),
+            buffer: vec![],
+            last_flush: Instant::now(),
+            cfg,
+            ticks: 0,
+            seen: vec![],
+            known: HashMap::new(),
+            next_sleep_ms: DEFAULT_INTERVAL_SECS as i64 * 1000,
+        }
+    }
+
+    fn interval_ms(&self) -> i64 {
+        self.cfg.interval_secs.max(MIN_INTERVAL_SECS) as i64 * 1000
     }
 
     /// One sampling step at time `ts`. Pure apart from the sampler — unit-tested with a mock.
+    /// Sets `next_sleep_ms`: the normal interval while active, a long back-off while AFK,
+    /// locked, paused or disabled.
     pub fn step(&mut self, sampler: &mut dyn Sampler, ts: i64) {
         self.ticks += 1;
+        let interval = self.interval_ms();
         if !self.cfg.enabled || self.cfg.paused {
             if let Some(s) = self.merger.close() {
                 self.buffer.push(s);
@@ -792,12 +981,25 @@ impl Tracker {
                 l.running = false;
                 l.pending = None;
             }
+            self.next_sleep_ms = IDLE_SLEEP_SECS as i64 * 1000;
             return;
         }
-        let classified = sampler.sample().and_then(|s| classify_sample(&self.cfg, &s));
+        let raw = sampler.sample();
+        let idle_long = raw.as_ref().map(|s| s.locked || s.idle_ms >= self.cfg.afk_secs * 1000).unwrap_or(false);
+        // AFK / locked: back off. One AFK sample stands for the whole sleep so nothing is lost.
+        let dur = if idle_long { (IDLE_SLEEP_SECS as i64 * 1000).max(interval) } else { interval };
+        self.next_sleep_ms = dur;
+        if let Some(s) = raw.as_ref() {
+            let app = app_name(&s.exe);
+            if !s.exe.is_empty() && app != "Lock screen" && self.known.get(&app) != Some(&s.exe) {
+                self.known.insert(app.clone(), s.exe.clone());
+                self.seen.push((app, s.exe.clone(), ts));
+            }
+        }
+        let classified = raw.and_then(|s| classify_sample(&self.cfg, &s));
         match classified {
             Some((app, title, afk)) => {
-                if let Some(s) = self.merger.push(&app, &title, afk, ts) {
+                if let Some(s) = self.merger.push_for(&app, &title, afk, ts, dur) {
                     self.buffer.push(s);
                 }
                 if let Ok(mut l) = live().lock() {
@@ -822,12 +1024,25 @@ impl Tracker {
         }
     }
 
+    /// Batch writes: once a minute (or when a lot piled up). Never per sample.
     pub fn should_flush(&self) -> bool {
-        self.buffer.len() >= 20 || (!self.buffer.is_empty() && self.last_flush.elapsed() >= Duration::from_secs(60))
+        let due = self.last_flush.elapsed() >= Duration::from_secs(FLUSH_SECS);
+        self.buffer.len() >= 240 || (due && (!self.buffer.is_empty() || !self.seen.is_empty()))
     }
 
     pub fn flush(&mut self, db: &Db) {
+        self.flush_with(db, &crate::tlapps::PlatformIcons);
+    }
+
+    pub fn flush_with(&mut self, db: &Db, icons: &dyn crate::tlapps::IconSource) {
+        if !self.seen.is_empty() {
+            // new apps: registry rows + one icon extraction per new exe (a few ms, once)
+            let seen = std::mem::take(&mut self.seen);
+            let c = db.conn();
+            crate::tlapps::register(&c, &seen, icons);
+        }
         if self.buffer.is_empty() {
+            self.last_flush = Instant::now();
             return;
         }
         let spans = std::mem::take(&mut self.buffer);
@@ -841,7 +1056,8 @@ impl Tracker {
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Start the background tracker (once per process).
+/// Start the background tracker (once per process). The thread runs at the lowest priority
+/// (and EcoQoS on Windows 11) and parks between samples; `mark_config_dirty` wakes it.
 pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -849,6 +1065,8 @@ pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
     std::thread::Builder::new()
         .name("timelens".into())
         .spawn(move || {
+            let _ = TRACKER_THREAD.set(std::thread::current());
+            lower_this_thread();
             let mut tracker = Tracker::new(load_config(&db.conn()));
             loop {
                 if CONFIG_DIRTY.swap(false, Ordering::SeqCst) {
@@ -857,7 +1075,7 @@ pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
                         if let Some(s) = tracker.merger.close() {
                             tracker.buffer.push(s);
                         }
-                        tracker.merger = Merger::new(cfg.interval_secs as i64 * 1000);
+                        tracker.merger = Merger::new(cfg.interval_secs.max(MIN_INTERVAL_SECS) as i64 * 1000);
                     }
                     tracker.cfg = cfg;
                 }
@@ -865,17 +1083,31 @@ pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
                 if tracker.should_flush() || (tracker.cfg.paused && !tracker.buffer.is_empty()) {
                     tracker.flush(&db);
                 }
-                std::thread::sleep(Duration::from_secs(tracker.cfg.interval_secs.max(1)));
+                // park (not sleep) so a config change / resume wakes us immediately
+                let deadline = Instant::now() + Duration::from_millis(tracker.next_sleep_ms.max(1000) as u64);
+                while !CONFIG_DIRTY.load(Ordering::SeqCst) {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    std::thread::park_timeout(deadline - now);
+                }
             }
         })
         .ok();
+}
+
+/// Lowest thread priority + EcoQoS for the sampling thread (no-op off Windows).
+fn lower_this_thread() {
+    #[cfg(windows)]
+    win::lower_current_thread();
 }
 
 /// The platform's real sampler.
 pub fn platform_sampler() -> Box<dyn Sampler> {
     #[cfg(windows)]
     {
-        Box::new(win::WinSampler)
+        Box::new(win::WinSampler::default())
     }
     #[cfg(not(windows))]
     {
@@ -883,51 +1115,37 @@ pub fn platform_sampler() -> Box<dyn Sampler> {
     }
 }
 
-#[cfg(windows)]
-mod win {
-    use super::{Sample, Sampler};
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::SystemInformation::GetTickCount;
-    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId};
+/// Small bounded cache: window/process → exe path. Keeps the steady-state sample to two cheap
+/// calls (GetForegroundWindow + GetWindowTextW); OpenProcess/QueryFullProcessImageNameW only
+/// run when the foreground process changes.
+#[derive(Default)]
+pub struct ExeCache {
+    map: HashMap<(usize, u32), String>,
+}
 
-    pub struct WinSampler;
-
-    impl Sampler for WinSampler {
-        fn sample(&mut self) -> Option<Sample> {
-            // SAFETY: plain Win32 calls with stack buffers sized as declared.
-            unsafe {
-                let mut lii = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-                let idle_ms = if GetLastInputInfo(&mut lii) != 0 { GetTickCount().wrapping_sub(lii.dwTime) as u64 } else { 0 };
-                let hwnd = GetForegroundWindow();
-                if hwnd.is_null() {
-                    // no foreground window: secure desktop (lock screen / UAC) or sleeping
-                    return Some(Sample { exe: String::new(), title: String::new(), idle_ms, locked: true });
-                }
-                let mut buf = [0u16; 512];
-                let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-                let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
-                let mut pid: u32 = 0;
-                GetWindowThreadProcessId(hwnd, &mut pid);
-                let mut exe = String::new();
-                if pid != 0 {
-                    let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-                    if !h.is_null() {
-                        let mut path = [0u16; 1024];
-                        let mut len = path.len() as u32;
-                        if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, path.as_mut_ptr(), &mut len) != 0 {
-                            exe = String::from_utf16_lossy(&path[..len as usize]);
-                        }
-                        CloseHandle(h);
-                    }
-                }
-                let locked = exe.to_lowercase().ends_with("lockapp.exe");
-                Some(Sample { exe, title, idle_ms, locked })
-            }
+impl ExeCache {
+    pub fn get_or(&mut self, hwnd: usize, pid: u32, f: impl FnOnce() -> String) -> String {
+        if let Some(e) = self.map.get(&(hwnd, pid)) {
+            return e.clone();
         }
+        if self.map.len() >= 256 {
+            self.map.clear();
+        }
+        let exe = f();
+        self.map.insert((hwnd, pid), exe.clone());
+        exe
+    }
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
+
+#[cfg(windows)]
+#[path = "timelens_win.rs"]
+mod win;
 
 #[cfg(not(windows))]
 mod x11 {
@@ -958,12 +1176,25 @@ mod x11 {
             let pid = run("xdotool", &["getactivewindow", "getwindowpid"]).unwrap_or_default();
             let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             let idle_ms = run("xprintidle", &[]).and_then(|s| s.parse().ok()).unwrap_or(0);
-            Some(Sample { exe, title, idle_ms, locked: false })
+            Some(Sample { exe, title, idle_ms, locked: false, pid: pid.parse().unwrap_or(0), hwnd: 0 })
         }
     }
 }
 
 // ------------------------------------------------------------------ API
+
+/// Every app (registered or seen in spans) with its time in [from, to) and effective category.
+pub fn apps_in(c: &Connection, from: i64, to: i64) -> Vec<Value> {
+    let cfg = load_config(c);
+    let mut secs: HashMap<String, i64> = HashMap::new();
+    let mut titles: HashMap<String, String> = HashMap::new();
+    for r in spans_in(c, from, to).into_iter().filter(|r| !r.afk && !r.focus) {
+        *secs.entry(r.app.clone()).or_default() += (r.end - r.start) / 1000;
+        titles.entry(r.app.clone()).or_insert(r.title);
+    }
+    let cat_of = |app: &str| categorize(app, titles.get(app).map(String::as_str).unwrap_or(""), &cfg.all_rules);
+    crate::tlapps::apps_list(c, &secs, &cat_of)
+}
 
 pub fn now_range(q: &HashMap<String, String>, now: i64) -> (i64, i64) {
     let from = q.get("from").and_then(|v| v.parse::<i64>().ok()).unwrap_or_else(|| local_day_start(now));
@@ -1041,6 +1272,21 @@ pub fn route(c: &Connection, m: &str, rest: &[&str], b: &Map<String, Value>, q: 
             R { status: 200, body: Body::Bytes { mime, name, data: data.into_bytes() } }
         }
         ("GET", ["status"]) => R::json(json!({ "text": tray_status(c), "paused": load_config(c).paused })),
+        // ---- 1.2: app registry, icons, websites
+        ("GET", ["apps"]) => {
+            let (f, t) = if q.contains_key("from") { now_range(q, now) } else { (local_day_start(now) - (q.get("days").and_then(|d| d.parse::<i64>().ok()).unwrap_or(30).clamp(1, 366) - 1) * 86_400_000, now + 1) };
+            R::json(json!(apps_in(c, f, t)))
+        }
+        ("PATCH", ["apps", app]) | ("PUT", ["apps", app]) => match crate::tlapps::patch_app(c, app, b) {
+            Ok(v) => R::json(v),
+            Err(e) => R::err(400, &e),
+        },
+        ("GET", ["icons"]) => R::json(crate::tlapps::icons_map(c)),
+        ("GET", ["favicons"]) => R::json(crate::tlapps::favicons_map(c)),
+        ("GET", ["sites"]) => {
+            let (f, t) = now_range(q, now);
+            R::json(summary(c, f, t)["sites"].clone())
+        }
         _ => return None,
     })
 }
@@ -1089,8 +1335,53 @@ mod tests {
             s
         }
     }
+    struct NoIcons;
+    impl crate::tlapps::IconSource for NoIcons {
+        fn icon_png(&self, _exe: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
+
+    #[test]
+    fn config_lifts_old_fast_intervals_and_overrides_recategorise_history() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn();
+        setting_put(&c, CONFIG_KEY, r#"{"intervalSecs":2}"#).unwrap();
+        assert_eq!(load_config(&c).interval_secs, MIN_INTERVAL_SECS);
+        let base = local_day_start(now_ms()) + 3_600_000;
+        write_spans(&c, &[Span { app: "VS Code".into(), title: "x".into(), start: base, end: base + 600_000, afk: false }]).unwrap();
+        assert_eq!(summary(&c, base, base + 700_000)["categories"]["productive"], 600);
+        let mut b = Map::new();
+        b.insert("category".into(), json!("distracting"));
+        crate::tlapps::patch_app(&c, "VS Code", &b).unwrap();
+        let s = summary(&c, base, base + 700_000);
+        assert_eq!(s["categories"]["distracting"], 600, "override applies retroactively");
+        let mut b = Map::new();
+        b.insert("excluded".into(), json!(true));
+        crate::tlapps::patch_app(&c, "VS Code", &b).unwrap();
+        assert_eq!(summary(&c, base, base + 700_000)["activeSecs"], 0, "excluded apps vanish from history");
+    }
+
+    #[test]
+    fn focused_time_counts_long_productive_stretches_and_sessions() {
+        let m = 60_000;
+        let rows = vec![(0, 12 * m, "productive"), (12 * m, 12 * m + 30_000, "neutral"), (12 * m + 30_000, 20 * m, "productive"), (20 * m, 25 * m, "distracting"), (25 * m, 30 * m, "productive")];
+        let (secs, blocks) = focused_secs(&rows, &[(40 * m, 65 * m)]);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(secs, 20 * 60 + 25 * 60);
+        let mut cache = ExeCache::default();
+        let mut calls = 0;
+        for _ in 0..5 {
+            cache.get_or(1, 2, || {
+                calls += 1;
+                "a.exe".into()
+            });
+        }
+        assert_eq!((calls, cache.len()), (1, 1), "exe looked up once per window/process");
+    }
+
     fn smp(exe: &str, title: &str, idle: u64) -> Sample {
-        Sample { exe: exe.into(), title: title.into(), idle_ms: idle, locked: false }
+        Sample { exe: exe.into(), title: title.into(), idle_ms: idle, locked: false, pid: 1, hwnd: 1 }
     }
 
     #[test]
@@ -1141,29 +1432,38 @@ mod tests {
         let samples = vec![smp("Code.exe", "a", 0), smp("Code.exe", "a", 0), smp("Code.exe", "a", 0), smp("chrome.exe", "YouTube - Google Chrome", 0), smp("Code.exe", "a", 999_999)];
         let mut mock = Mock(samples, 0);
         let mut t = Tracker::new(Config::default());
+        assert_eq!(t.interval_ms(), 5000, "1.2 samples every 5 s by default");
         let base = local_day_start(now_ms()) + 3_600_000;
         for i in 0..5 {
-            t.step(&mut mock, base + i * 2000);
+            t.step(&mut mock, base + i * 5000);
         }
+        assert_eq!(t.next_sleep_ms, IDLE_SLEEP_SECS as i64 * 1000, "AFK backs off to a long sleep");
         if let Some(s) = t.merger.close() {
             t.buffer.push(s);
         }
-        t.flush(&db);
+        assert_eq!(t.seen.len(), 2, "two distinct apps registered once each");
+        t.flush_with(&db, &NoIcons);
         let c = db.conn();
-        let rows = spans_in(&c, base - 1, base + 60_000);
+        let rows = spans_in(&c, base - 1, base + 120_000);
         assert_eq!(rows.iter().filter(|r| !r.focus).count(), 3);
         assert_eq!(rows[0].app, "VS Code");
-        assert_eq!(rows[0].end - rows[0].start, 6000);
+        assert_eq!(rows[0].end - rows[0].start, 15_000);
         assert!(rows[2].afk);
-        let s = summary(&c, base - 1, base + 60_000);
-        assert_eq!(s["activeSecs"], 8);
-        assert_eq!(s["categories"]["distracting"], 2);
+        assert_eq!(rows[2].end - rows[2].start, 30_000, "one AFK sample covers the whole back-off sleep");
+        let s = summary(&c, base - 1, base + 120_000);
+        assert_eq!(s["activeSecs"], 20);
+        assert_eq!(s["categories"]["distracting"], 5);
         assert_eq!(s["topApp"], "VS Code");
-        // paused tracker records nothing new
+        assert_eq!(s["sites"][0]["site"], "YouTube");
+        assert_eq!(s["sites"][0]["domain"], "youtube.com");
+        let apps = apps_in(&c, base - 1, base + 120_000);
+        assert!(apps.iter().any(|a| a["app"] == "VS Code" && a["exe"] == "Code.exe"));
+        // paused tracker records nothing new and sleeps long
         t.cfg.paused = true;
-        t.step(&mut Mock(vec![smp("Code.exe", "b", 0)], 0), base + 20_000);
-        t.flush(&db);
-        assert_eq!(spans_in(&c, base - 1, base + 60_000).len(), 3);
+        t.step(&mut Mock(vec![smp("Code.exe", "b", 0)], 0), base + 60_000);
+        assert_eq!(t.next_sleep_ms, IDLE_SLEEP_SECS as i64 * 1000);
+        t.flush_with(&db, &NoIcons);
+        assert_eq!(spans_in(&c, base - 1, base + 120_000).len(), 3);
     }
 
     #[test]

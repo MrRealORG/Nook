@@ -30,7 +30,7 @@ function treeTicks(root) {
       kids.get(ppid).push(Number(d));
     } catch {}
   }
-  let sum = 0;
+  let sum = -(ticks.get(root) ?? 0); // exclude node itself
   const stack = [root];
   while (stack.length) {
     const p = stack.pop();
@@ -73,7 +73,8 @@ const browser = await chromium.launch({
   // keep timers honest: headless otherwise never throttles background pages either way
   args: ["--disable-background-timer-throttling", "--disable-renderer-backgrounding"],
 });
-const BROWSER_PID = browser.process?.()?.pid ?? 0;
+// Playwright's Browser has no pid: every Chromium process is a descendant of this node process
+const BROWSER_PID = process.pid;
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
 await ctx.addInitScript(INSTRUMENT);
 await ctx.addInitScript((prefs) => {

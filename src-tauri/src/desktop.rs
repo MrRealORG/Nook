@@ -30,6 +30,11 @@ pub struct DesktopSettings {
     /// "off" | "mica" | "acrylic"
     pub glass: String,
     pub auto_update: bool,
+    /// hard CPU cap for the whole Nook process tree (Job Object), % of the machine, 5–50
+    pub cpu_cap: u8,
+    pub cpu_cap_on: bool,
+    /// keep the desktop widget above other windows (otherwise it sits on the desktop)
+    pub widget_on_top: bool,
 }
 
 impl Default for DesktopSettings {
@@ -44,6 +49,9 @@ impl Default for DesktopSettings {
             close_to_tray: true,
             glass: "off".into(),
             auto_update: false,
+            cpu_cap: crate::perf::DEFAULT_CAP_PCT,
+            cpu_cap_on: true,
+            widget_on_top: false,
         }
     }
 }
@@ -69,6 +77,7 @@ impl DesktopSettings {
         if !["off", "mica", "acrylic"].contains(&out.glass.as_str()) {
             out.glass = "off".into();
         }
+        out.cpu_cap = crate::perf::clamp_cap(out.cpu_cap);
         out
     }
 }
@@ -85,10 +94,54 @@ fn toggle_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) {
             let _ = w.hide();
+            window_state_changed(app);
         } else {
             show_main(app);
         }
     }
+}
+
+// ------------------------------------------------------------------ CPU budget
+
+static BACKGROUND: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2); // 2 = unknown
+
+/// Main window shown/hidden/minimised/focused: tell the UI (it pauses all polling and animation
+/// while not visible) and flip EcoQoS for the whole Nook tree when nothing is on screen.
+pub fn window_state_changed(app: &AppHandle) {
+    let (visible, focused, minimized) = app
+        .get_webview_window("main")
+        .map(|w| (w.is_visible().unwrap_or(false), w.is_focused().unwrap_or(false), w.is_minimized().unwrap_or(false)))
+        .unwrap_or((false, false, false));
+    let shown = visible && !minimized;
+    let _ = app.emit_to("main", "nook://window-state", json!({ "visible": shown, "focused": focused }));
+    let widget = app.get_webview_window("widget").map(|w| w.is_visible().unwrap_or(false)).unwrap_or(false);
+    let bg = !(shown || widget);
+    if BACKGROUND.swap(bg as u8, std::sync::atomic::Ordering::SeqCst) != bg as u8 {
+        let h = app.clone();
+        // a Toolhelp snapshot + a few syscalls: keep it off the event loop
+        std::thread::spawn(move || {
+            crate::perf::set_background(bg);
+            let _ = h;
+        });
+    }
+}
+
+/// Re-check that every Nook child process (WebView2) is inside the capped job: a few times
+/// right after start (WebView2 spawns its GPU/renderer processes lazily), then every 5 min.
+pub fn start_perf_watch(_app: &AppHandle) {
+    std::thread::Builder::new()
+        .name("nook-perf".into())
+        .spawn(|| {
+            for secs in [3u64, 12, 45, 120] {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                crate::perf::adopt_children();
+            }
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(300));
+                crate::perf::adopt_children();
+            }
+        })
+        .ok();
 }
 
 // ------------------------------------------------------------------ tray
@@ -166,6 +219,14 @@ pub fn refresh_tray(app: &AppHandle) {
         let c = state.ctx.db.conn();
         (nook_core::timelens::tray_status(&c), nook_core::timelens::load_config(&c).paused)
     };
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    if let Ok(mut l) = LAST.lock() {
+        let key = format!("{text}|{paused}");
+        if *l == key {
+            return;
+        }
+        *l = key;
+    }
     if let Some(items) = app.try_state::<TrayItems>() {
         let _ = items.tl_status.set_text(&text);
         let _ = items.tl_pause.set_text(if paused { "Resume Timelens" } else { "Pause Timelens" });
@@ -182,12 +243,15 @@ pub fn notify(app: &AppHandle, title: &str, body: &str) {
 }
 
 /// Every minute: reminders, Timelens goals/limits, auto-backup → native notifications.
+static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 pub fn start_maintenance(app: &AppHandle) {
     let h = app.clone();
     std::thread::Builder::new()
         .name("nook-maintenance".into())
         .spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(20));
+            // once a minute (the first pass 20 s after start)
+            std::thread::sleep(std::time::Duration::from_secs(if FIRST.swap(false, std::sync::atomic::Ordering::SeqCst) { 20 } else { nook_core::ext::MAINTENANCE_SECS }));
             let events = {
                 let state = h.state::<AppState>();
                 nook_core::ext::maintenance_db(&state.ctx.db)
@@ -201,7 +265,6 @@ pub fn start_maintenance(app: &AppHandle) {
                 let _ = h.emit("nook://data-changed", json!({ "source": "reminders" }));
             }
             refresh_tray(&h);
-            std::thread::sleep(std::time::Duration::from_secs(40));
         })
         .ok();
 }
@@ -272,17 +335,23 @@ pub fn set_widget(app: &AppHandle, on: bool) {
             let _ = w.show();
         }
         (true, None) => {
+            let on_top = DesktopSettings::load(&app.state::<AppState>().ctx.db).widget_on_top;
+            // small by default (300×380); the UI can collapse it to a 220×52 pill, so the
+            // minimum size has to allow that
             let b = WebviewWindowBuilder::new(app, "widget", WebviewUrl::App("widget.html".into()))
                 .title("Nook widget")
-                .inner_size(340.0, 540.0)
-                .min_inner_size(260.0, 320.0)
+                .inner_size(WIDGET_W, WIDGET_H)
+                .min_inner_size(WIDGET_PILL_W, WIDGET_PILL_H)
+                .max_inner_size(720.0, 1000.0)
                 .decorations(false)
                 .transparent(true)
                 .shadow(false)
                 .resizable(true)
                 .skip_taskbar(true)
-                .always_on_bottom(true)
+                .always_on_top(on_top)
+                .always_on_bottom(!on_top)
                 .visible_on_all_workspaces(true)
+                .background_color(tauri::window::Color(0, 0, 0, 0))
                 .disable_drag_drop_handler();
             match b.build() {
                 Ok(w) => {
@@ -310,6 +379,18 @@ pub fn set_widget(app: &AppHandle, on: bool) {
             let _ = w.destroy();
         }
         (false, None) => {}
+    }
+}
+
+pub const WIDGET_W: f64 = 300.0;
+pub const WIDGET_H: f64 = 380.0;
+pub const WIDGET_PILL_W: f64 = 200.0;
+pub const WIDGET_PILL_H: f64 = 48.0;
+
+pub fn set_widget_on_top(app: &AppHandle, on: bool) {
+    if let Some(w) = app.get_webview_window("widget") {
+        let _ = w.set_always_on_bottom(!on);
+        let _ = w.set_always_on_top(on);
     }
 }
 
