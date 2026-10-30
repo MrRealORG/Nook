@@ -60,7 +60,11 @@ pub const TOOLS: &[ToolDef] = &[
 ];
 
 pub fn tool_names() -> Vec<&'static str> {
-    TOOLS.iter().map(|t| t.name).collect()
+    TOOLS.iter().map(|t| t.name).chain(crate::ext::EXT_TOOLS.iter().map(|t| t.name)).collect()
+}
+
+fn known_tool(name: &str) -> bool {
+    TOOLS.iter().any(|t| t.name == name) || crate::ext::EXT_TOOLS.iter().any(|t| t.name == name)
 }
 
 /// English description of the tool list for the system prompt.
@@ -68,6 +72,7 @@ pub fn tool_catalog() -> String {
     TOOLS
         .iter()
         .map(|t| format!("- {}({}): {}", t.name, t.args.iter().map(|a| a.0).collect::<Vec<_>>().join(", "), t.desc))
+        .chain(crate::ext::EXT_TOOLS.iter().map(|t| format!("- {}({}): {}", t.name, t.args.iter().map(|a| a.0).collect::<Vec<_>>().join(", "), t.desc)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -679,7 +684,7 @@ pub async fn execute_tools(db: &Db, calls: &[Value]) -> (Vec<Value>, String) {
         let args = call.get("args").and_then(|a| a.as_object()).cloned().unwrap_or_default();
         let args_v = Value::Object(args.clone());
         let t0 = Instant::now();
-        if !TOOLS.iter().any(|t| t.name == name) {
+        if !known_tool(&name) {
             trace.push(json!({ "name": name, "args": args_v, "ok": false, "summary": "Unknown tool.", "ms": 0 }));
             lines.push(format!("{name}: ERROR unknown tool"));
             continue;
@@ -689,7 +694,9 @@ pub async fn execute_tools(db: &Db, calls: &[Value]) -> (Vec<Value>, String) {
             "read_url" => read_url(&args).await,
             other => {
                 let c = db.conn();
-                exec_sync(&c, other, &args).unwrap_or_else(|| fail("Unknown tool."))
+                exec_sync(&c, other, &args)
+                    .or_else(|| crate::ext::run_tool(&c, other, &args).map(|(ok, summary, data)| ToolRun { ok, summary, data }))
+                    .unwrap_or_else(|| fail("Unknown tool."))
             }
         };
         let ms = t0.elapsed().as_millis() as u64;

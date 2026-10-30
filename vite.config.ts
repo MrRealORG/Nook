@@ -21,6 +21,9 @@ export default defineConfig({
   build: {
     // WebView2 (Win10/11) is evergreen Chromium; WebKitGTK/WKWebView ≥ Safari 15
     target: ["es2022", "chrome110", "safari15"],
+    // NOOK_OUT_DIR lets CI/sandboxes build outside the repo; Tauri reads ../dist by default
+    outDir: process.env.NOOK_OUT_DIR || "dist",
+    emptyOutDir: true,
     sourcemap: false,
     cssCodeSplit: true,
     chunkSizeWarningLimit: 400,

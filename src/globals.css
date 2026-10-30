@@ -168,7 +168,7 @@ html[data-grain="off"] .noise { display: none; }
     transition: all 0.18s var(--ease-soft);
   }
   button.chip:hover, .chip[data-on="true"] { color: var(--accent-ink); background: var(--accent); border-color: transparent; }
-  .seg { display: inline-flex; flex-wrap: wrap; padding: 2px; gap: 2px; border-radius: 11px; background: var(--panel2); border: 1px solid var(--line); }
+  .seg { display: inline-flex; flex-wrap: nowrap; flex-shrink: 0; padding: 2px; gap: 2px; border-radius: 11px; background: var(--panel2); border: 1px solid var(--line); }
   .seg > button { height: 26px; padding: 0 11px; border-radius: 8px; font-family: var(--font-pixel); font-size: 13.5px; color: var(--dim); transition: all 0.2s var(--ease-soft); display: inline-flex; align-items: center; gap: 6px; }
   .seg > button:hover { color: var(--ink); }
   .seg > button[data-on="true"] { background: var(--accent); color: var(--accent-ink); box-shadow: 0 4px 12px -6px var(--accent); }

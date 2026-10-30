@@ -7,6 +7,8 @@ pub mod ai;
 pub mod bridge;
 pub mod api;
 pub mod db;
+pub mod ext;
+pub mod timelens;
 pub mod mcp;
 pub mod server;
 pub mod team;

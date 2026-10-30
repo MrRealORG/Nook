@@ -146,6 +146,12 @@ async fn widget_toggle(app: AppHandle, state: State<'_, AppState>, show: Option<
     Ok(s.widget)
 }
 
+/// Deep links that arrived before the UI was listening (cold start via nook://…).
+#[tauri::command]
+fn pending_deep_links() -> Vec<String> {
+    std::mem::take(&mut *desktop::pending_links().lock().unwrap_or_else(|e| e.into_inner()))
+}
+
 /// Bring the main window forward (from the widget or tray), optionally routing to a view.
 #[tauri::command]
 fn focus_main(app: AppHandle, route: Option<String>) {
@@ -255,6 +261,9 @@ pub fn run() {
                 desktop::set_widget(app.handle(), true);
             }
             desktop::register_deep_links(app.handle());
+            // Timelens: the background tracker + the minute maintenance loop (reminders, goals, backups)
+            nook_core::timelens::start(app.state::<AppState>().ctx.db.clone(), nook_core::timelens::platform_sampler());
+            desktop::start_maintenance(app.handle());
             if !start_hidden {
                 desktop::show_main(app.handle());
             }
@@ -281,6 +290,7 @@ pub fn run() {
             app_info,
             desktop_settings_set,
             widget_toggle,
+            pending_deep_links,
             focus_main,
             broadcast,
             set_glass,

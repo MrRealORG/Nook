@@ -20,6 +20,14 @@ const EXEMPT: &[&str] = &["initialize", "notifications/initialized", "ping", "to
 const LISTS: &[&str] = &["today", "upcoming", "someday"];
 
 pub fn tool_catalog() -> Value {
+    let mut v = base_catalog();
+    if let Value::Array(a) = &mut v {
+        a.extend(crate::ext::mcp_catalog());
+    }
+    v
+}
+
+fn base_catalog() -> Value {
     let lists = json!(["today", "upcoming", "someday"]);
     json!([
         { "name": "list_tasks", "description": "List the user's todo tasks. Filter by status (open/done/all) and by list (today/upcoming/someday).",
@@ -420,7 +428,7 @@ pub fn call_tool(c: &Connection, name: &str, a: &Map<String, Value>) -> TResult 
             }))
         }
         "" => Err("tool name is required".into()),
-        other => Err(format!("Unknown tool: {other}")),
+        other => crate::ext::mcp_call(c, other, a).unwrap_or_else(|| Err(format!("Unknown tool: {other}"))),
     }
 }
 
@@ -570,7 +578,7 @@ mod tests {
         assert_eq!(r["result"]["serverInfo"]["name"], SERVER_NAME);
         assert_eq!(rpc(&db, "ping", json!({}), None).1["result"], json!({}));
         let (_, l) = rpc(&db, "tools/list", json!({}), None);
-        assert_eq!(l["result"]["tools"].as_array().unwrap().len(), 16);
+        assert_eq!(l["result"]["tools"].as_array().unwrap().len(), 16 + crate::ext::EXT_TOOLS.len());
         let (s, b) = handle_http(&db, Some(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })), None);
         assert_eq!((s, b), (202, None));
         let (_, e) = rpc(&db, "nope/x", json!({}), None);

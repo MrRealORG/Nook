@@ -17,7 +17,7 @@ import type { CustomGameDef } from "@/lib/gameEngines";
 
 const usePackStoreFont = () => usePackStore.getState().fontPack;
 
-export type View = "notes" | "graph" | "canvas" | "den" | "focus" | "arcade" | "team" | "market" | "tasks" | "activity" | "rules" | "settings";
+export type View = "notes" | "graph" | "canvas" | "den" | "focus" | "arcade" | "team" | "market" | "tasks" | "activity" | "rules" | "settings" | "calendar" | "timelens" | "chat";
 export type EditorMode = "write" | "split" | "read";
 export type AiMsg = { id: number; role: "user" | "ai"; text: string; res?: AiResult; action?: string; fresh?: boolean };
 export type TimerMode = "focus" | "short" | "long";
@@ -42,6 +42,12 @@ export type Task = {
   by: "you" | "ai" | "agent";
   createdAt: number;
   completedAt: number | null;
+  /** kanban column (1.1) */
+  status?: "todo" | "doing" | "done";
+  /** reminder time (epoch ms) → native notification */
+  remindAt?: number | null;
+  /** "", daily, weekdays, weekly, monthly */
+  repeat?: string;
 };
 /** app-usage seconds accumulated locally this session, keyed `${day}|${app}` */
 export type AppUseMap = Record<string, number>;
@@ -378,7 +384,7 @@ interface S {
   // ---------- tasks ----------
   loadTasks: () => Promise<void>;
   createTask: (init?: Partial<Pick<Task, "title" | "list" | "priority" | "due" | "noteId" | "by" | "tags">>) => string;
-  updateTask: (id: string, patch: Partial<Pick<Task, "title" | "list" | "priority" | "due" | "done" | "noteId" | "tags">>) => void;
+  updateTask: (id: string, patch: Partial<Pick<Task, "title" | "list" | "priority" | "due" | "done" | "noteId" | "tags" | "status" | "remindAt" | "repeat">>) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
   clearDoneTasks: () => void;
@@ -430,8 +436,15 @@ interface S {
 export const RAIL_DEFAULT_ICONS: Record<View, IconName> = {
   notes: "notes", graph: "algorithm", canvas: "shapes", tasks: "tasklist", den: "dog", focus: "hourglass",
   arcade: "gamepad", team: "message-text", market: "coins", activity: "activity", rules: "shield", settings: "sliders",
+  calendar: "calendar", timelens: "gauge", chat: "sparkles",
 };
-export const RAIL_DEFAULT_ORDER: View[] = ["notes", "graph", "canvas", "tasks", "den", "focus", "arcade", "team", "market", "activity", "rules", "settings"];
+export const RAIL_DEFAULT_ORDER: View[] = ["notes", "calendar", "chat", "graph", "canvas", "tasks", "den", "focus", "arcade", "team", "market", "timelens", "activity", "rules", "settings"];
+/** saved rail order + any views added in newer versions (appended, never dropped) */
+export function railOrderOf(saved: View[]): View[] {
+  if (!saved.length) return RAIL_DEFAULT_ORDER;
+  const known = saved.filter((v) => RAIL_DEFAULT_ORDER.includes(v));
+  return [...known, ...RAIL_DEFAULT_ORDER.filter((v) => !known.includes(v))];
+}
 /** curated icon palette offered by the rail icon picker */
 export const RAIL_ICON_CHOICES: IconName[] = [
   "notes", "notebook", "sticky-note", "algorithm", "shapes", "tasklist", "checkbox-on", "dog", "heart", "hourglass", "clock", "gamepad",
@@ -1263,7 +1276,7 @@ export const useStore = create<S>()((set, get) => {
       sfx("pop");
     },
     moveRailItem: (view, dir) => {
-      const order = get().railOrder.length ? [...get().railOrder] : [...RAIL_DEFAULT_ORDER];
+      const order = [...railOrderOf(get().railOrder)];
       const i = order.indexOf(view);
       const j = i + dir;
       if (i < 0 || j < 0 || j >= order.length) return;
@@ -1533,8 +1546,15 @@ export const useStore = create<S>()((set, get) => {
       return id;
     },
     updateTask: (id, patch) => {
-      set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
-      void api("PATCH", `/api/tasks/${id}`, patch);
+      // done ⇄ kanban status stay in sync locally the same way the Rust side does it
+      const p: Partial<Task> = { ...patch };
+      if (p.status) p.done = p.status === "done";
+      else if (p.done !== undefined) p.status = p.done ? "done" : "todo";
+      const before = get().tasks.find((t) => t.id === id);
+      set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...p, completedAt: p.done === undefined ? t.completedAt : p.done ? (t.completedAt ?? Date.now()) : null } : t)) }));
+      const req = api("PATCH", `/api/tasks/${id}`, patch);
+      // finishing a repeating task spawns its next occurrence server-side → pull it in
+      if (p.done && before?.repeat) void Promise.resolve(req).then(() => get().loadTasks());
     },
     toggleTask: (id) => {
       const t = get().tasks.find((x) => x.id === id);
@@ -1801,7 +1821,7 @@ export const useStore = create<S>()((set, get) => {
 let appSyncAt = 0;
 /** last local rules write — the server poll won't revert fresh local edits */
 export let rulesDirtyAt = 0;
-export const VIEWS_ALL: View[] = ["notes", "graph", "canvas", "den", "focus", "arcade", "team", "market", "tasks", "activity", "rules", "settings"];
+export const VIEWS_ALL: View[] = ["notes", "graph", "canvas", "den", "focus", "arcade", "team", "market", "tasks", "activity", "rules", "settings", "calendar", "timelens", "chat"];
 export const APP_PRESETS: Record<string, AppCat> = {
   // code / writing → productive
   vscode: "productive", "visual studio code": "productive", code: "productive", terminal: "productive", figma: "productive", notion: "productive", docs: "productive", excel: "productive", calendar: "productive", teams: "productive", slack: "productive", zoom: "productive",

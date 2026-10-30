@@ -180,6 +180,19 @@ export function RulesView() {
           </div>
         ) : (
           <>
+            {tab === "shield" && (
+              <div className="paper mt-4 grid gap-3 p-5 sm:grid-cols-2" data-testid="shield-overview">
+                {TABS.filter((t) => t.id !== "shield").map((t) => (
+                  <button key={t.id} className="flex items-start gap-3 rounded-xl border border-line bg-panel2 p-3 text-left hover:border-[var(--accent)]" onClick={() => setTab(t.id)}>
+                    <Icon name={t.icon} size={18} className="mt-0.5 text-accent" />
+                    <span className="min-w-0">
+                      <span className="pixel-font block text-[14px]">{t.label}</span>
+                      <span className="block text-[12px] text-dim">{t.hint}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
             {/* ---------------- blocklist ---------------- */}
             {tab === "blocklist" && (
               <div className="paper mt-4 p-5">

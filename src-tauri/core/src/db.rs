@@ -186,6 +186,71 @@ CREATE TABLE IF NOT EXISTS "Setting" (
   "updatedAt" INTEGER NOT NULL
 );
 "#,
+    // v2 — Nook 1.1: full-text search, version history, templates, AI conversations,
+    // task reminders/recurrence/kanban status, Timelens spans
+    r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS "NoteFts" USING fts5("title", "content", tokenize = 'unicode61 remove_diacritics 2');
+INSERT INTO "NoteFts"("rowid","title","content") SELECT rowid, "title", "content" FROM "Note";
+CREATE TRIGGER IF NOT EXISTS "Note_fts_ai" AFTER INSERT ON "Note" BEGIN
+  INSERT INTO "NoteFts"("rowid","title","content") VALUES (new.rowid, new."title", new."content");
+END;
+CREATE TRIGGER IF NOT EXISTS "Note_fts_ad" AFTER DELETE ON "Note" BEGIN
+  DELETE FROM "NoteFts" WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS "Note_fts_au" AFTER UPDATE OF "title", "content" ON "Note" BEGIN
+  DELETE FROM "NoteFts" WHERE rowid = old.rowid;
+  INSERT INTO "NoteFts"("rowid","title","content") VALUES (new.rowid, new."title", new."content");
+END;
+CREATE TABLE IF NOT EXISTS "NoteVersion" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "noteId" TEXT NOT NULL REFERENCES "Note"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+  "title" TEXT NOT NULL,
+  "content" TEXT NOT NULL,
+  "createdAt" INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "NoteVersion_noteId_idx" ON "NoteVersion"("noteId", "createdAt");
+CREATE TRIGGER IF NOT EXISTS "Note_version_au" AFTER UPDATE OF "content" ON "Note"
+WHEN old."content" <> new."content" AND length(old."content") > 0 AND NOT EXISTS (
+  SELECT 1 FROM "NoteVersion" WHERE "noteId" = old."id" AND "createdAt" > CAST(strftime('%s','now') AS INTEGER) * 1000 - 300000
+) BEGIN
+  INSERT INTO "NoteVersion"("id","noteId","title","content","createdAt")
+    VALUES (lower(hex(randomblob(16))), old."id", old."title", old."content", CAST(strftime('%s','now') AS INTEGER) * 1000);
+  DELETE FROM "NoteVersion" WHERE "noteId" = old."id" AND "id" NOT IN (
+    SELECT "id" FROM "NoteVersion" WHERE "noteId" = old."id" ORDER BY "createdAt" DESC LIMIT 50);
+END;
+CREATE TABLE IF NOT EXISTS "Template" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "name" TEXT NOT NULL,
+  "icon" TEXT NOT NULL DEFAULT 'file-text',
+  "content" TEXT NOT NULL DEFAULT '',
+  "builtin" INTEGER NOT NULL DEFAULT 0,
+  "createdAt" INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS "Conversation" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "title" TEXT NOT NULL DEFAULT 'New chat',
+  "model" TEXT NOT NULL DEFAULT '',
+  "messages" TEXT NOT NULL DEFAULT '[]',
+  "createdAt" INTEGER NOT NULL,
+  "updatedAt" INTEGER NOT NULL
+);
+ALTER TABLE "Task" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'todo';
+ALTER TABLE "Task" ADD COLUMN "remindAt" INTEGER;
+ALTER TABLE "Task" ADD COLUMN "repeat" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "Task" ADD COLUMN "notifiedAt" INTEGER;
+UPDATE "Task" SET "status" = 'done' WHERE "done" = 1;
+CREATE TABLE IF NOT EXISTS "TimeSpan" (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "app" TEXT NOT NULL,
+  "title" TEXT NOT NULL DEFAULT '',
+  "start" INTEGER NOT NULL,
+  "end" INTEGER NOT NULL,
+  "afk" INTEGER NOT NULL DEFAULT 0,
+  "focus" INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS "TimeSpan_start_idx" ON "TimeSpan"("start");
+CREATE INDEX IF NOT EXISTS "TimeSpan_end_idx" ON "TimeSpan"("end");
+"#,
 ];
 
 impl Db {
@@ -425,6 +490,7 @@ pub fn seed(c: &Connection) -> DbResult<()> {
             insert_listing(c, l, now);
         }
     }
+    crate::ext::seed_templates(c);
     Ok(())
 }
 

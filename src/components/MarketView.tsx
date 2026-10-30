@@ -151,7 +151,7 @@ function ListingCard({ l, i, coins, owned, mine, wished, onBuy, onCancel, onSwee
             <Icon name="heart" size={13} />
           </button>
         )}
-        <span className="pixel-font">{timeAgo(l.createdAt)}</span>
+        <span className="pixel-font whitespace-nowrap">{timeAgo(l.createdAt)}</span>
       </div>
       <ListingArt kind={l.kind} itemId={l.itemId} payload={l.payload} />
       <div>

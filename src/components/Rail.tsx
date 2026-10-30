@@ -5,7 +5,7 @@ import type { IconName } from "@/components/icons";
 import { PetView } from "@/components/PetView";
 import { onCtx, type CtxItem } from "@/components/ContextMenu";
 import { levelOf } from "@/lib/pet";
-import { RAIL_DEFAULT_ICONS, RAIL_DEFAULT_ORDER, RAIL_ICON_CHOICES, useStore, type View } from "@/lib/store";
+import { RAIL_DEFAULT_ICONS, RAIL_DEFAULT_ORDER, railOrderOf, RAIL_ICON_CHOICES, useStore, type View } from "@/lib/store";
 
 const META: Record<View, { label: string; key: string }> = {
   notes: { label: "Notes", key: "1" },
@@ -20,6 +20,9 @@ const META: Record<View, { label: string; key: string }> = {
   activity: { label: "Activity", key: "0" },
   rules: { label: "Rules", key: "R" },
   settings: { label: "Settings", key: "-" },
+  calendar: { label: "Journal", key: "J" },
+  timelens: { label: "Timelens", key: "L" },
+  chat: { label: "AI chat", key: "I" },
 };
 
 export function ShieldChip() {
@@ -112,7 +115,7 @@ export function RailButtons({ horizontal }: { horizontal?: boolean }) {
   const openTasks = useStore((s) => s.tasks.filter((t) => !t.done).length);
   const [picking, setPicking] = useState<View | null>(null);
 
-  const order = railOrder.length ? RAIL_DEFAULT_ORDER.filter((v) => railOrder.includes(v)).sort((a, b) => railOrder.indexOf(a) - railOrder.indexOf(b)) : RAIL_DEFAULT_ORDER;
+  const order = railOrderOf(railOrder);
   const visible = order.filter((v) => !railHidden.includes(v));
 
   /** every sidebar tab has its own right-click menu */

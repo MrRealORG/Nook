@@ -27,6 +27,7 @@ import { categorize } from "@/lib/store";
 import { DEFAULT_RULES, type RulesState } from "@/lib/rules";
 import { wallpaperCss } from "@/lib/wallpapers";
 import type { InitialData } from "@/lib/types";
+import { useUi11 } from "@/lib/ui11";
 
 const Loading = () => (
   <div className="grid h-full place-items-center">
@@ -55,6 +56,12 @@ const TasksView = lazyView(() => import("@/components/TasksView").then((m) => ({
 const ActivityView = lazyView(() => import("@/components/ActivityView").then((m) => ({ default: m.ActivityView })));
 const RulesView = lazyView(() => import("@/components/RulesView").then((m) => ({ default: m.RulesView })));
 const SettingsView = lazyView(() => import("@/components/SettingsView").then((m) => ({ default: m.SettingsView })));
+// 1.1 views — lazy so the startup bundle stays small
+const CalendarView = lazyView(() => import("@/components/CalendarView"));
+const TimelensView = lazyView(() => import("@/components/TimelensView"));
+const ChatView = lazyView(() => import("@/components/ChatView"));
+const SearchDialog = lazy(() => import("@/components/SearchDialog"));
+const NoteDialogs = lazy(() => import("@/components/NoteDialogs"));
 
 const VIEWS = ["notes", "graph", "canvas", "tasks", "den", "focus", "arcade", "team", "market", "activity"] as const;
 const MODES: EditorMode[] = ["write", "split", "read"];
@@ -119,7 +126,6 @@ function usePetNag() {
       if (line) {
         lastNagAt = now;
         s.say(line);
-        s.toast(line, "message-text");
       }
     }, 45_000);
     return () => clearInterval(iv);
@@ -180,6 +186,9 @@ export function App({ initial }: { initial: InitialData }) {
     hydrated.current = true;
   }
   const view = useStore((s) => s.view);
+  const searchOpen = useUi11((s) => s.searchOpen);
+  const versionsFor = useUi11((s) => s.versionsFor);
+  const templatesOpen = useUi11((s) => s.templatesOpen);
   const zen = useStore((s) => s.zen);
   const sidebar = useStore((s) => s.sidebar);
   const notesList = useStore((s) => s.notesList);
@@ -268,6 +277,9 @@ export function App({ initial }: { initial: InitialData }) {
           e.preventDefault();
           useStore.setState({ help: !s.help });
         }
+      } else if (mod && e.shiftKey && k === "f") {
+        e.preventDefault();
+        useUi11.getState().set({ searchOpen: true });
       } else if (mod && e.shiftKey && k === "n") {
         e.preventDefault();
         useStore.setState({ notesDrawer: !s.notesDrawer });
@@ -277,6 +289,9 @@ export function App({ initial }: { initial: InitialData }) {
         else if (k === "s") { e.preventDefault(); useStore.setState({ muted: !s.muted }); }
         else if (k === "d") { e.preventDefault(); useStore.setState({ notesDrawer: !s.notesDrawer }); }
         else if (k === "r") { e.preventDefault(); s.setView("rules"); }
+        else if (k === "j") { e.preventDefault(); s.setView("calendar"); }
+        else if (k === "l") { e.preventDefault(); s.setView("timelens"); }
+        else if (k === "i") { e.preventDefault(); s.setView("chat"); }
         else if (/^[1-9]$/.test(k)) { e.preventDefault(); s.setView(VIEWS[Number(k) - 1]); }
         else if (k === "0") { e.preventDefault(); s.setView("activity"); }
         // Alt+- → Settings (was unreachable in the original: shadowed by this Alt branch)
@@ -362,6 +377,9 @@ export function App({ initial }: { initial: InitialData }) {
             {view === "activity" && <ActivityView />}
             {view === "rules" && <RulesView />}
             {view === "settings" && <SettingsView />}
+            {view === "calendar" && <CalendarView />}
+            {view === "timelens" && <TimelensView />}
+            {view === "chat" && <ChatView />}
           </section>
           {view === "notes" && rightOpen && !zen && !cleanMode && <RightPanel />}
         </main>
@@ -378,6 +396,16 @@ export function App({ initial }: { initial: InitialData }) {
       <NotificationCenter />
       <LogsBugs />
       <CommandPalette />
+      {searchOpen && (
+        <Suspense fallback={null}>
+          <SearchDialog />
+        </Suspense>
+      )}
+      {(versionsFor || templatesOpen) && (
+        <Suspense fallback={null}>
+          <NoteDialogs />
+        </Suspense>
+      )}
       <HelpOverlay />
       <ContextMenuHost />
       {shareId && (

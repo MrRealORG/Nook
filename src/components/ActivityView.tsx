@@ -266,7 +266,10 @@ export function ActivityView() {
               </span>
             ))}
           </div>
-          <div className="flex items-end gap-2" style={{ height: 92 }}>
+          <div className="relative flex items-end gap-2" style={{ height: 92 }}>
+            {week.every((d) => !d.secs) && (
+              <div className="pointer-events-none absolute inset-x-0 top-6 text-center text-[12px] text-faint" data-testid="week-empty">No tracked time this week yet — Timelens fills this in as you work.</div>
+            )}
             {week.map((d) => {
               const dayScore = d.secs ? Math.round((d.byCat.productive / d.secs) * 100) : null;
               const isToday = d.day === todayKey();

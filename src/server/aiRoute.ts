@@ -20,6 +20,10 @@ export type AiBody = {
   question?: string;
   style?: string;
   persona?: { name?: string; species?: Species };
+  /** chat: prior turns (oldest first) */
+  history?: { role: "user" | "assistant"; content: string }[];
+  /** chat: ids of notes @mentioned → their text goes in as context */
+  mentions?: string[];
 };
 
 type ChatMsg = { role: "system" | "assistant" | "user"; content: string };
@@ -42,22 +46,25 @@ export async function cloud(messages: ChatMsg[]): Promise<string | null> {
 }
 
 /** Streaming completion; falls back to `null` like `cloud()`. */
-export async function cloudStream(messages: ChatMsg[], onDelta: OnDelta): Promise<string | null> {
+export async function cloudStream(messages: ChatMsg[], onDelta: OnDelta, signal?: AbortSignal): Promise<string | null> {
   let full = "";
   try {
     if (isTauri) {
       const { Channel } = await import("@tauri-apps/api/core");
       const ch = new Channel<{ type: string; text?: string; error?: string }>();
       ch.onmessage = (m) => {
+        if (signal?.aborted) return; // stop: ignore the rest of the stream
         if (m.type === "delta" && m.text) {
           full += m.text;
           onDelta(full);
         }
       };
-      const res = await invoke<{ ok: boolean; text?: string }>("ai_stream", { messages, onEvent: ch });
+      const stopped = new Promise<null>((r) => signal?.addEventListener("abort", () => r(null), { once: true }));
+      const res = await Promise.race([invoke<{ ok: boolean; text?: string }>("ai_stream", { messages, onEvent: ch }), stopped]);
+      if (!res) return full.trim() || null;
       return res.ok ? (res.text ?? full).trim() || null : null;
     }
-    const r = await fetch(`${DEV_API}/api/ai-stream`, post({ messages }));
+    const r = await fetch(`${DEV_API}/api/ai-stream`, { ...post({ messages }), signal });
     if (!r.body) return null;
     const reader = r.body.getReader();
     const dec = new TextDecoder();
@@ -269,7 +276,25 @@ async function runAgent(b: AiBody, rows: Note[], species: Species, name: string)
 }
 
 /** POST /api/ai */
-export async function handleAiRequest(b: AiBody, onDelta?: OnDelta): Promise<AiResult> {
+/** FTS5 hits for "ask my notes" (RAG). Falls back to the in-memory search. */
+async function ftsContext(q: string, rows: Note[], k = 5): Promise<{ id: string; title: string; content: string }[]> {
+  try {
+    const r = await json<{ hits: { id: string; title: string }[] }>(`/api/search?q=${encodeURIComponent(q)}&limit=${k}`);
+    const byId = new Map(rows.map((n) => [n.id, n]));
+    const hits = r.hits.map((h) => byId.get(h.id)).filter((n): n is Note => !!n);
+    if (hits.length) return hits.map((n) => ({ id: n.id, title: n.title, content: n.content }));
+  } catch {
+    /* fall through */
+  }
+  return search(q, rows, k).map((h) => ({ id: h.note.id, title: h.note.title, content: h.note.content }));
+}
+
+const LOCAL_EXPLAIN = (t: string) => {
+  const words = t.split(/\s+/).filter(Boolean);
+  return `**In short:** ${words.slice(0, 40).join(" ")}${words.length > 40 ? "…" : ""}\n\n_Set up an AI provider in Settings → AI harness for a real explanation._`;
+};
+
+export async function handleAiRequest(b: AiBody, onDelta?: OnDelta, signal?: AbortSignal): Promise<AiResult> {
   const body: AiBody = b && typeof b === "object" ? b : { action: "ask" };
   let rows: Note[] = [];
   try {
@@ -296,6 +321,50 @@ export async function handleAiRequest(b: AiBody, onDelta?: OnDelta): Promise<AiR
       res.text = continueText(text);
       useCloud = [{ role: "system", content: sys }, { role: "user", content: `Continue this note with the next logical section, same voice. Output only markdown to append.\n\nTitle: ${title}\n\n${text}` }];
       break;
+    case "translate": {
+      const lang = body.style || "English";
+      res.text = `_(Translation needs an AI provider — set one up in Settings → AI harness.)_\n\n${text}`;
+      useCloud = [{ role: "system", content: sys }, { role: "user", content: `Translate the following markdown into ${lang}. Keep formatting, links and [[wikilinks]]. Output only the translation.\n\n${text}` }];
+      break;
+    }
+    case "explain":
+      res.text = LOCAL_EXPLAIN(text);
+      useCloud = [{ role: "system", content: sys }, { role: "user", content: `Explain this clearly and briefly (markdown, max ~120 words). Define jargon.\n\n${text}` }];
+      break;
+    case "timelens":
+      // `text` carries the Rust-computed stats + offline insight
+      res.text = text;
+      useCloud = [
+        { role: "system", content: `${sys} You are a kind, practical productivity coach.` },
+        { role: "user", content: `Here are my tracked computer-time stats for ${title || "today"}. Write a short markdown summary: 3 bullet insights (what took my time, best hours, distractions) and 1 concrete suggestion. Start with a "## Timelens — ${title || "today"}" heading.\n\n${text}` },
+      ];
+      break;
+    case "asknotes": {
+      const q = (body.question ?? "").slice(0, 600);
+      const hits = await ftsContext(q, rows, 5);
+      res.sources = hits.map((h) => ({ id: h.id, title: h.title }));
+      const local = ask(q, rows);
+      res.text = hits.length ? flavor(species, name, local.text, "hi") : "I couldn't find anything about that in your notes.";
+      useCloud = [
+        { role: "system", content: `${sys} Answer ONLY from the notes provided and cite them inline as [[Title]]. If they don't contain the answer, say so plainly.` },
+        { role: "user", content: `Question: ${q}\n\nNotes:\n${hits.map((h) => `# ${h.title}\n${h.content.slice(0, 1600)}`).join("\n\n---\n\n") || "(no notes matched)"}` },
+      ];
+      break;
+    }
+    case "chat": {
+      const q = (body.question ?? "").slice(0, 4000);
+      const mentioned = (body.mentions ?? []).map((id) => rows.find((n) => n.id === id)).filter((n): n is Note => !!n);
+      const ctx = mentioned.map((n) => `# ${n.title}\n${n.content.slice(0, 3000)}`).join("\n\n---\n\n");
+      res.sources = mentioned.map((n) => ({ id: n.id, title: n.title }));
+      const a = ask(q, mentioned.length ? mentioned : rows);
+      res.text = flavor(species, name, a.text, "hi");
+      useCloud = [
+        { role: "system", content: `${sys} Use markdown. When notes are attached, ground your answer in them and cite [[Title]].${ctx ? `\n\nAttached notes:\n${ctx}` : ""}` },
+        ...(body.history ?? []).slice(-12).map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }) as ChatMsg),
+        { role: "user", content: q },
+      ];
+      break;
+    }
     case "rewrite":
       res.text = rewrite(text, body.style ?? "tidy");
       useCloud = [{ role: "system", content: sys }, { role: "user", content: `Rewrite this text in "${body.style ?? "tidy"}" style (tidy = fix grammar & clarity, concise = shorter, bullets = bullet list, tasks = checklist). Output only the rewritten markdown.\n\n${text}` }];
@@ -355,7 +424,7 @@ export async function handleAiRequest(b: AiBody, onDelta?: OnDelta): Promise<AiR
   }
 
   if (useCloud) {
-    const out = onDelta ? await cloudStream(useCloud, onDelta) : await cloud(useCloud);
+    const out = onDelta ? await cloudStream(useCloud, onDelta, signal) : await cloud(useCloud);
     if (out) {
       res.text = out;
       res.mode = "cloud";

@@ -444,7 +444,7 @@ export function TeamView() {
 
       <div className="scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto lg:flex-row lg:overflow-visible">
         {/* left column: presence + leaderboard + bulletin */}
-        <aside className="scroll flex w-full shrink-0 flex-col gap-3 lg:w-60 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+        <aside className="scroll flex w-full shrink-0 flex-col gap-3 lg:w-[268px] lg:min-h-0 lg:overflow-y-auto lg:pr-1">
           <section className="panel p-3" aria-label="Team members">
             <div className="label mb-2 flex items-center gap-1.5">
               <Icon name="user" size={11} /> in the nook

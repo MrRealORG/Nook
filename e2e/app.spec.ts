@@ -280,6 +280,6 @@ test.describe.serial("Nook SPA", () => {
     await st(page, `(s) => { s.setView("settings"); s.set({ settingsSection: "mcp" }); }`);
     await page.getByRole("button", { name: /Test connection/ }).click();
     await expect(page.getByText(/Nook Workspace MCP v/)).toBeVisible();
-    await expect(page.getByText(/16 tools live/)).toBeVisible();
+    await expect(page.getByText(/26 tools live/)).toBeVisible();
   });
 });

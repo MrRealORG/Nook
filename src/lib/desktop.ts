@@ -89,12 +89,22 @@ export async function handleDeepLink(raw: string): Promise<void> {
   const parts = `${u.hostname}${u.pathname}`.split("/").filter(Boolean).map(decodeURIComponent);
   const [kind, arg] = parts;
   switch (kind) {
-    case "note":
-      if (arg && st.notes.some((n) => n.id === arg)) {
+    case "note": {
+      // by id first, then by title (exported HTML and [[wikilinks]] link by title)
+      const byId = arg ? st.notes.find((n) => n.id === arg) : undefined;
+      const byTitle = arg ? st.notes.find((n) => n.title.trim().toLowerCase() === arg.trim().toLowerCase()) : undefined;
+      const hit = byId ?? byTitle;
+      if (hit) {
         st.setView("notes");
-        st.openNote(arg);
+        st.openNote(hit.id);
       } else st.toast("That note isn't in this vault", "close");
       break;
+    }
+    case "daily": {
+      const { openDaily } = await import("@/components/CalendarView");
+      await openDaily(arg);
+      break;
+    }
     case "share":
       if (arg) {
         const url = new URL(location.href);
@@ -129,6 +139,7 @@ let started = false;
 export async function initDesktop(): Promise<void> {
   if (started) return;
   started = true;
+  (window as unknown as { __nookDeepLink: typeof handleDeepLink }).__nookDeepLink = handleDeepLink;
   setShareHost(() => {
     if (!isTauri) return DEV_API;
     const d = useDesktopInfo.getState();
@@ -141,7 +152,11 @@ export async function initDesktop(): Promise<void> {
   const { useStore } = await import("@/lib/store");
   const win = (await import("@tauri-apps/api/window")).getCurrentWindow();
 
-  void listen<string>("nook://deep-link", (e) => void handleDeepLink(e.payload));
+  void listen<string>("nook://deep-link", (e) => void handleDeepLink(e.payload)).then(async () => {
+    // links that launched the app (cold start) were parked by Rust until now
+    const pending = await invoke<string[]>("pending_deep_links").catch(() => [] as string[]);
+    for (const u of pending) await handleDeepLink(u);
+  });
   void listen("nook://capture", () => {
     const st = useStore.getState();
     st.setView("notes");

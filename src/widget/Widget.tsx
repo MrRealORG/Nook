@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PetView } from "@/components/PetView";
+import { MicButton } from "@/components/MicButton";
 import { invoke, isTauri } from "@/lib/platform";
 import { useStore, type Task } from "@/lib/store";
 import { THEME_IDS, type ThemeId } from "@/lib/themes";
@@ -37,6 +38,35 @@ export function Widget() {
   const [mood, setMood] = useState<Mood>("idle");
   const [flash, setFlash] = useState("");
   const capRef = useRef<HTMLTextAreaElement>(null);
+  const [tl, setTl] = useState<{ activeSecs: number; topApp: string | null; paused: boolean; current: { app: string; afk: boolean; running: boolean } } | null>(null);
+
+  const loadTl = useCallback(async () => {
+    try {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      setTl(await (await fetch(`/api/timelens/summary?from=${d.getTime()}&to=${Date.now() + 1}`)).json());
+    } catch {
+      /* tracker not ready */
+    }
+  }, []);
+  const toggleTl = async () => {
+    const r = await (await fetch("/api/timelens/pause", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ paused: !tl?.paused }) })).json();
+    ping(r.paused ? "sleep" : "happy", r.paused ? "Timelens paused" : "Timelens on");
+    void loadTl();
+    notifyMain();
+  };
+  /** Clipboard quick-capture: paste whatever is on the clipboard as a note. */
+  const fromClipboard = async () => {
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) return ping("sad", "Clipboard is empty");
+      setCapture(text);
+      setAsTask(false);
+      capRef.current?.focus();
+    } catch {
+      ping("sad", "Clipboard blocked");
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -56,7 +86,11 @@ export function Widget() {
     document.documentElement.dataset.theme = theme;
     useStore.setState({ theme });
     void load();
-    const iv = setInterval(() => void load(), 60_000);
+    void loadTl();
+    const iv = setInterval(() => {
+      void load();
+      void loadTl();
+    }, 60_000);
     const offs: (() => void)[] = [];
     if (isTauri) {
       void import("@tauri-apps/api/event").then(async ({ listen }) => {
@@ -77,7 +111,7 @@ export function Widget() {
       offs.forEach((f) => f());
       window.removeEventListener("storage", onStorage);
     };
-  }, [load]);
+  }, [load, loadTl]);
 
   const ping = (m: Mood, text: string) => {
     setMood(m);
@@ -176,9 +210,22 @@ export function Widget() {
           <label className="flex items-center gap-1 text-[11px] text-dim">
             <input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} /> as task
           </label>
+          <button className="icon-btn" style={{ width: 24, height: 24 }} title="Paste from clipboard" aria-label="Paste from clipboard" onClick={() => void fromClipboard()}>📋</button>
+          <MicButton compact onText={(t) => setCapture((c) => (c ? `${c} ${t}` : t))} />
           <button className="btn btn-sm ml-auto" onClick={() => void save()} disabled={!capture.trim()}>Save</button>
         </div>
       </div>
+
+      {tl && (
+        <div className="widget-card flex items-center gap-2 !py-1.5 text-[11.5px]" data-testid="widget-timelens">
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tl.paused ? "var(--faint)" : tl.current.running && !tl.current.afk ? "#7fc48f" : "#d9c98a" }} />
+          <span className="min-w-0 flex-1 truncate">
+            <b className="pixel-font">{Math.floor(tl.activeSecs / 3600)}h {Math.round((tl.activeSecs % 3600) / 60)}m</b>
+            <span className="text-faint"> · {tl.paused ? "paused" : tl.current.running ? (tl.current.afk ? "away" : tl.current.app) : (tl.topApp ?? "nothing yet")}</span>
+          </span>
+          <button className="btn btn-sm !h-6 !px-2 !text-[11px]" onClick={() => void toggleTl()} aria-label={tl.paused ? "Resume Timelens" : "Pause Timelens"}>{tl.paused ? "▶" : "⏸"}</button>
+        </div>
+      )}
 
       <div className="widget-card min-h-0 flex-1 overflow-auto">
         <div className="label mb-1 flex items-center justify-between">

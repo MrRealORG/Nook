@@ -154,6 +154,9 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
 
     let db = &ctx.db;
     let c = db.conn();
+    if let Some(r) = crate::ext::route(&c, m, seg.as_slice(), &b, &req.query) {
+        return r;
+    }
     match (m, seg.as_slice()) {
         ("GET", []) => R::json(json!({ "message": "Hello, world!" })),
         ("GET", ["health"]) => match c.query_row("select 1", [], |r| r.get::<_, i64>(0)) {
@@ -802,6 +805,9 @@ pub fn task_row(r: &Row) -> rusqlite::Result<Value> {
         "by": r.get::<_, String>("by")?,
         "createdAt": r.get::<_, i64>("createdAt")?,
         "completedAt": r.get::<_, Option<i64>>("completedAt")?,
+        "status": r.get::<_, String>("status").unwrap_or_else(|_| "todo".into()),
+        "remindAt": r.get::<_, Option<i64>>("remindAt").unwrap_or(None),
+        "repeat": r.get::<_, String>("repeat").unwrap_or_default(),
     }))
 }
 
@@ -826,9 +832,12 @@ fn tasks_create(c: &Connection, b: &Map<String, Value>) -> R {
         Some("agent") => "agent",
         _ => "you",
     };
+    let status = str_of(b.get("status")).filter(|s| crate::ext::STATUSES.contains(s) && *s != "done").unwrap_or("todo");
+    let remind = num_of(b.get("remindAt")).map(|d| d.round() as i64);
+    let repeat = str_of(b.get("repeat")).filter(|s| crate::ext::REPEATS.contains(s)).unwrap_or("");
     let r = c.execute(
-        r#"INSERT INTO "Task" ("id","title","list","priority","due","done","noteId","tags","by","createdAt","completedAt") VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,?9,NULL)"#,
-        params![id, title, list, priority, due, note, Value::from(clean_tags(b.get("tags"))).to_string(), by, now_ms()],
+        r#"INSERT INTO "Task" ("id","title","list","priority","due","done","noteId","tags","by","createdAt","completedAt","status","remindAt","repeat") VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,?9,NULL,?10,?11,?12)"#,
+        params![id, title, list, priority, due, note, Value::from(clean_tags(b.get("tags"))).to_string(), by, now_ms(), status, remind, repeat],
     );
     match r {
         Ok(_) => R::json(c.query_row(r#"SELECT * FROM "Task" WHERE "id"=?1"#, params![id], task_row).unwrap_or(Value::Null)),
@@ -841,7 +850,25 @@ fn tasks_patch(c: &Connection, id: &str, b: &Map<String, Value>) -> R {
         return R::err(404, "not found");
     };
     let was_done = row["done"].as_bool().unwrap_or(false);
-    let done = b.get("done").and_then(|v| v.as_bool()).unwrap_or(was_done);
+    // kanban status and done stay in sync: status wins when both are sent
+    let status_in = str_of(b.get("status")).filter(|s| crate::ext::STATUSES.contains(s));
+    let done = match status_in {
+        Some(st) => st == "done",
+        None => b.get("done").and_then(|v| v.as_bool()).unwrap_or(was_done),
+    };
+    let status = match status_in {
+        Some(st) => st.to_string(),
+        None if done => "done".to_string(),
+        None if was_done && !done => "todo".to_string(),
+        None => row["status"].as_str().unwrap_or("todo").to_string(),
+    };
+    let remind = match b.get("remindAt") {
+        Some(Value::Null) => None,
+        Some(v) if num_of(Some(v)).is_some() => num_of(Some(v)).map(|d| d.round() as i64),
+        _ => row["remindAt"].as_i64(),
+    };
+    let remind_changed = remind != row["remindAt"].as_i64();
+    let repeat = str_of(b.get("repeat")).filter(|s| crate::ext::REPEATS.contains(s)).map(String::from).unwrap_or_else(|| row["repeat"].as_str().unwrap_or("").to_string());
     let title = str_of(b.get("title")).map(|t| take(t.trim(), 200)).filter(|t| !t.is_empty()).unwrap_or_else(|| row["title"].as_str().unwrap_or("").to_string());
     let list = str_of(b.get("list")).filter(|l| LISTS.contains(l)).map(String::from).unwrap_or_else(|| row["list"].as_str().unwrap_or("today").to_string());
     let priority = num_of(b.get("priority")).map(|p| p.round().clamp(0.0, 2.0) as i64).unwrap_or(row["priority"].as_i64().unwrap_or(1));
@@ -867,10 +894,18 @@ fn tasks_patch(c: &Connection, id: &str, b: &Map<String, Value>) -> R {
         row["completedAt"].as_i64()
     };
     let _ = c.execute(
-        r#"UPDATE "Task" SET "title"=?1,"list"=?2,"priority"=?3,"due"=?4,"done"=?5,"noteId"=?6,"tags"=?7,"completedAt"=?8 WHERE "id"=?9"#,
-        params![title, list, priority, due, done as i64, note, tags, completed, id],
+        r#"UPDATE "Task" SET "title"=?1,"list"=?2,"priority"=?3,"due"=?4,"done"=?5,"noteId"=?6,"tags"=?7,"completedAt"=?8,"status"=?10,"remindAt"=?11,"repeat"=?12 WHERE "id"=?9"#,
+        params![title, list, priority, due, done as i64, note, tags, completed, id, status, remind, repeat],
     );
-    R::json(c.query_row(r#"SELECT * FROM "Task" WHERE "id"=?1"#, params![id], task_row).unwrap_or(Value::Null))
+    if remind_changed {
+        let _ = c.execute(r#"UPDATE "Task" SET "notifiedAt"=NULL WHERE "id"=?1"#, params![id]);
+    }
+    let next = if done && !was_done { crate::ext::spawn_next_occurrence(&c, id) } else { None };
+    let mut out = c.query_row(r#"SELECT * FROM "Task" WHERE "id"=?1"#, params![id], task_row).unwrap_or(Value::Null);
+    if let (Some(n), Value::Object(m)) = (next, &mut out) {
+        m.insert("next".into(), n);
+    }
+    R::json(out)
 }
 
 // ============================================================== packs / bugs / activity

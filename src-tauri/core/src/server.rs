@@ -336,7 +336,7 @@ mod tests {
         let (_, _, body) = post(&base, "/mcp", json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }), None).await;
         let v: Value = serde_json::from_str(&body).unwrap();
         let names: Vec<String> = v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 16 + crate::ext::EXT_TOOLS.len());
         // call every tool over HTTP
         let mut nid = String::from("n-welcome");
         let mut tid = String::new();
@@ -346,6 +346,10 @@ mod tests {
                 "complete_task" | "update_task" | "delete_task" => json!({ "id": tid, "title": "edited" }),
                 "write_note" => json!({ "title": "http note", "content": "x" }),
                 "read_note" | "rename_note" | "append_note" | "delete_note" => json!({ "id": nid, "title": "renamed", "content": "y" }),
+                "backlinks" => json!({ "title": "Graph view" }),
+                "set_reminder" => json!({ "title": "http reminder", "at": 1_900_000_000_000i64 }),
+                "move_task" => json!({ "title": "http reminder", "status": "doing" }),
+                "note_from_template" => json!({ "template": "meeting", "title": "http meeting" }),
                 _ => json!({}),
             };
             let (st, _, body) = post(&base, "/mcp", json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": name, "arguments": args } }), None).await;
@@ -380,7 +384,7 @@ mod tests {
         let r = lc().request(reqwest::Method::OPTIONS, format!("{base}/mcp")).send().await.unwrap();
         assert_eq!(r.status().as_u16(), 204);
         let info: Value = lc().get(format!("{base}/mcp")).send().await.unwrap().json().await.unwrap();
-        assert_eq!(info["tools"].as_array().unwrap().len(), 16);
+        assert_eq!(info["tools"].as_array().unwrap().len(), 16 + crate::ext::EXT_TOOLS.len());
         // full API is NOT exposed in desktop mode
         assert_eq!(lc().get(format!("{base}/api/notes")).send().await.unwrap().status().as_u16(), 404);
         h.stop().await;

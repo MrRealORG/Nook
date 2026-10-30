@@ -551,7 +551,7 @@ export function ArcadeView() {
               onClick={() => setCat(c as (typeof CATEGORIES)[number] | "Mine")}
               role="tab"
               aria-selected={cat === c}
-              style={cat === c ? { color: c === "Mine" ? "#e0689e" : (CAT_COLORS as Record<string, string>)[c] } : undefined}
+              style={cat === c && c !== "All" ? { color: c === "Mine" ? "#e0689e" : (CAT_COLORS as Record<string, string>)[c] } : undefined}
             >
               <Icon name={c === "Mine" ? "wand" : CAT_ICONS[c] ?? "gamepad"} size={13} /> {c}
               <span className="opacity-60">{counts[c]}</span>

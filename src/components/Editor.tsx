@@ -11,6 +11,9 @@ import { AttImg, AttLink } from "@/components/Attachment";
 import { activity } from "@/lib/activity";
 import { useStore, type EditorMode } from "@/lib/store";
 import { countWords, parseNote, timeAgo, titleKey } from "@/lib/util";
+import { exportNote, printNote } from "@/lib/noteExport";
+import { useUi11 } from "@/lib/ui11";
+import { SelectionAI } from "@/components/SelectionAI";
 
 const COVERS = [null, "/art/cover-peaks.webp", "/art/cover-city.webp", "/art/cover-forest.webp"];
 
@@ -625,7 +628,7 @@ export function Editor({ id }: { id: string }) {
           </button>
         </div>
 
-        <div className={`mx-auto w-full px-8 pb-28 sm:px-12 ${wide ? "max-w-[1240px]" : "max-w-[800px]"}`} style={{ marginTop: cover ? -30 : 0 }}>
+        <div className={`relative z-[1] mx-auto w-full px-8 pb-28 sm:px-12 ${wide ? "max-w-[1240px]" : "max-w-[800px]"}`} style={{ marginTop: cover ? -30 : 0 }}>
           <input
             ref={titleRef}
             value={title}
@@ -691,16 +694,28 @@ export function Editor({ id }: { id: string }) {
                     },
                     {
                       icon: "download" as IconName,
-                      label: "Export as .md",
-                      run: () => {
-                        const blob = new Blob([`# ${note.title}\n\n${note.content}`], { type: "text/markdown" });
-                        const a = document.createElement("a");
-                        a.href = URL.createObjectURL(blob);
-                        a.download = `${note.title.replace(/[\\/:*?"<>|]/g, "").slice(0, 40) || "note"}.md`;
-                        a.click();
-                        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-                        st().toast("Exported as markdown", "download");
-                      },
+                      label: "Export as Markdown",
+                      run: () => void exportNote(id, "md"),
+                    },
+                    {
+                      icon: "globe" as IconName,
+                      label: "Export as HTML",
+                      run: () => void exportNote(id, "html"),
+                    },
+                    {
+                      icon: "file-text" as IconName,
+                      label: "Print / save as PDF",
+                      run: () => void printNote(id),
+                    },
+                    {
+                      icon: "clock" as IconName,
+                      label: "Version history…",
+                      run: () => useUi11.getState().set({ versionsFor: id }),
+                    },
+                    {
+                      icon: "layout" as IconName,
+                      label: "New from template…",
+                      run: () => useUi11.getState().set({ templatesOpen: true }),
                     },
                     {
                       icon: "file-text" as IconName,
@@ -743,7 +758,7 @@ export function Editor({ id }: { id: string }) {
             </button>
           </div>
 
-          <div className="sticky top-2 z-20 mb-5 flex items-center gap-1 rounded-[14px] border border-line px-1.5 py-1" style={{ background: "var(--panel-solid)", boxShadow: "0 10px 30px -18px rgba(0,0,0,.6)" }}>
+          <div className="editor-toolbar sticky top-2 z-20 mb-5 flex items-center gap-1 rounded-[14px] border border-line px-1.5 py-1" style={{ background: "var(--panel-solid)", boxShadow: "0 10px 30px -18px rgba(0,0,0,.6)" }}>
             <div className="seg">
               {([["write", "pencil", "Write"], ["split", "layout", "Split"], ["read", "eye", "Read"]] as [EditorMode, IconName, string][]).map(([m, ic, l]) => (
                 <button key={m} data-on={mode === m} onClick={() => st().set({ editorMode: m })} title={`${l} (Ctrl+E)`}>
@@ -924,6 +939,7 @@ export function Editor({ id }: { id: string }) {
         </div>
       </div>
       {shareOpen && <ShareDialog noteId={id} noteTitle={note.title} onClose={() => setShareOpen(false)} />}
+      {mode !== "read" && <SelectionAI taRef={taRef} noteId={id} />}
     </div>
   );
 }

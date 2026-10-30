@@ -23,8 +23,23 @@ export function tryInvoke(cmd: string, args?: Record<string, unknown>): void {
   void invoke(cmd, args).catch((e) => console.warn(`[nook] ${cmd} failed`, e));
 }
 
+/** What clicking a link should do. Pure — unit-tested from e2e via `window.__nookLink`. */
+export type LinkAction = "external" | "deeplink" | "share" | "download" | "internal";
+export function classifyLink(href: string, origin = typeof location !== "undefined" ? location.origin : ""): LinkAction {
+  const h = href.trim();
+  if (/^nook:\/\/share\//i.test(h)) return "share";
+  if (/^nook:/i.test(h)) return "deeplink";
+  if (/^(blob:|data:)/i.test(h)) return "download";
+  if (/^(https?:|mailto:)/i.test(h) && !(origin && h.startsWith(origin))) return "external";
+  return "internal";
+}
+
 /** Open an external URL in the system browser (desktop) or a new tab (browser). */
 export async function openExternal(url: string): Promise<void> {
+  if (typeof window !== "undefined" && (window as unknown as { __NOOK_E2E__?: boolean }).__NOOK_E2E__) {
+    (window as unknown as { __nookOpened: string[] }).__nookOpened = [...((window as unknown as { __nookOpened?: string[] }).__nookOpened ?? []), url];
+    if (!isTauri) return; // e2e: record instead of spawning tabs
+  }
   if (isTauri) {
     try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
@@ -66,6 +81,26 @@ const blobRegistry = new Map<string, Blob>();
  *  - external links / `window.open(http…)` / mailto: → system browser
  */
 export function installDesktopGlue(): void {
+  if (typeof window !== "undefined") (window as unknown as { __nookLink: typeof classifyLink }).__nookLink = classifyLink;
+  // nook:// links inside notes, chat replies and exported HTML work in the browser build too
+  if (!isTauri && typeof document !== "undefined") {
+    document.addEventListener(
+      "click",
+      (e) => {
+        const a = (e.target as HTMLElement | null)?.closest?.("a");
+        const href = a?.getAttribute("href") ?? "";
+        const kind = a ? classifyLink(href) : "internal";
+        if (kind === "deeplink" || kind === "share") {
+          e.preventDefault();
+          void import("@/lib/desktop").then((d) => d.handleDeepLink(href));
+        } else if (kind === "external" && (window as unknown as { __NOOK_E2E__?: boolean }).__NOOK_E2E__) {
+          e.preventDefault();
+          void openExternal(href);
+        }
+      },
+      true,
+    );
+  }
   if (!isTauri || nativeAnchorClick) return;
   nativeAnchorClick = HTMLAnchorElement.prototype.click;
   const createObjectURL = URL.createObjectURL.bind(URL);
@@ -86,8 +121,13 @@ export function installDesktopGlue(): void {
       else void fetch(href).then((r) => r.blob()).then((b) => saveFile(name, b));
       return true;
     }
-    if (/^(https?:|mailto:)/i.test(href) && !href.startsWith(location.origin)) {
+    const kind = classifyLink(href);
+    if (kind === "external") {
       void openExternal(href);
+      return true;
+    }
+    if (kind === "deeplink" || kind === "share") {
+      void import("@/lib/desktop").then((d) => d.handleDeepLink(href));
       return true;
     }
     return false;

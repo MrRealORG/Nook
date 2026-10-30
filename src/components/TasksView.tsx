@@ -1,11 +1,12 @@
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
 import { MicButton } from "@/components/MicButton";
 import { PetView } from "@/components/PetView";
 import { useStore, type Task, type TaskList } from "@/lib/store";
 import { levelOf } from "@/lib/pet";
+const KanbanBoard = lazy(() => import("@/components/KanbanBoard"));
 
 const LISTS: { id: TaskList; label: string; icon: IconName; hint: string }[] = [
   { id: "today", label: "Today", icon: "sun", hint: "Do these before bed" },
@@ -178,6 +179,11 @@ export function TasksView() {
   const [list, setList] = useState<TaskList>("today");
   const [priority, setPriority] = useState<0 | 1 | 2>(1);
   const [showDone, setShowDone] = useState(false);
+  const [board, setBoardState] = useState(() => localStorage.getItem("nook:tasks-board") === "1");
+  const setBoard = (b: boolean) => {
+    setBoardState(b);
+    localStorage.setItem("nook:tasks-board", b ? "1" : "0");
+  };
   const [atIdx, setAtIdx] = useState(0);
   const st = useStore.getState;
 
@@ -254,7 +260,7 @@ export function TasksView() {
 
   return (
     <div className="scroll h-full">
-      <div className="mx-auto max-w-[860px] px-1 pb-10">
+      <div className={`mx-auto px-1 pb-10 ${board ? "max-w-[1180px]" : "max-w-[860px]"}`}>
         {/* header */}
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <div>
@@ -262,6 +268,10 @@ export function TasksView() {
             <div className="text-[13px] text-dim">{open} open · {doneToday} done today — small wins stack.</div>
           </div>
           <div className="flex-1" />
+          <div className="seg" role="tablist" aria-label="Task layout">
+            <button role="tab" aria-selected={!board} data-on={!board} onClick={() => setBoard(false)}><Icon name="bulletlist" size={12} /> List</button>
+            <button role="tab" aria-selected={board} data-on={board} onClick={() => setBoard(true)} data-testid="kanban-toggle"><Icon name="layout" size={12} /> Board</button>
+          </div>
           <div className="goal-ring" style={{ ["--p" as string]: Math.round(pct * 100) }} title={`${doneToday} of today's tasks done`}>
             <span className="pixel-font text-[13px]">{Math.round(pct * 100)}%</span>
           </div>
@@ -357,6 +367,12 @@ export function TasksView() {
           </div>
         </div>
 
+        {board ? (
+          <Suspense fallback={<div className="pixel-font p-6 text-dim">loading…</div>}>
+            <KanbanBoard />
+          </Suspense>
+        ) : (
+        <>
         {/* lists */}
         {LISTS.map((l) => {
           const rows = byList[l.id];
@@ -416,7 +432,10 @@ export function TasksView() {
           </div>
         )}
 
-        {tasksLoaded && tasks.length === 0 && (
+        </>
+        )}
+
+        {!board && tasksLoaded && tasks.length === 0 && (
           <div className="paper mt-4 grid place-items-center gap-2 p-8 text-center">
             <PetView species={pet.species} tint={pet.look} hat={pet.hat} mood="happy" scale={3} fps={6} />
             <div className="pixel-font text-[16px]">A clean slate!</div>
