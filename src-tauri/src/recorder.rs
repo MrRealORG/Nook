@@ -353,21 +353,26 @@ fn capture_session(
 // --------------------------------------------------------------- commands ----
 
 #[tauri::command]
-pub fn recorder_devices() -> CmdResult<Vec<String>> {
-    let host = cpal::default_host();
-    let mut names: Vec<String> = Vec::new();
-    for d in host
-        .input_devices()
-        .map_err(es)?
-        .filter_map(|d| d.name().ok())
-    {
-        names.push(d);
-    }
-    Ok(names)
+pub async fn recorder_devices() -> CmdResult<Vec<String>> {
+    // device enumeration can take seconds on some audio drivers — worker thread
+    tauri::async_runtime::spawn_blocking(|| {
+        let host = cpal::default_host();
+        let mut names: Vec<String> = Vec::new();
+        for d in host
+            .input_devices()
+            .map_err(es)?
+            .filter_map(|d| d.name().ok())
+        {
+            names.push(d);
+        }
+        Ok(names)
+    })
+    .await
+    .map_err(|e| es(e))?
 }
 
 #[tauri::command]
-pub fn recorder_status(state: State<'_, RecorderState>) -> CmdResult<RecorderStatus> {
+pub async fn recorder_status(state: State<'_, RecorderState>) -> CmdResult<RecorderStatus> {
     let recording = state.recording.load(Ordering::Relaxed);
     let elapsed = if recording {
         now_ms() - state.started_at.load(Ordering::Relaxed)
@@ -388,7 +393,7 @@ pub fn recorder_status(state: State<'_, RecorderState>) -> CmdResult<RecorderSta
 /// Returns instantly — the UI gets `recorder://event` when the mic is live
 /// (or when it fails). NEVER blocks the main/UI thread.
 #[tauri::command]
-pub fn recorder_start(app: AppHandle, state: State<'_, RecorderState>, device: Option<String>) -> CmdResult<()> {
+pub async fn recorder_start(app: AppHandle, state: State<'_, RecorderState>, device: Option<String>) -> CmdResult<()> {
     if state.recording.load(Ordering::Relaxed) {
         return Err("Already recording".into());
     }
@@ -419,7 +424,7 @@ pub fn recorder_start(app: AppHandle, state: State<'_, RecorderState>, device: O
 /// Returns instantly — the capture thread finalises the WAV and reports
 /// back through `recorder://event` ("saved"). NEVER blocks the UI thread.
 #[tauri::command]
-pub fn recorder_stop(state: State<'_, RecorderState>) -> CmdResult<()> {
+pub async fn recorder_stop(state: State<'_, RecorderState>) -> CmdResult<()> {
     if !state.recording.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -428,7 +433,7 @@ pub fn recorder_stop(state: State<'_, RecorderState>) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn list_recordings(app: AppHandle) -> CmdResult<Vec<RecordingInfo>> {
+pub async fn list_recordings(app: AppHandle) -> CmdResult<Vec<RecordingInfo>> {
     let dir = recordings_dir(&app)?;
     let mut out: Vec<RecordingInfo> = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(es)?.flatten() {
@@ -470,7 +475,7 @@ pub fn list_recordings(app: AppHandle) -> CmdResult<Vec<RecordingInfo>> {
 }
 
 #[tauri::command]
-pub fn rename_recording(app: AppHandle, from: String, to: String) -> CmdResult<()> {
+pub async fn rename_recording(app: AppHandle, from: String, to: String) -> CmdResult<()> {
     let dir = recordings_dir(&app)?;
     let from_name = safe_name(&from).ok_or("Invalid file name")?;
     let to_name = safe_name(&to).ok_or("Invalid new name")?;
@@ -481,7 +486,7 @@ pub fn rename_recording(app: AppHandle, from: String, to: String) -> CmdResult<(
 }
 
 #[tauri::command]
-pub fn delete_recording(app: AppHandle, name: String) -> CmdResult<()> {
+pub async fn delete_recording(app: AppHandle, name: String) -> CmdResult<()> {
     let dir = recordings_dir(&app)?;
     let name_ok = safe_name(&name).ok_or("Invalid file name")?;
     let p = rec_file(&dir, &name_ok);
@@ -490,20 +495,24 @@ pub fn delete_recording(app: AppHandle, name: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn export_recording(app: AppHandle, name: String) -> CmdResult<Option<String>> {
+pub async fn export_recording(app: AppHandle, name: String) -> CmdResult<Option<String>> {
     let dir = recordings_dir(&app)?;
     let name_ok = safe_name(&name).ok_or("Invalid file name")?;
-    let src = rec_file(&dir, &name_ok);
-    let path = rfd::FileDialog::new()
-        .set_title("Save recording as…")
-        .set_file_name(name.as_str())
-        .add_filter("WAV audio", &["wav"])
-        .save_file();
-    match path {
-        Some(dest) => {
-            std::fs::copy(&src, &dest).map_err(es)?;
-            Ok(Some(dest.to_string_lossy().into_owned()))
+    let src_path = rec_file(&dir, &name_ok);
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = rfd::FileDialog::new()
+            .set_title("Save recording as…")
+            .set_file_name(name.as_str())
+            .add_filter("WAV audio", &["wav"])
+            .save_file();
+        match path {
+            Some(dest) => {
+                std::fs::copy(&src_path, &dest).map_err(es)?;
+                Ok(Some(dest.to_string_lossy().into_owned()))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
-    }
+    })
+    .await
+    .map_err(|e| es(e))?
 }

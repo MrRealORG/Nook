@@ -15,7 +15,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.7</span>
+        <span class="tb-ver">v0.8</span>
       </div>
 
       <div class="tb-search">
@@ -111,6 +111,7 @@
             <span class="ed-sep"></span>
             <button class="ed-btn" id="btn-ai" title="Nook AI — summarize, action items, title"></button>
             <span class="ed-sep"></span>
+            <button class="ed-btn" id="btn-image" title="Insert image (or paste / drop one straight in)"></button>
             <button class="ed-btn" id="btn-preview" title="Markdown preview (Ctrl+E)"></button>
             <button class="ed-btn" id="btn-export" title="Export as Markdown"></button>
             <button class="ed-btn ed-danger" id="btn-trash" title="Move to trash"></button>
@@ -126,12 +127,17 @@
             <button data-md="quote" title="Quote">❝</button>
             <button data-md="code" title="Inline code">&lt;&gt;</button>
             <button data-md="link" title="Link"></button>
+            <span class="ed-sep"></span>
+            <button data-md="image" title="Insert image"></button>
+            <button data-md="mention" title="Mention another note (@)"></button>
           </div>
           <div id="ed-body">
-            <textarea id="ed-text" placeholder="Start writing… everything saves itself as you type." spellcheck="false"></textarea>
+            <textarea id="ed-text" placeholder="Start writing… everything saves itself as you type.  ·  / for commands  ·  @ to link a note  ·  paste images straight in" spellcheck="false"></textarea>
             <div id="ed-preview" class="md hidden"></div>
           </div>
+          <div id="ed-backlinks" class="hidden"></div>
         </div>
+        <input type="file" id="ed-img-file" accept="image/png, image/jpeg, image/gif, image/webp, image/svg+xml" multiple class="hidden" />
       </main>
 
       <section id="tasks-view" class="hidden">
@@ -162,6 +168,31 @@
           <ul id="tv-list"></ul>
           <div class="tv-foot">
             <button class="linklike hidden" id="btn-clear-done">Clear completed</button>
+          </div>
+        </div>
+      </section>
+      <section id="board-view" class="hidden">
+        <div class="bv-wrap">
+          <div class="bv-head">
+            <h1>Board</h1>
+            <span class="bv-sub">Drag cards between columns — Notion style</span>
+          </div>
+          <div class="bv-columns" id="bv-columns">
+            <div class="bv-col" data-status="0">
+              <div class="bv-col-head"><span class="bv-dot todo"></span><span class="bv-col-title">To do</span><span class="bv-count" id="bvc-count-0"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card">+</button></div>
+              <form class="bv-new hidden" data-status="0"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
+              <div class="bv-cards" id="bvc-cards-0"></div>
+            </div>
+            <div class="bv-col" data-status="1">
+              <div class="bv-col-head"><span class="bv-dot doing"></span><span class="bv-col-title">In progress</span><span class="bv-count" id="bvc-count-1"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card">+</button></div>
+              <form class="bv-new hidden" data-status="1"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
+              <div class="bv-cards" id="bvc-cards-1"></div>
+            </div>
+            <div class="bv-col" data-status="2">
+              <div class="bv-col-head"><span class="bv-dot done"></span><span class="bv-col-title">Done</span><span class="bv-count" id="bvc-count-2"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card">+</button></div>
+              <form class="bv-new hidden" data-status="2"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
+              <div class="bv-cards" id="bvc-cards-2"></div>
+            </div>
           </div>
         </div>
       </section>

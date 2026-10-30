@@ -11,6 +11,13 @@ export const IS_TAURI =
 
 let mock = null;
 
+// Images live on `window` so every module instance (and every vite HMR
+// generation) sees the same store in the browser preview.
+function mockImages() {
+  if (!window.__nookMockImages) window.__nookMockImages = {};
+  return window.__nookMockImages;
+}
+
 function seedMock() {
   const now = Date.now();
   const day = 86400000;
@@ -56,7 +63,7 @@ The whole app is now **native Rust** — no servers, no waiting.
     tasks: [
       {
         id: 'task-1', title: 'Water the plants', notes: '', done: false, priority: 1,
-        dueAt: now + 3600000, remindAt: now + 1800000, repeat: 'daily',
+        dueAt: now + 3600000, remindAt: now + 1800000, repeat: 'daily', status: 0,
         subtasks: [
           { id: 's1', title: 'Balcony pots', done: true },
           { id: 's2', title: 'Fern', done: false }
@@ -65,12 +72,12 @@ The whole app is now **native Rust** — no servers, no waiting.
       },
       {
         id: 'task-2', title: 'Ship the new release', notes: 'Tag the repo, check CI, upload to Gofile.',
-        done: true, priority: 3, dueAt: now - 7200000, remindAt: null, repeat: 'none',
+        done: true, priority: 3, dueAt: now - 7200000, remindAt: null, repeat: 'none', status: 2,
         subtasks: [], reminded: true, position: 2, createdAt: now - 380000, completedAt: now - 600000
       },
       {
         id: 'task-3', title: 'Call the electrician', notes: '', done: false, priority: 2,
-        dueAt: now - 86400000, remindAt: null, repeat: 'none', subtasks: [],
+        dueAt: now - 86400000, remindAt: null, repeat: 'none', subtasks: [], status: 1,
         reminded: false, position: 3, createdAt: now - 300000, completedAt: null
       }
     ],
@@ -80,7 +87,8 @@ The whole app is now **native Rust** — no servers, no waiting.
       { name: 'rec-20261029-101500.wav', path: 'C:\\recordings\\rec-20261029-101500.wav', bytes: 1875000, durationMs: 93500, createdAt: now - 86400000 },
       { name: 'rec-20261028-154500.wav', path: 'C:\\recordings\\rec-20261028-154500.wav', bytes: 945000, durationMs: 47000, createdAt: now - 2 * 86400000 }
     ],
-    recTimerStart: null
+    recTimerStart: null,
+    boardFilter: 'all'
   };
 }
 
@@ -222,13 +230,35 @@ function mockCall(cmd, args) {
       return Promise.resolve();
     case 'list_tasks':
       return Promise.resolve(mock.tasks.slice().sort((x, y) => (x.done - y.done) || (x.position - y.position)));
+    case 'insert_note_image': {
+      const id = 'img-' + Date.now().toString(36) + Math.floor(Math.random() * 999);
+      mockImages()[id] = { mime: a.mime, name: a.name || 'image', dataUrl: `data:${a.mime};base64,${a.data}`, noteId: a.noteId, createdAt: Date.now(), bytes: Math.round((a.data || '').length * 0.75) };
+      return Promise.resolve({ id, noteId: a.noteId, mime: a.mime, name: a.name || 'image', bytes: mockImages()[id].bytes, createdAt: Date.now() });
+    }
+    case 'delete_note_image':
+      delete mockImages()[a.id];
+      return Promise.resolve();
+    case 'note_images':
+      return Promise.resolve(Object.entries(mockImages()).filter(([, v]) => v.noteId === a.noteId).map(([id, v]) => ({ id, noteId: v.noteId, mime: v.mime, name: v.name, bytes: v.bytes, createdAt: v.createdAt })));
+    case 'note_backlinks': {
+      const me = mock.notes.find((x) => x.id === a.id);
+      if (!me) return Promise.resolve([]);
+      const t = (me.title || '').trim();
+      if (!t) return Promise.resolve([]);
+      return Promise.resolve(
+        mock.notes
+          .filter((n) => n.id !== a.id && !n.trashed && (n.content || '').includes(`[[${t}]]`))
+          .map((n) => ({ id: n.id, folderId: n.folderId, title: n.title, snippet: mockSnippet(n.content), pinned: n.pinned, favorite: n.favorite, trashed: n.trashed, createdAt: n.createdAt, updatedAt: n.updatedAt }))
+      );
+    }
     case 'create_task': {
       const t = {
         id: 'task-' + Date.now(), title: (a.title || '').trim(), notes: '',
-        done: false, priority: a.priority || 0, dueAt: a.dueAt || null,
+        done: (a.status || 0) === 2, priority: a.priority || 0, dueAt: a.dueAt || null,
         remindAt: a.remindAt || null, repeat: 'none', subtasks: [],
+        status: a.status || 0,
         reminded: false, position: mock.tasks.length + 1,
-        createdAt: Date.now(), completedAt: null
+        createdAt: Date.now(), completedAt: (a.status || 0) === 2 ? Date.now() : null
       };
       mock.tasks.push(t);
       return Promise.resolve({ ...t });
@@ -243,6 +273,11 @@ function mockCall(cmd, args) {
       if (a.remindAt !== undefined) t.remindAt = a.remindAt;
       if (a.repeat !== undefined) t.repeat = a.repeat;
       if (a.subtasks !== undefined) t.subtasks = a.subtasks;
+      if (a.status !== undefined) {
+        t.status = Math.max(0, Math.min(2, Number(a.status) || 0));
+        t.done = t.status === 2;
+        t.completedAt = t.done ? Date.now() : null;
+      }
       if (t.remindAt && t.remindAt > Date.now()) t.reminded = false;
       return Promise.resolve();
     }
@@ -254,9 +289,11 @@ function mockCall(cmd, args) {
         const base = t.dueAt || Date.now();
         t.dueAt = t.repeat === 'daily' ? base + day : t.repeat === 'weekly' ? base + 7 * day : base + 30 * day;
         t.reminded = false;
+        t.status = 0;
         return Promise.resolve({ ...t });
       }
       t.done = !!a.done;
+      t.status = t.done ? 2 : (t.status === 2 ? 0 : t.status);
       t.completedAt = t.done ? Date.now() : null;
       return Promise.resolve({ ...t });
     }
@@ -372,6 +409,12 @@ function mockCall(cmd, args) {
     default:
       return Promise.reject(new Error('mock: unknown command ' + cmd));
   }
+}
+
+// Browser-mock image resolver: nookimg://id -> data URL (sync, for markdown)
+export function mockImageSrc(id) {
+  const store = (typeof window !== 'undefined' && window.__nookMockImages) || {};
+  return store[id] ? store[id].dataUrl : '';
 }
 
 // ---------------------------------------------------------------- bridge ----

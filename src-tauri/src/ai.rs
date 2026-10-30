@@ -117,8 +117,16 @@ fn emit_chunk(app: &AppHandle, id: &str, delta: Option<&str>, error: Option<Stri
 // ------------------------------------------------------------- commands ----
 
 /// Lists models from an OpenAI-compatible endpoint (GET /models).
+/// Runs on a worker thread — the UI can never freeze while we wait on the
+/// network (this was THE v0.7 "click and it gets stuck" bug).
 #[tauri::command]
-pub fn ai_list_models(base_url: String, api_key: Option<String>) -> CmdResult<Vec<String>> {
+pub async fn ai_list_models(base_url: String, api_key: Option<String>) -> CmdResult<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || ai_list_models_blocking(base_url, api_key))
+        .await
+        .map_err(|e| es(e))?
+}
+
+fn ai_list_models_blocking(base_url: String, api_key: Option<String>) -> CmdResult<Vec<String>> {
     let base = clean_base(&base_url);
     let req = auth_headers(agent().get(&format!("{base}/models")), api_key.unwrap_or_default().as_str());
     let resp = req
@@ -141,8 +149,22 @@ pub fn ai_list_models(base_url: String, api_key: Option<String>) -> CmdResult<Ve
 }
 
 /// One-shot completion (used for note summaries / action items / titles).
+/// Worker thread — see ai_list_models.
 #[tauri::command]
-pub fn ai_complete(
+pub async fn ai_complete(
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    messages: String,
+) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ai_complete_blocking(base_url, api_key, model, messages)
+    })
+    .await
+    .map_err(|e| es(e))?
+}
+
+fn ai_complete_blocking(
     base_url: String,
     api_key: Option<String>,
     model: String,
@@ -172,7 +194,7 @@ pub fn ai_complete(
 /// Streaming chat — returns immediately, streams via `ai://event`.
 /// Frontend listens for { id, delta, error } payloads.
 #[tauri::command]
-pub fn ai_chat(
+pub async fn ai_chat(
     app: AppHandle,
     state: State<'_, AiState>,
     request_id: String,
@@ -281,8 +303,15 @@ pub fn ai_stop(state: State<'_, AiState>, request_id: String) -> CmdResult<()> {
 }
 
 /// Quick connectivity + key check used by Settings → "Test connection".
+/// Worker thread — see ai_list_models.
 #[tauri::command]
-pub fn ai_test(base_url: String, api_key: Option<String>, model: String) -> CmdResult<String> {
+pub async fn ai_test(base_url: String, api_key: Option<String>, model: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || ai_test_blocking(base_url, api_key, model))
+        .await
+        .map_err(|e| es(e))?
+}
+
+fn ai_test_blocking(base_url: String, api_key: Option<String>, model: String) -> CmdResult<String> {
     let base = clean_base(&base_url);
     let body = json!({
         "model": model,

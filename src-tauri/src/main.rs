@@ -11,6 +11,7 @@ use std::os::windows::process::CommandExt;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -114,6 +115,18 @@ struct Task {
     position: i64,
     created_at: i64,
     completed_at: Option<i64>,
+    status: i64,            // board column: 0 To do · 1 In progress · 2 Done
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ImageMeta {
+    id: String,
+    note_id: String,
+    mime: String,
+    name: String,
+    bytes: i64,
+    created_at: i64,
 }
 
 #[derive(Serialize)]
@@ -145,6 +158,17 @@ struct ChatMsg {
     created_at: i64,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BackupImage {
+    id: String,
+    note_id: String,
+    mime: String,
+    name: String,
+    data: String, // base64
+    created_at: i64,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Backup {
@@ -155,6 +179,8 @@ struct Backup {
     notes: Vec<Note>,
     tasks: Vec<Task>,
     settings: Vec<(String, String)>,
+    #[serde(default)]
+    images: Vec<BackupImage>,
 }
 
 // ---------------------------------------------------------------- schema ----
@@ -204,6 +230,17 @@ fn init_db(path: &PathBuf) -> Result<Connection, rusqlite::Error> {
             completed_at INTEGER
         );
 
+        CREATE TABLE IF NOT EXISTS note_images (
+            id         TEXT PRIMARY KEY,
+            note_id    TEXT NOT NULL,
+            mime       TEXT NOT NULL,
+            name       TEXT NOT NULL DEFAULT '',
+            bytes      BLOB NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_note_images ON note_images(note_id);
+
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -250,6 +287,7 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) {
 
 fn migrate(conn: &Connection) {
     ensure_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''");
+    ensure_column(conn, "tasks", "status", "INTEGER NOT NULL DEFAULT 0");
     ensure_column(conn, "tasks", "priority", "INTEGER NOT NULL DEFAULT 0");
     ensure_column(conn, "tasks", "due_at", "INTEGER");
     ensure_column(conn, "tasks", "remind_at", "INTEGER");
@@ -364,7 +402,7 @@ fn next_occurrence(ms: i64, repeat: &str) -> i64 {
 // --------------------------------------------------------------- folders ----
 
 #[tauri::command]
-fn list_folders(state: State<'_, Db>) -> CmdResult<Vec<Folder>> {
+async fn list_folders(state: State<'_, Db>) -> CmdResult<Vec<Folder>> {
     let conn = db(&state);
     let mut stmt = conn
         .prepare("SELECT id, name, created_at, position FROM folders ORDER BY position ASC, name COLLATE NOCASE ASC")
@@ -383,7 +421,7 @@ fn list_folders(state: State<'_, Db>) -> CmdResult<Vec<Folder>> {
 }
 
 #[tauri::command]
-fn create_folder(state: State<'_, Db>, name: String) -> CmdResult<Folder> {
+async fn create_folder(state: State<'_, Db>, name: String) -> CmdResult<Folder> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Folder name cannot be empty".into());
@@ -411,7 +449,7 @@ fn create_folder(state: State<'_, Db>, name: String) -> CmdResult<Folder> {
 }
 
 #[tauri::command]
-fn rename_folder(state: State<'_, Db>, id: String, name: String) -> CmdResult<()> {
+async fn rename_folder(state: State<'_, Db>, id: String, name: String) -> CmdResult<()> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Folder name cannot be empty".into());
@@ -426,7 +464,7 @@ fn rename_folder(state: State<'_, Db>, id: String, name: String) -> CmdResult<()
 }
 
 #[tauri::command]
-fn delete_folder(state: State<'_, Db>, id: String) -> CmdResult<()> {
+async fn delete_folder(state: State<'_, Db>, id: String) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "UPDATE notes SET folder_id = NULL WHERE folder_id = ?1",
@@ -439,7 +477,7 @@ fn delete_folder(state: State<'_, Db>, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn folder_counts(state: State<'_, Db>) -> CmdResult<Vec<(String, i64)>> {
+async fn folder_counts(state: State<'_, Db>) -> CmdResult<Vec<(String, i64)>> {
     let conn = db(&state);
     let mut stmt = conn
         .prepare("SELECT folder_id, COUNT(*) FROM notes WHERE trashed = 0 AND folder_id IS NOT NULL GROUP BY folder_id")
@@ -485,7 +523,7 @@ fn row_to_note(r: &rusqlite::Row) -> rusqlite::Result<Note> {
 }
 
 #[tauri::command]
-fn list_notes(
+async fn list_notes(
     state: State<'_, Db>,
     view: String,
     folder_id: Option<String>,
@@ -548,7 +586,7 @@ fn list_notes(
 }
 
 #[tauri::command]
-fn get_note(state: State<'_, Db>, id: String) -> CmdResult<Option<Note>> {
+async fn get_note(state: State<'_, Db>, id: String) -> CmdResult<Option<Note>> {
     let conn = db(&state);
     let note = conn
         .query_row(
@@ -562,7 +600,7 @@ fn get_note(state: State<'_, Db>, id: String) -> CmdResult<Option<Note>> {
 }
 
 #[tauri::command]
-fn create_note(state: State<'_, Db>, folder_id: Option<String>) -> CmdResult<Note> {
+async fn create_note(state: State<'_, Db>, folder_id: Option<String>) -> CmdResult<Note> {
     let conn = db(&state);
     let n = Note {
         id: new_id("note"),
@@ -585,7 +623,7 @@ fn create_note(state: State<'_, Db>, folder_id: Option<String>) -> CmdResult<Not
 }
 
 #[tauri::command]
-fn save_note(state: State<'_, Db>, id: String, title: String, content: String) -> CmdResult<()> {
+async fn save_note(state: State<'_, Db>, id: String, title: String, content: String) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "UPDATE notes SET title = ?2, content = ?3, updated_at = ?4 WHERE id = ?1",
@@ -596,7 +634,7 @@ fn save_note(state: State<'_, Db>, id: String, title: String, content: String) -
 }
 
 #[tauri::command]
-fn duplicate_note(state: State<'_, Db>, id: String) -> CmdResult<Option<Note>> {
+async fn duplicate_note(state: State<'_, Db>, id: String) -> CmdResult<Option<Note>> {
     let conn = db(&state);
     let src = conn
         .query_row(
@@ -628,7 +666,7 @@ fn duplicate_note(state: State<'_, Db>, id: String) -> CmdResult<Option<Note>> {
 }
 
 #[tauri::command]
-fn pin_note(state: State<'_, Db>, id: String, pinned: bool) -> CmdResult<()> {
+async fn pin_note(state: State<'_, Db>, id: String, pinned: bool) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "UPDATE notes SET pinned = ?2 WHERE id = ?1",
@@ -639,7 +677,7 @@ fn pin_note(state: State<'_, Db>, id: String, pinned: bool) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn favorite_note(state: State<'_, Db>, id: String, favorite: bool) -> CmdResult<()> {
+async fn favorite_note(state: State<'_, Db>, id: String, favorite: bool) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "UPDATE notes SET favorite = ?2 WHERE id = ?1",
@@ -650,7 +688,7 @@ fn favorite_note(state: State<'_, Db>, id: String, favorite: bool) -> CmdResult<
 }
 
 #[tauri::command]
-fn move_note(state: State<'_, Db>, id: String, folder_id: Option<String>) -> CmdResult<()> {
+async fn move_note(state: State<'_, Db>, id: String, folder_id: Option<String>) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "UPDATE notes SET folder_id = ?2, updated_at = ?3 WHERE id = ?1",
@@ -661,7 +699,7 @@ fn move_note(state: State<'_, Db>, id: String, folder_id: Option<String>) -> Cmd
 }
 
 #[tauri::command]
-fn trash_note(state: State<'_, Db>, id: String, trashed: bool) -> CmdResult<()> {
+async fn trash_note(state: State<'_, Db>, id: String, trashed: bool) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "UPDATE notes SET trashed = ?2, updated_at = ?3 WHERE id = ?1",
@@ -672,7 +710,7 @@ fn trash_note(state: State<'_, Db>, id: String, trashed: bool) -> CmdResult<()> 
 }
 
 #[tauri::command]
-fn delete_note_forever(state: State<'_, Db>, id: String) -> CmdResult<()> {
+async fn delete_note_forever(state: State<'_, Db>, id: String) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute("DELETE FROM notes WHERE id = ?1", params![id])
         .map_err(es)?;
@@ -680,7 +718,7 @@ fn delete_note_forever(state: State<'_, Db>, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn empty_trash(state: State<'_, Db>) -> CmdResult<()> {
+async fn empty_trash(state: State<'_, Db>) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute("DELETE FROM notes WHERE trashed = 1", [])
         .map_err(es)?;
@@ -689,7 +727,7 @@ fn empty_trash(state: State<'_, Db>) -> CmdResult<()> {
 
 // ----------------------------------------------------------------- tasks ----
 
-const TASK_COLS: &str = "id, title, notes, done, priority, due_at, remind_at, repeat, subtasks, reminded, position, created_at, completed_at";
+const TASK_COLS: &str = "id, title, notes, done, priority, due_at, remind_at, repeat, subtasks, reminded, position, created_at, completed_at, status";
 
 fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
     let subtasks_raw: String = r.get(8)?;
@@ -708,11 +746,28 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
         position: r.get(10)?,
         created_at: r.get(11)?,
         completed_at: r.get(12)?,
+        status: r.get::<_, i64>(13).unwrap_or(0),
     })
 }
 
+// ------------------------------------------------------------- images (b64) ----
+
+fn b64_encode(data: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(s.trim())
+        .map_err(|e| format!("Could not decode image data: {e}"))
+}
+
+const IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024; // 10 MB per image
+
 #[tauri::command]
-fn list_tasks(state: State<'_, Db>) -> CmdResult<Vec<Task>> {
+async fn list_tasks(state: State<'_, Db>) -> CmdResult<Vec<Task>> {
     let conn = db(&state);
     let mut stmt = conn
         .prepare(&format!(
@@ -724,12 +779,13 @@ fn list_tasks(state: State<'_, Db>) -> CmdResult<Vec<Task>> {
 }
 
 #[tauri::command]
-fn create_task(
+async fn create_task(
     state: State<'_, Db>,
     title: String,
     priority: Option<i64>,
     due_at: Option<i64>,
     remind_at: Option<i64>,
+    status: Option<i64>,
 ) -> CmdResult<Task> {
     let title = title.trim().to_string();
     if title.is_empty() {
@@ -743,11 +799,12 @@ fn create_task(
             |r| r.get(0),
         )
         .map_err(es)?;
+    let status = status.unwrap_or(0).clamp(0, 2);
     let t = Task {
         id: new_id("task"),
         title,
         notes: String::new(),
-        done: false,
+        done: status == 2,
         priority: priority.unwrap_or(0).clamp(0, 3),
         due_at,
         remind_at,
@@ -756,14 +813,16 @@ fn create_task(
         reminded: false,
         position: pos,
         created_at: now_ms(),
-        completed_at: None,
+        completed_at: if status == 2 { Some(now_ms()) } else { None },
+        status,
     };
     conn.execute(
         &format!(
-            "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, 0, ?4, ?5, ?6, 'none', '[]', 0, ?7, ?8, NULL)"
+            "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'none', '[]', 0, ?8, ?9, ?10, ?11)"
         ),
         params![
-            t.id, t.title, t.notes, t.priority, t.due_at, t.remind_at, t.position, t.created_at
+            t.id, t.title, t.notes, t.done as i64, t.priority, t.due_at, t.remind_at,
+            t.position, t.created_at, t.completed_at, t.status
         ],
     )
     .map_err(es)?;
@@ -771,7 +830,7 @@ fn create_task(
 }
 
 #[tauri::command]
-fn update_task(
+async fn update_task(
     state: State<'_, Db>,
     id: String,
     title: String,
@@ -781,6 +840,7 @@ fn update_task(
     remind_at: Option<i64>,
     repeat: String,
     subtasks: Vec<Subtask>,
+    status: Option<i64>,
 ) -> CmdResult<()> {
     let title = title.trim().to_string();
     if title.is_empty() {
@@ -817,11 +877,21 @@ fn update_task(
         ],
     )
     .map_err(es)?;
+    // board status (v0.8): dropping a card on a column updates done/completed too
+    if let Some(st) = status {
+        let st = st.clamp(0, 2);
+        let done_i = (st == 2) as i64;
+        conn.execute(
+            "UPDATE tasks SET status = ?2, done = ?3, completed_at = CASE WHEN ?3 = 1 THEN ?4 ELSE NULL END WHERE id = ?1",
+            params![id, st, done_i, now_ms()],
+        )
+        .map_err(es)?;
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn set_task(state: State<'_, Db>, id: String, done: bool) -> CmdResult<Option<Task>> {
+async fn set_task(state: State<'_, Db>, id: String, done: bool) -> CmdResult<Option<Task>> {
     let conn = db(&state);
     if done {
         // fetch the task — repeating tasks spring to their next occurrence
@@ -838,20 +908,20 @@ fn set_task(state: State<'_, Db>, id: String, done: bool) -> CmdResult<Option<Ta
             let base = t.due_at.unwrap_or_else(now_ms);
             let next = next_occurrence(base, &t.repeat);
             conn.execute(
-                "UPDATE tasks SET done = 0, reminded = 0, due_at = ?2, completed_at = NULL WHERE id = ?1",
+                "UPDATE tasks SET done = 0, reminded = 0, due_at = ?2, completed_at = NULL, status = 0 WHERE id = ?1",
                 params![id, next],
             )
             .map_err(es)?;
         } else {
             conn.execute(
-                "UPDATE tasks SET done = 1, completed_at = ?2 WHERE id = ?1",
+                "UPDATE tasks SET done = 1, completed_at = ?2, status = 2 WHERE id = ?1",
                 params![id, now_ms()],
             )
             .map_err(es)?;
         }
     } else {
         conn.execute(
-            "UPDATE tasks SET done = 0, completed_at = NULL WHERE id = ?1",
+            "UPDATE tasks SET done = 0, completed_at = NULL, status = CASE WHEN status = 2 THEN 0 ELSE status END WHERE id = ?1",
             params![id],
         )
         .map_err(es)?;
@@ -868,7 +938,7 @@ fn set_task(state: State<'_, Db>, id: String, done: bool) -> CmdResult<Option<Ta
 }
 
 #[tauri::command]
-fn delete_task(state: State<'_, Db>, id: String) -> CmdResult<()> {
+async fn delete_task(state: State<'_, Db>, id: String) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
         .map_err(es)?;
@@ -876,23 +946,123 @@ fn delete_task(state: State<'_, Db>, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn clear_done_tasks(state: State<'_, Db>) -> CmdResult<()> {
+async fn clear_done_tasks(state: State<'_, Db>) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute("DELETE FROM tasks WHERE done = 1", [])
         .map_err(es)?;
     Ok(())
 }
 
-// -------------------------------------------------------------- settings ----
+// ------------------------------------------------------ note images (v0.8) ----
 
 #[tauri::command]
-fn get_setting(state: State<'_, Db>, key: String) -> Option<String> {
+async fn insert_note_image(
+    state: State<'_, Db>,
+    note_id: String,
+    mime: String,
+    name: String,
+    data: String,
+) -> CmdResult<ImageMeta> {
+    let mime = mime.trim().to_lowercase();
+    if !mime.starts_with("image/") {
+        return Err("Only image files can be embedded".into());
+    }
+    let raw = b64_decode(&data)?;
+    if raw.len() > IMAGE_MAX_BYTES {
+        return Err("Image is too large (max 10 MB)".into());
+    }
+    if raw.is_empty() {
+        return Err("Image file is empty".into());
+    }
     let conn = db(&state);
-    get_kv(&conn, &key)
+    let meta = ImageMeta {
+        id: new_id("img"),
+        note_id: note_id.clone(),
+        mime,
+        name: name.trim().chars().take(120).collect(),
+        bytes: raw.len() as i64,
+        created_at: now_ms(),
+    };
+    conn.execute(
+        "INSERT INTO note_images(id, note_id, mime, name, bytes, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        params![meta.id, meta.note_id, meta.mime, meta.name, raw, meta.created_at],
+    )
+    .map_err(es)?;
+    Ok(meta)
 }
 
 #[tauri::command]
-fn set_setting(state: State<'_, Db>, key: String, value: String) -> CmdResult<()> {
+async fn delete_note_image(state: State<'_, Db>, id: String) -> CmdResult<()> {
+    let conn = db(&state);
+    conn.execute("DELETE FROM note_images WHERE id = ?1", params![id])
+        .map_err(es)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn note_images(state: State<'_, Db>, note_id: String) -> CmdResult<Vec<ImageMeta>> {
+    let conn = db(&state);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, note_id, mime, name, LENGTH(bytes), created_at
+             FROM note_images WHERE note_id = ?1 ORDER BY created_at",
+        )
+        .map_err(es)?;
+    let rows = stmt
+        .query_map(params![note_id], |r| {
+            Ok(ImageMeta {
+                id: r.get(0)?,
+                note_id: r.get(1)?,
+                mime: r.get(2)?,
+                name: r.get(3)?,
+                bytes: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })
+        .map_err(es)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Notes whose content links to this note with [[Title]] — "backlinks".
+#[tauri::command]
+async fn note_backlinks(state: State<'_, Db>, id: String) -> CmdResult<Vec<NoteSummary>> {
+    let conn = db(&state);
+    let title: String = conn
+        .query_row("SELECT title FROM notes WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(es)?
+        .unwrap_or_default();
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Ok(vec![]);
+    }
+    let like = format!(
+        "%[[{}]]%",
+        title
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let sql = format!(
+        "SELECT {NOTE_COLS} FROM notes\n         WHERE trashed = 0 AND id != ?1 AND content LIKE ?2 ESCAPE '\\'\n         ORDER BY updated_at DESC LIMIT 50"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(es)?;
+    let rows = stmt
+        .query_map(params![id, like], row_to_summary)
+        .map_err(es)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// -------------------------------------------------------------- settings ----
+
+#[tauri::command]
+async fn get_setting(state: State<'_, Db>, key: String) -> CmdResult<Option<String>> {
+    let conn = db(&state);
+    Ok(get_kv(&conn, &key))
+}
+
+#[tauri::command]
+async fn set_setting(state: State<'_, Db>, key: String, value: String) -> CmdResult<()> {
     let conn = db(&state);
     set_kv(&conn, &key, &value)
 }
@@ -900,7 +1070,7 @@ fn set_setting(state: State<'_, Db>, key: String, value: String) -> CmdResult<()
 // -------------------------------------------------------------- ai chats ----
 
 #[tauri::command]
-fn list_chats(state: State<'_, Db>) -> CmdResult<Vec<ChatSummary>> {
+async fn list_chats(state: State<'_, Db>) -> CmdResult<Vec<ChatSummary>> {
     let conn = db(&state);
     let mut stmt = conn
         .prepare("SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC")
@@ -919,7 +1089,7 @@ fn list_chats(state: State<'_, Db>) -> CmdResult<Vec<ChatSummary>> {
 }
 
 #[tauri::command]
-fn create_chat(state: State<'_, Db>, title: Option<String>) -> CmdResult<ChatSummary> {
+async fn create_chat(state: State<'_, Db>, title: Option<String>) -> CmdResult<ChatSummary> {
     let conn = db(&state);
     let c = ChatSummary {
         id: new_id("chat"),
@@ -936,7 +1106,7 @@ fn create_chat(state: State<'_, Db>, title: Option<String>) -> CmdResult<ChatSum
 }
 
 #[tauri::command]
-fn rename_chat(state: State<'_, Db>, id: String, title: String) -> CmdResult<()> {
+async fn rename_chat(state: State<'_, Db>, id: String, title: String) -> CmdResult<()> {
     let title = title.trim();
     if title.is_empty() {
         return Err("Title cannot be empty".into());
@@ -951,7 +1121,7 @@ fn rename_chat(state: State<'_, Db>, id: String, title: String) -> CmdResult<()>
 }
 
 #[tauri::command]
-fn delete_chat(state: State<'_, Db>, id: String) -> CmdResult<()> {
+async fn delete_chat(state: State<'_, Db>, id: String) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute("DELETE FROM chat_messages WHERE chat_id = ?1", params![id])
         .map_err(es)?;
@@ -961,7 +1131,7 @@ fn delete_chat(state: State<'_, Db>, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn get_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<Vec<ChatMsg>> {
+async fn get_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<Vec<ChatMsg>> {
     let conn = db(&state);
     let mut stmt = conn
         .prepare(
@@ -984,7 +1154,7 @@ fn get_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<Vec<Cha
 }
 
 #[tauri::command]
-fn add_chat_message(
+async fn add_chat_message(
     state: State<'_, Db>,
     chat_id: String,
     role: String,
@@ -1037,7 +1207,7 @@ fn add_chat_message(
 }
 
 #[tauri::command]
-fn clear_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<()> {
+async fn clear_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<()> {
     let conn = db(&state);
     conn.execute(
         "DELETE FROM chat_messages WHERE chat_id = ?1",
@@ -1053,7 +1223,7 @@ fn clear_chat_messages(state: State<'_, Db>, chat_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn get_stats(state: State<'_, Db>) -> CmdResult<Stats> {
+async fn get_stats(state: State<'_, Db>) -> CmdResult<Stats> {
     let conn = db(&state);
     let stats = conn
         .query_row(
@@ -1116,6 +1286,37 @@ fn read_backup_data(conn: &Connection) -> Result<Backup, String> {
         .collect();
 
     let mut stmt = conn
+        .prepare("SELECT id, note_id, mime, name, bytes, created_at FROM note_images")
+        .map_err(es)?;
+    let mut images: Vec<BackupImage> = stmt
+        .query_map([], |r| {
+            let bytes: Vec<u8> = r.get(4)?;
+            Ok(BackupImage {
+                id: r.get(0)?,
+                note_id: r.get(1)?,
+                mime: r.get(2)?,
+                name: r.get(3)?,
+                data: b64_encode(&bytes),
+                created_at: r.get(5)?,
+            })
+        })
+        .map_err(es)?
+        .filter_map(|r| r.ok())
+        .collect();
+    // keep backups sane — cap the embedded image payload at 64 MB total
+    let total: usize = images.iter().map(|i| i.data.len()).sum();
+    if total > 64 * 1024 * 1024 {
+        let mut kept: usize = 0;
+        images.retain(|i| {
+            let keep = kept + i.data.len() <= 64 * 1024 * 1024;
+            if keep {
+                kept += i.data.len();
+            }
+            keep
+        });
+    }
+
+    let mut stmt = conn
         .prepare(
             "SELECT key, value FROM settings
              WHERE key != 'window_bounds' AND key NOT LIKE 'aiProv%'",
@@ -1135,46 +1336,61 @@ fn read_backup_data(conn: &Connection) -> Result<Backup, String> {
         notes,
         tasks,
         settings,
+        images,
     })
 }
 
 #[tauri::command]
-fn export_backup(state: State<'_, Db>) -> CmdResult<Option<String>> {
-    let conn = db(&state);
-    let backup = read_backup_data(&conn)?;
-    let json = serde_json::to_string_pretty(&backup).map_err(es)?;
+async fn export_backup(state: State<'_, Db>) -> CmdResult<Option<String>> {
+    // DB read first (quick), then hand the dialog + file IO to a worker thread
+    // so the window never freezes while the save dialog is open.
+    let json = {
+        let conn = db(&state);
+        let backup = read_backup_data(&conn)?;
+        serde_json::to_string_pretty(&backup).map_err(es)?
+    };
     let stamp = {
         let (y, m, d) = civil_from_days(now_ms().div_euclid(86_400_000));
         format!("{y:04}-{m:02}-{d:02}")
     };
-    let path = rfd::FileDialog::new()
-        .set_title("Save Nook backup")
-        .set_file_name(&format!("nook-backup-{stamp}.json"))
-        .add_filter("Nook backup (JSON)", &["json"])
-        .save_file();
-    match path {
-        Some(p) => {
-            std::fs::write(&p, json.as_bytes()).map_err(es)?;
-            Ok(Some(p.to_string_lossy().into_owned()))
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = rfd::FileDialog::new()
+            .set_title("Save Nook backup")
+            .set_file_name(&format!("nook-backup-{stamp}.json"))
+            .add_filter("Nook backup (JSON)", &["json"])
+            .save_file();
+        match path {
+            Some(p) => {
+                std::fs::write(&p, json.as_bytes()).map_err(es)?;
+                Ok(Some(p.to_string_lossy().into_owned()))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
-    }
+    })
+    .await
+    .map_err(|e| es(e))?
 }
 
 #[tauri::command]
-fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option<Stats>> {
-    let path = rfd::FileDialog::new()
-        .set_title("Choose a Nook backup file")
-        .add_filter("Nook backup (JSON)", &["json"])
-        .pick_file();
-    let Some(path) = path else { return Ok(None) };
-
-    let raw = std::fs::read_to_string(&path).map_err(es)?;
-    let data: Backup =
-        serde_json::from_str(&raw).map_err(|e| format!("Not a valid Nook backup file: {e}"))?;
-    if data.app != "nook" {
-        return Err("This file is not a Nook backup".into());
-    }
+async fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option<Stats>> {
+    // dialog + file read + parse run on a worker thread — never block the UI
+    let picked = tauri::async_runtime::spawn_blocking(|| {
+        let path = rfd::FileDialog::new()
+            .set_title("Choose a Nook backup file")
+            .add_filter("Nook backup (JSON)", &["json"])
+            .pick_file();
+        let Some(path) = path else { return Ok(None) };
+        let raw = std::fs::read_to_string(&path).map_err(es)?;
+        let data: Backup = serde_json::from_str(&raw)
+            .map_err(|e| format!("Not a valid Nook backup file: {e}"))?;
+        if data.app != "nook" {
+            return Err("This file is not a Nook backup".to_string());
+        }
+        Ok(Some(data))
+    })
+    .await
+    .map_err(|e| es(e))??;
+    let Some(data) = picked else { return Ok(None) };
 
     let stats = {
         let mut conn = db(&state);
@@ -1216,10 +1432,20 @@ fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option<Stats
             let subs = serde_json::to_string(&t.subtasks).unwrap_or_else(|_| "[]".into());
             let _ = tx.execute(
             &format!(
-                "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
+                "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
             ),
-            params![t.id, t.title, t.notes, t.done as i64, t.priority, t.due_at, t.remind_at, t.repeat, subs, t.reminded as i64, t.position, t.created_at, t.completed_at],
+            params![t.id, t.title, t.notes, t.done as i64, t.priority, t.due_at, t.remind_at, t.repeat, subs, t.reminded as i64, t.position, t.created_at, t.completed_at, t.status],
         );
+        }
+        for img in &data.images {
+            let Ok(raw) = b64_decode(&img.data) else { continue };
+            if raw.is_empty() || raw.len() > IMAGE_MAX_BYTES {
+                continue;
+            }
+            let _ = tx.execute(
+                "INSERT OR REPLACE INTO note_images(id, note_id, mime, name, bytes, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![img.id, img.note_id, img.mime, img.name, raw, img.created_at],
+            );
         }
         for (k, v) in &data.settings {
             if k == "window_bounds" || k.starts_with("aiProv") {
@@ -1275,11 +1501,12 @@ pub fn app_data_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn data_dir(app: AppHandle) -> String {
-    app.path()
+async fn data_dir(app: AppHandle) -> CmdResult<String> {
+    Ok(app
+        .path()
         .app_data_dir()
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -1300,40 +1527,44 @@ fn sanitize_filename(name: &str) -> String {
 }
 
 #[tauri::command]
-fn export_note(app: AppHandle, state: State<'_, Db>, id: String) -> CmdResult<Option<String>> {
-    let _ = app;
-    let conn = db(&state);
-    let (title, content): (String, String) = conn
-        .query_row(
-            "SELECT title, content FROM notes WHERE id = ?1",
-            params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(es)?
-        .ok_or_else(|| "note not found".to_string())?;
-
-    let file_name = format!("{}.md", sanitize_filename(&title));
-    let path = rfd::FileDialog::new()
-        .set_title("Export note as Markdown")
-        .set_file_name(&file_name)
-        .add_filter("Markdown", &["md", "txt"])
-        .save_file();
-
-    match path {
-        Some(p) => {
-            std::fs::write(&p, content.as_bytes()).map_err(es)?;
-            Ok(Some(p.to_string_lossy().into_owned()))
+async fn export_note(_app: AppHandle, state: State<'_, Db>, id: String) -> CmdResult<Option<String>> {
+    let content = {
+        let conn = db(&state);
+        let (title, content): (String, String) = conn
+            .query_row(
+                "SELECT title, content FROM notes WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(es)?
+            .ok_or_else(|| "note not found".to_string())?;
+        (sanitize_filename(&title), content)
+    };
+    let (file_name, content) = (format!("{}.md", content.0), content.1);
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = rfd::FileDialog::new()
+            .set_title("Export note as Markdown")
+            .set_file_name(&file_name)
+            .add_filter("Markdown", &["md", "txt"])
+            .save_file();
+        match path {
+            Some(p) => {
+                std::fs::write(&p, content.as_bytes()).map_err(es)?;
+                Ok(Some(p.to_string_lossy().into_owned()))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
-    }
+    })
+    .await
+    .map_err(|e| es(e))?
 }
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[tauri::command]
-fn open_url(url: String) -> CmdResult<()> {
+async fn open_url(url: String) -> CmdResult<()> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Only http(s) links are allowed".into());
     }
@@ -1363,7 +1594,7 @@ fn open_url(url: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn reveal_data_dir(app: AppHandle) -> CmdResult<()> {
+async fn reveal_data_dir(app: AppHandle) -> CmdResult<()> {
     let dir: PathBuf = app.path().app_data_dir().map_err(es)?;
     std::fs::create_dir_all(&dir).map_err(es)?;
     #[cfg(target_os = "windows")]
@@ -1394,27 +1625,38 @@ fn reveal_data_dir(app: AppHandle) -> CmdResult<()> {
 
 /// Imports .md / .txt files from disk as new notes (title = file name).
 #[tauri::command]
-fn import_notes(state: State<'_, Db>) -> CmdResult<Option<usize>> {
-    let paths = rfd::FileDialog::new()
-        .set_title("Choose Markdown or text files to import")
-        .add_filter("Notes (Markdown & text)", &["md", "markdown", "txt"])
-        .pick_files();
-    let Some(paths) = paths else { return Ok(None) };
-    if paths.is_empty() {
+async fn import_notes(state: State<'_, Db>) -> CmdResult<Option<usize>> {
+    // dialog + file reads on a worker thread — the window stays buttery
+    let files = tauri::async_runtime::spawn_blocking(|| {
+        let paths = rfd::FileDialog::new()
+            .set_title("Choose Markdown or text files to import")
+            .add_filter("Notes (Markdown & text)", &["md", "markdown", "txt"])
+            .pick_files();
+        let Some(paths) = paths else { return Ok(None) };
+        let mut out: Vec<(String, String)> = Vec::new(); // (stem, raw)
+        for p in paths {
+            let Ok(raw) = std::fs::read_to_string(&p) else { continue };
+            if raw.trim().is_empty() {
+                continue;
+            }
+            let stem = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Imported note".into());
+            out.push((stem, raw));
+        }
+        Ok(Some(out))
+    })
+    .await
+    .map_err(|e| es(e))??;
+    let Some(files) = files else { return Ok(None) };
+    if files.is_empty() {
         return Ok(None);
     }
 
     let conn = db(&state);
     let mut imported = 0usize;
-    for p in paths {
-        let Ok(raw) = std::fs::read_to_string(&p) else { continue };
-        if raw.trim().is_empty() {
-            continue;
-        }
-        let stem = p
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Imported note".into());
+    for (stem, raw) in files {
         let mut title = sanitize_filename(&stem);
         if title.is_empty() {
             title = "Imported note".into();
@@ -1445,12 +1687,12 @@ fn import_notes(state: State<'_, Db>) -> CmdResult<Option<usize>> {
 }
 
 #[tauri::command]
-fn autostart_get(app: AppHandle) -> bool {
-    app.autolaunch().is_enabled().unwrap_or(false)
+async fn autostart_get(app: AppHandle) -> CmdResult<bool> {
+    Ok(app.autolaunch().is_enabled().unwrap_or(false))
 }
 
 #[tauri::command]
-fn autostart_set(app: AppHandle, enabled: bool) -> CmdResult<()> {
+async fn autostart_set(app: AppHandle, enabled: bool) -> CmdResult<()> {
     let al = app.autolaunch();
     if enabled {
         al.enable().map_err(es)
@@ -1460,12 +1702,12 @@ fn autostart_set(app: AppHandle, enabled: bool) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn clipboard_write(app: AppHandle, text: String) -> CmdResult<()> {
+async fn clipboard_write(app: AppHandle, text: String) -> CmdResult<()> {
     app.clipboard().write_text(text).map_err(es)
 }
 
 #[tauri::command]
-fn clipboard_read(app: AppHandle) -> CmdResult<String> {
+async fn clipboard_read(app: AppHandle) -> CmdResult<String> {
     app.clipboard().read_text().map_err(es)
 }
 
@@ -1566,6 +1808,48 @@ fn show_main(app: &AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        // nookimg:// — serves note images straight from the local SQLite db.
+        // <img src="nookimg://<id>"> in the preview never touches the disk
+        // outside the app's own database.
+        .register_uri_scheme_protocol("nookimg", |ctx, request| {
+            let id = request
+                .uri()
+                .path()
+                .trim_start_matches('/')
+                .to_string();
+            let not_found = || -> tauri::http::Response<Cow<'static, [u8]>> {
+                tauri::http::Response::builder()
+                    .status(404)
+                    .header("Content-Type", "text/plain")
+                    .body(Cow::Borrowed("image not found".as_bytes()))
+                    .unwrap()
+            };
+            if id.is_empty() || id.contains("..") || id.contains('/') {
+                return not_found();
+            }
+            let app = ctx.app_handle();
+            let conn = {
+                let state = app.state::<Db>();
+                let guard = state.0.lock().unwrap_or_else(|p| p.into_inner());
+                guard
+                    .query_row(
+                        "SELECT mime, bytes FROM note_images WHERE id = ?1",
+                        params![id],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+            };
+            match conn {
+                Some((mime, bytes)) => tauri::http::Response::builder()
+                    .header("Content-Type", mime)
+                    .header("Cache-Control", "max-age=31536000, immutable")
+                    .body(Cow::Owned(bytes))
+                    .unwrap(),
+                None => not_found(),
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -1658,6 +1942,10 @@ fn main() {
             set_task,
             delete_task,
             clear_done_tasks,
+            insert_note_image,
+            delete_note_image,
+            note_images,
+            note_backlinks,
             get_setting,
             set_setting,
             get_stats,

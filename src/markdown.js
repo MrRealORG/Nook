@@ -1,6 +1,8 @@
 // Tiny, safe markdown renderer. Escapes HTML first, then formats.
 // Supports: # headings, **bold**, *italic*, `code`, ``` blocks,
-// - / 1. lists, > quotes, --- rules, [links](url).
+// - / 1. lists, > quotes, --- rules, [links](url),
+// v0.8: ![alt](nookimg://id) images · ![alt](https://…) web images ·
+//       [[Note title]] wiki-links between notes.
 
 function esc(s) {
   return s
@@ -10,12 +12,41 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+// app.js assigns this at boot: id -> <img src> (convertFileSrc in Tauri,
+// mock map in the browser). Markdown itself stays framework-free.
+let imgResolver = null;
+export function setImgResolver(fn) {
+  imgResolver = typeof fn === 'function' ? fn : null;
+}
+
+function imgSrc(id) {
+  if (imgResolver) return imgResolver(id);
+  return `nookimg://${id}`;
+}
+
 function inline(s) {
   return s
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // images first, so links don't swallow them
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, src) => {
+      const safeAlt = alt;
+      if (/^nookimg:\/\/([A-Za-z0-9_-]+)$/.test(src)) {
+        const id = src.replace(/^nookimg:\/\//, '');
+        return `<img class="md-img" src="${esc(imgSrc(id))}" alt="${esc(safeAlt)}" loading="lazy" />`;
+      }
+      if (/^https?:\/\/[^)\s]+$/.test(src)) {
+        return `<img class="md-img md-img-web" src="${esc(src)}" alt="${esc(safeAlt)}" loading="lazy" />`;
+      }
+      return m; // unknown protocol — leave untouched (already escaped)
+    })
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    .replace(/\[\[([^\[\]]+)\]\]/g, (m, title) => {
+      const clean = title.trim();
+      if (!clean) return m;
+      return `<a href="#" class="md-mention" data-mention="${esc(clean)}">${esc(clean)}</a>`;
+    })
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
 export function renderMarkdown(src) {

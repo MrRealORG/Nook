@@ -3,12 +3,21 @@
 // subtasks, repeat, reminders), 8 themes, realtime autosave, backup,
 // markdown toolbar, close-to-tray.
 
-import { call, IS_TAURI } from './api.js';
-import { renderMarkdown } from './markdown.js';
+import { call, IS_TAURI, mockImageSrc } from './api.js';
+import { renderMarkdown, setImgResolver } from './markdown.js';
 import { frogSvg, ico, setIcons } from './art.js';
 
 const $ = (sel) => document.querySelector(sel);
 const DAY = 86400000;
+
+// ---- image serving: nookimg://<id> comes straight out of the local DB ----
+if (IS_TAURI) {
+  import('@tauri-apps/api/core')
+    .then(({ convertFileSrc }) => setImgResolver((id) => convertFileSrc(id, 'nookimg')))
+    .catch(() => setImgResolver((id) => `nookimg://${id}`));
+} else {
+  setImgResolver((id) => mockImageSrc(id) || `nookimg://${id}`);
+}
 
 const THEMES = [
   { id: 'midnight', name: 'Cozy Midnight', dots: ['#171126', '#8fe3a0'], light: false },
@@ -18,11 +27,19 @@ const THEMES = [
   { id: 'sunset',   name: 'Sunset Ember',  dots: ['#211318', '#ff9e7d'], light: false },
   { id: 'frost',    name: 'Frost',         dots: ['#10141c', '#7dd3fc'], light: false },
   { id: 'espresso', name: 'Espresso',      dots: ['#1a1412', '#d4a373'], light: false },
+  { id: 'nord',     name: 'Nordic Frost',  dots: ['#2e3440', '#88c0d0'], light: false },
+  { id: 'dracula',  name: 'Dracula Night', dots: ['#282a36', '#bd93f9'], light: false },
+  { id: 'crimson',  name: 'Crimson Dusk',  dots: ['#1f1216', '#ff6b81'], light: false },
+  { id: 'cyber',    name: 'Neon Cyber',    dots: ['#0a0f14', '#00e5a0'], light: false },
+  { id: 'royal',    name: 'Royal Amethyst',dots: ['#171226', '#a78bfa'], light: false },
   { id: 'paper',    name: 'Paper Light',   dots: ['#f5f2ea', '#379d55'], light: true },
   { id: 'sepia',    name: 'Warm Sepia',    dots: ['#f4ecdc', '#a4762e'], light: true },
   { id: 'mint',     name: 'Mint Day',      dots: ['#eef6f0', '#2f9e6e'], light: true },
   { id: 'sakura',   name: 'Sakura',        dots: ['#fdf3f5', '#e05c7e'], light: true },
-  { id: 'lavender', name: 'Lavender',      dots: ['#f3f1fb', '#7c5cd6'], light: true }
+  { id: 'lavender', name: 'Lavender',      dots: ['#f3f1fb', '#7c5cd6'], light: true },
+  { id: 'coffee',   name: 'Coffee Cream',  dots: ['#f1e7dc', '#8a5a3b'], light: true },
+  { id: 'rose',     name: 'Rose Quartz',   dots: ['#faf0f2', '#d16a8a'], light: true },
+  { id: 'matcha',   name: 'Matcha Latte',  dots: ['#f2f5ea', '#6b9b37'], light: true }
 ];
 const LIGHT_THEMES = THEMES.filter((t) => t.light).map((t) => t.id);
 
@@ -33,14 +50,14 @@ const REPEAT_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 // Every provider talks the OpenAI-compatible /chat/completions protocol.
 const AI_PROVIDERS = [
   { id: 'openrouter', name: 'OpenRouter', url: 'https://openrouter.ai/api/v1', key: true, models: true, hint: '400+ models — one key. openrouter.ai/keys' },
-  { id: 'zai',        name: 'Z.ai (GLM)', url: 'https://api.z.ai/api/paas/v4', key: true, models: false, hint: 'GLM-4.6 · GLM-4.5 · GLM-4.5-Air — z.ai model names' },
+  { id: 'zai',        name: 'Z.ai (GLM)', url: 'https://api.z.ai/api/paas/v4', key: true, models: false, hint: 'GLM-4.6 · GLM-4.5 · GLM-4.5-Air — z.ai model names', suggestModels: ['glm-4.6', 'glm-4.5', 'glm-4.5-air', 'glm-4.5-flash', 'glm-4-plus'] },
   { id: 'openai',     name: 'OpenAI',     url: 'https://api.openai.com/v1', key: true, models: true, hint: 'GPT-4o / GPT-4.1 family — platform.openai.com' },
   { id: 'groq',       name: 'Groq',       url: 'https://api.groq.com/openai/v1', key: true, models: true, hint: 'Llama & Mixtral at crazy speed — console.groq.com' },
   { id: 'gemini',     name: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai', key: true, models: true, hint: 'Use an AI Studio key — aistudio.google.com/apikey' },
-  { id: 'deepseek',   name: 'DeepSeek',   url: 'https://api.deepseek.com/v1', key: true, models: true, hint: 'deepseek-chat / deepseek-reasoner' },
+  { id: 'deepseek',   name: 'DeepSeek',   url: 'https://api.deepseek.com/v1', key: true, models: true, hint: 'deepseek-chat / deepseek-reasoner', suggestModels: ['deepseek-chat', 'deepseek-reasoner'] },
   { id: 'ollama',     name: 'Ollama (local)', url: 'http://127.0.0.1:11434/v1', key: false, models: true, hint: 'Free & offline — models you pulled with ollama' },
   { id: 'lmstudio',   name: 'LM Studio (local)', url: 'http://127.0.0.1:1234/v1', key: false, models: true, hint: 'Point LM Studio at port 1234 and go' },
-  { id: 'custom',     name: 'Custom',     url: '', key: true, models: true, hint: 'Any OpenAI-compatible endpoint' }
+  { id: 'custom',     name: 'Custom',     url: '', key: true, models: true, hint: 'Any OpenAI-compatible endpoint — e.g. Together, Mistral, xAI, OpenRouter-style base URLs' }
 ];
 const DEFAULT_AI_SETTINGS = {
   active: '',
@@ -66,7 +83,7 @@ const state = {
   settings: {
     theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal',
     closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy',
-    defaultFolder: '', autostart: '0',
+    defaultFolder: '', autostart: '0', edLine: '1.6', defaultView: 'all',
     ai: JSON.parse(JSON.stringify(DEFAULT_AI_SETTINGS))
   },
   tabs: [],              // open note ids, in order
@@ -386,6 +403,7 @@ const VIEW_META = [
   { type: 'all', label: 'All Notes', icon: 'all' },
   { type: 'favorites', label: 'Favorites', icon: 'star' },
   { type: 'tasks', label: 'Tasks', icon: 'checkSq' },
+  { type: 'board', label: 'Board', icon: 'board' },
   { type: 'chat', label: 'AI Chat', icon: 'sparkle' },
   { type: 'recordings', label: 'Recordings', icon: 'mic' },
   { type: 'trash', label: 'Trash', icon: 'trash' }
@@ -397,8 +415,8 @@ function renderSidebar() {
   const viewsEl = $('#sb-views');
   viewsEl.innerHTML = VIEW_META.map((v) => {
     const active = state.view.type === v.type ? ' active' : '';
-    const count = v.type === 'all' ? s.notes : v.type === 'favorites' ? s.favorites : v.type === 'tasks' ? s.openTasks : s.trash;
-    const showCount = v.type !== 'tasks' && v.type !== 'recordings' && v.type !== 'chat';
+    const count = v.type === 'all' ? s.notes : v.type === 'favorites' ? s.favorites : v.type === 'tasks' ? s.openTasks : v.type === 'board' ? (state.tasks.filter((x) => !x.done).length || s.openTasks) : s.trash;
+    const showCount = v.type !== 'tasks' && v.type !== 'board' && v.type !== 'recordings' && v.type !== 'chat';
     return `
       <button class="sb-row${active}" data-view="${v.type}">
         <span class="sb-ico">${ico(v.icon)}</span>
@@ -517,11 +535,13 @@ function renderListHeader() {
   emptyBtn.classList.toggle('hidden', !(state.view.type === 'trash' && state.notes.length > 0));
 }
 
-function renderNoteList() {
+function renderNoteList(opts = {}) {
   renderListHeader();
   const el = $('#nl-items');
+  // entry animation only on view switches — never while typing (saves reflow)
+  el.classList.toggle('nl-anim', opts.animate !== false);
 
-  if (state.view.type === 'tasks' || state.view.type === 'recordings' || state.view.type === 'chat') {
+  if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat') {
     el.innerHTML = '';
     return;
   }
@@ -545,7 +565,7 @@ function renderNoteList() {
   }
 
   el.innerHTML = state.notes
-    .map((n) => {
+    .map((n, i) => {
       const selected = n.id === state.currentNoteId ? ' selected' : '';
       const folder = state.folders.find((f) => f.id === n.folderId);
       const flags = [];
@@ -553,7 +573,7 @@ function renderNoteList() {
       if (n.favorite) flags.push(`<span class="f-fav" title="Favorite">${ico('starFill')}</span>`);
       const titleText = n.title.trim() || 'Untitled note';
       return `
-      <div class="note-card${selected}" data-nid="${esc(n.id)}">
+      <div class="note-card${selected}" data-nid="${esc(n.id)}" style="--i:${Math.min(14, i)}">
         <div class="nc-title">${esc(titleText)}${
           flags.length ? `<span class="nc-flags">${flags.join('')}</span>` : ''
         }</div>
@@ -634,12 +654,13 @@ function renderEditorToolbar() {
   $('#btn-fav').classList.toggle('on-fav', !!(n && n.favorite));
   $('#btn-duplicate').innerHTML = ico('copy');
   $('#btn-ai').innerHTML = ico('sparkle');
+  $('#btn-image').innerHTML = ico('image');
   $('#btn-preview').innerHTML = ico('eye');
   $('#btn-preview').classList.toggle('on', state.preview);
   $('#btn-export').innerHTML = ico('export');
   $('#btn-trash').innerHTML = ico('trash');
 
-  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-ai', '#btn-preview', '#btn-export', '#btn-trash'].forEach((s) => {
+  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-ai', '#btn-image', '#btn-preview', '#btn-export', '#btn-trash'].forEach((s) => {
     $(s).style.display = editable ? '' : 'none';
   });
   $('.ed-folder-wrap').style.display = editable ? '' : 'none';
@@ -678,6 +699,8 @@ function renderEditor() {
   renderEditorToolbar();
   applyPreviewMode();
   updateWordCount();
+  closeMention();
+  loadBacklinks();
 }
 
 function applyPreviewMode() {
@@ -685,7 +708,12 @@ function applyPreviewMode() {
   $('#ed-text').classList.toggle('hidden', showPreview);
   const pv = $('#ed-preview');
   pv.classList.toggle('hidden', !showPreview);
-  if (showPreview) pv.innerHTML = renderMarkdown(state.openNote ? state.openNote.content : '');
+  if (showPreview) {
+    // THE v0.7 "preview shows old text" fix: always render the LIVE textarea
+    // content (state.openNote can lag one autosave tick behind).
+    pv.innerHTML = renderMarkdown($('#ed-text') ? $('#ed-text').value : (state.openNote ? state.openNote.content : ''));
+    pv.scrollTop = 0;
+  }
   $('#md-bar').classList.toggle('hidden', !state.openNote || showPreview || !!state.openNote.trashed);
 }
 
@@ -740,6 +768,10 @@ function mdAction(kind) {
     const now = new Date();
     const stamp = now.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
     replace(stamp, s + stamp.length, s + stamp.length);
+  } else if (kind === 'image') {
+    $('#ed-img-file').click();
+  } else if (kind === 'mention') {
+    openMentionPicker(ta);
   } else {
     // line-prefix actions: h1, h2, h3, ul, ol, check, quote
     const ls = v.lastIndexOf('\n', s - 1) + 1;
@@ -785,6 +817,9 @@ function taskBadges(t) {
   const b = [];
   if (t.priority > 0) {
     b.push(`<span class="badge b-prio p${t.priority}">${PRIO_LABEL[t.priority]}</span>`);
+  }
+  if (t.status === 1 && !t.done) {
+    b.push(`<span class="badge b-doing">● In progress</span>`);
   }
   if (t.dueAt != null) {
     const today = t.dueAt >= startOfToday() && t.dueAt < startOfToday() + DAY;
@@ -1150,8 +1185,9 @@ function renderStatusStats() {
 function setView(view, opts = {}) {
   state.view = view;
   closeSlash();
+  closeMention();
   closeMenu();
-  if (view.type === 'tasks' || view.type === 'recordings' || view.type === 'chat') {
+  if (view.type === 'tasks' || view.type === 'board' || view.type === 'recordings' || view.type === 'chat') {
     state.currentNoteId = null;
     state.openNote = null;
   }
@@ -1161,11 +1197,21 @@ function setView(view, opts = {}) {
     if (view.type === 'tasks') {
       $('#tasks-view').classList.remove('hidden');
       $('#tasks-view').classList.add('view-enter');
+      $('#board-view').classList.add('hidden');
       $('#rec-view').classList.add('hidden');
       $('#chat-view').classList.add('hidden');
       $('#note-list').classList.add('hidden');
       $('#editor').style.display = 'none';
       renderTasks();
+    } else if (view.type === 'board') {
+      $('#board-view').classList.remove('hidden');
+      $('#board-view').classList.add('view-enter');
+      $('#tasks-view').classList.add('hidden');
+      $('#rec-view').classList.add('hidden');
+      $('#chat-view').classList.add('hidden');
+      $('#note-list').classList.add('hidden');
+      $('#editor').style.display = 'none';
+      refreshTasks().then(renderBoard);
     } else if (view.type === 'recordings') {
       $('#rec-view').classList.remove('hidden');
       $('#rec-view').classList.add('view-enter');
@@ -1188,12 +1234,14 @@ function setView(view, opts = {}) {
       $('#chat-view').classList.remove('hidden');
       $('#chat-view').classList.add('view-enter');
       $('#tasks-view').classList.add('hidden');
+      $('#board-view').classList.add('hidden');
       $('#rec-view').classList.add('hidden');
       $('#note-list').classList.add('hidden');
       $('#editor').style.display = 'none';
       openChatView();
     } else {
       $('#tasks-view').classList.add('hidden');
+      $('#board-view').classList.add('hidden');
       $('#rec-view').classList.add('hidden');
       $('#chat-view').classList.add('hidden');
       $('#note-list').classList.remove('hidden');
@@ -1213,6 +1261,10 @@ function setView(view, opts = {}) {
 
 async function selectNote(id) {
   if (state.currentNoteId === id) return;
+  // coming from Tasks / Board / Recordings / Chat — bring the library back
+  if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat') {
+    setView({ type: 'all' });
+  }
   await flushSave();
   state.currentNoteId = id;
   const summary = state.notes.find((n) => n.id === id);
@@ -1336,9 +1388,9 @@ async function flushSave() {
         state.notes.splice(insertAt, 0, s);
       }
     }
-    renderNoteList();
+    renderNoteList({ animate: false });
   } else {
-    refreshNotes().then(renderNoteList);
+    refreshNotes().then(() => renderNoteList({ animate: false }));
   }
   setSaveState('saved', 'Saved');
   const tab = state.tabs.find((t) => t.id === n.id);
@@ -1517,6 +1569,8 @@ async function openSettings(section) {
   const spc = state.settings.spellcheck === '1';
   const den = state.settings.density || 'cozy';
   const auto = state.settings.autostart === '1';
+  const dline = state.settings.edLine || '1.6';
+  const dview = state.settings.defaultView || 'all';
   const ai = state.settings.ai;
   const activeId = ai.active || 'openrouter';
 
@@ -1527,6 +1581,7 @@ async function openSettings(section) {
     const model = conf.model || '';
     const apiKey = conf.apiKey || '';
     const needsKey = !!meta.key;
+    const suggest = meta.suggestModels || [];
     return `
       <div class="prov-panel">
         <div class="prov-row">
@@ -1545,6 +1600,7 @@ async function openSettings(section) {
           <input type="text" id="pv-model" value="${esc(model)}" placeholder="e.g. ${pid === 'zai' ? 'glm-4.6' : pid === 'openai' ? 'gpt-4o-mini' : pid === 'openrouter' ? 'openai/gpt-4o-mini' : 'model-name'}" spellcheck="false" />
         </div>
         <div id="pv-models" class="prov-models"></div>
+        ${suggest.length ? `<div class="prov-suggest"><span class="ps-label">Popular models — click one:</span>${suggest.map((m) => `<button type="button" class="pv-model${m === model ? ' on' : ''}" data-m="${esc(m)}">${esc(m)}</button>`).join('')}</div>` : ''}
         <div class="prov-hint">${esc(meta.hint || '')}</div>
         <div class="prov-actions">
           ${meta.models ? '<button class="btn ghost small" id="pv-fetch">Fetch models</button>' : ''}
@@ -1562,7 +1618,7 @@ async function openSettings(section) {
 
         <div class="set-row" style="display:block">
           <div class="set-label">Theme</div>
-          <div class="set-sub">Twelve cozy looks — pick your mood.</div>
+          <div class="set-sub">Twenty cozy looks — pick your mood.</div>
           <div class="theme-grid" id="theme-grid">
             ${THEMES.map((t) => `
               <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
@@ -1615,6 +1671,32 @@ async function openSettings(section) {
             <button data-v="cozy" class="${den === 'cozy' ? 'on' : ''}">Cozy</button>
             <button data-v="compact" class="${den === 'compact' ? 'on' : ''}">Compact</button>
           </div>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Editor line spacing</div>
+            <div class="set-sub">How airy your paragraphs feel.</div>
+          </div>
+          <div class="seg" id="seg-edline">
+            <button data-v="1.5" class="${dline === '1.5' ? 'on' : ''}">Snug</button>
+            <button data-v="1.6" class="${dline === '1.6' ? 'on' : ''}">Cozy</button>
+            <button data-v="1.8" class="${dline === '1.8' ? 'on' : ''}">Airy</button>
+            <button data-v="2" class="${dline === '2' ? 'on' : ''}">Roomy</button>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div>
+            <div class="set-label">Open Nook on</div>
+            <div class="set-sub">Where the app lands when it starts.</div>
+          </div>
+          <select id="set-defaultview" class="set-select">
+            <option value="all"${dview === 'all' ? ' selected' : ''}>All Notes</option>
+            <option value="favorites"${dview === 'favorites' ? ' selected' : ''}>Favorites</option>
+            <option value="tasks"${dview === 'tasks' ? ' selected' : ''}>Tasks</option>
+            <option value="board"${dview === 'board' ? ' selected' : ''}>Board</option>
+          </select>
         </div>
 
         <div class="set-row">
@@ -1724,7 +1806,7 @@ async function openSettings(section) {
 
         <div class="about-box">
           ${frogSvg}
-          <div class="ab-text"><b>Nook v0.7.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real 🐸</div>
+          <div class="ab-text"><b>Nook v0.8.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real 🐸</div>
         </div>
         <div class="modal-actions">
           <button class="btn ghost" data-x="shortcuts">Shortcuts</button>
@@ -1795,6 +1877,21 @@ async function openSettings(section) {
       await setSetting('density', b.dataset.v);
       applySettings();
     });
+  });
+
+  root.querySelectorAll('#seg-edline button').forEach((b) => {
+    b.addEventListener('click', async () => {
+      state.settings.edLine = b.dataset.v;
+      root.querySelectorAll('#seg-edline button').forEach((x) => x.classList.toggle('on', x === b));
+      await setSetting('edLine', b.dataset.v);
+      applySettings();
+    });
+  });
+
+  root.querySelector('#set-defaultview').addEventListener('change', async (e) => {
+    state.settings.defaultView = e.target.value || 'all';
+    await setSetting('defaultView', state.settings.defaultView);
+    toast('Nook will open on ' + e.target.selectedOptions[0].textContent);
   });
 
   root.querySelector('#set-ctt').addEventListener('change', async (e) => {
@@ -1877,10 +1974,28 @@ async function openSettings(section) {
 
     const keyInput = panel.querySelector('#pv-key');
     if (keyInput && !keyInput.disabled) {
-      keyInput.addEventListener('change', async () => {
+      // v0.8 FIX: save WHILE typing (debounced) — not only on blur. Before,
+      // a pasted key could be lost if the panel was re-rendered first, and
+      // there was zero feedback that anything had been saved.
+      let keyTimer = null;
+      const persistKey = async () => {
         confOf().apiKey = keyInput.value.trim();
         await saveAi();
         refreshProvChips();
+        status.innerHTML = '<span style="color:var(--accent)">Key saved ✓</span>';
+        const meta2 = AI_PROVIDERS.find((p) => p.id === pid);
+        if (meta2?.models && confOf().apiKey) {
+          fetchModelsSilently();
+        }
+      };
+      keyInput.addEventListener('input', () => {
+        clearTimeout(keyTimer);
+        keyTimer = setTimeout(persistKey, 450);
+      });
+      keyInput.addEventListener('change', persistKey);
+      keyInput.addEventListener('paste', () => {
+        clearTimeout(keyTimer);
+        keyTimer = setTimeout(persistKey, 120);
       });
     }
     const eye = panel.querySelector('#pv-eye');
@@ -1907,36 +2022,59 @@ async function openSettings(section) {
       await saveAi();
     });
 
+    const fetchModelsSilently = async () => {
+      const box = panel.querySelector('#pv-models');
+      if (!box) return;
+      box.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Fetching models…</span>';
+      try {
+        const models = await call('ai_list_models', { baseUrl: confOf().url, apiKey: confOf().apiKey || null });
+        if (!models.length) {
+          box.innerHTML = '<span class="pv-mini">Endpoint answered but listed no models — type the model name manually.</span>';
+          return;
+        }
+        renderModelButtons(models);
+      } catch (err) {
+        box.innerHTML = `<span class="pv-mini" style="color:var(--danger)">${esc(err.message)}</span>`;
+      }
+    };
+
+    const renderModelButtons = (models) => {
+      const box = panel.querySelector('#pv-models');
+      if (!box) return;
+      box.innerHTML = models.slice(0, 60).map((m) =>
+        `<button type="button" class="pv-model${m === modelInput.value.trim() ? ' on' : ''}" data-m="${esc(m)}">${esc(m)}</button>`
+      ).join('');
+      box.querySelectorAll('.pv-model').forEach((b) => {
+        b.addEventListener('click', async () => {
+          modelInput.value = b.dataset.m;
+          confOf().model = b.dataset.m;
+          await saveAi();
+          box.querySelectorAll('.pv-model').forEach((x) => x.classList.toggle('on', x === b));
+          refreshProvChips();
+          toast(`Model set to ${b.dataset.m}`, { icon: 'sparkle' });
+        });
+      });
+    };
+
+    // popular-model chips (Z.ai etc. have no /models endpoint)
+    panel.querySelectorAll('.prov-suggest .pv-model').forEach((b) => {
+      b.addEventListener('click', async () => {
+        modelInput.value = b.dataset.m;
+        confOf().model = b.dataset.m;
+        await saveAi();
+        panel.querySelectorAll('.prov-suggest .pv-model').forEach((x) => x.classList.toggle('on', x === b));
+        refreshProvChips();
+        toast(`Model set to ${b.dataset.m}`, { icon: 'sparkle' });
+      });
+    });
+
     const fetchBtn = panel.querySelector('#pv-fetch');
     if (fetchBtn) {
       fetchBtn.addEventListener('click', async () => {
         confOf().url = urlInput.value.trim();
         confOf().apiKey = keyInput && !keyInput.disabled ? keyInput.value.trim() : confOf().apiKey;
         await saveAi();
-        const box = panel.querySelector('#pv-models');
-        box.innerHTML = '<span class="ai-loading"><span class="ai-spin"></span>Fetching models…</span>';
-        try {
-          const models = await call('ai_list_models', { baseUrl: confOf().url, apiKey: confOf().apiKey || null });
-          if (!models.length) {
-            box.innerHTML = '<span class="pv-mini">Endpoint answered but listed no models — type the model name manually.</span>';
-            return;
-          }
-          box.innerHTML = models.slice(0, 60).map((m) =>
-            `<button type="button" class="pv-model${m === modelInput.value.trim() ? ' on' : ''}" data-m="${esc(m)}">${esc(m)}</button>`
-          ).join('');
-          box.querySelectorAll('.pv-model').forEach((b) => {
-            b.addEventListener('click', async () => {
-              modelInput.value = b.dataset.m;
-              confOf().model = b.dataset.m;
-              await saveAi();
-              box.querySelectorAll('.pv-model').forEach((x) => x.classList.toggle('on', x === b));
-              refreshProvChips();
-              toast(`Model set to ${b.dataset.m}`, { icon: 'sparkle' });
-            });
-          });
-        } catch (err) {
-          box.innerHTML = `<span class="pv-mini" style="color:var(--danger)">${esc(err.message)}</span>`;
-        }
+        await fetchModelsSilently();
       });
     }
 
@@ -2057,6 +2195,8 @@ async function loadSettings() {
   state.settings.spellcheck = (await call('get_setting', { key: 'spellcheck' })) || '0';
   state.settings.density = (await call('get_setting', { key: 'density' })) || 'cozy';
   state.settings.defaultFolder = (await call('get_setting', { key: 'defaultFolder' })) || '';
+  state.settings.edLine = (await call('get_setting', { key: 'edLine' })) || '1.6';
+  state.settings.defaultView = (await call('get_setting', { key: 'defaultView' })) || 'all';
   // AI providers (JSON blob; API keys stay in the local DB, never in backups)
   let ai = null;
   try {
@@ -2103,6 +2243,7 @@ function applySettings() {
   document.documentElement.style.setProperty('--font-size', `${state.settings.fontSize}px`);
   document.body.dataset.edfont = state.settings.editorFont || 'sans';
   document.body.dataset.edwidth = state.settings.editorWidth || 'normal';
+  document.body.dataset.edline = state.settings.edLine || '1.6';
   document.body.dataset.density = state.settings.density || 'cozy';
   const ed = $('#ed-text');
   if (ed) ed.spellcheck = state.settings.spellcheck === '1';
@@ -2115,6 +2256,7 @@ function wireShortcuts() {
     const ctrl = e.ctrlKey || e.metaKey;
     if (!ctrl) {
       if (e.key === 'Escape') {
+        if (mentionState.open) { closeMention(); return; }
         if (slashState.open) { closeSlash(); return; }
         if ($('#menu-root').innerHTML) { closeMenu(); return; }
         if ($('#overlay-root').innerHTML) closeModal();
@@ -2249,12 +2391,55 @@ function wireEditor() {
   $('#btn-purge').addEventListener('click', purgeCurrent);
   $('#btn-export').addEventListener('click', exportCurrent);
   $('#btn-preview').addEventListener('click', () => {
-    state.preview = !state.preview;
-    applyPreviewMode();
-    renderEditorToolbar();
+    if (state.preview) {
+      state.preview = false;
+      applyPreviewMode();
+      renderEditorToolbar();
+    } else {
+      flushSave(); // persist the very latest keystrokes, then show them
+      state.preview = true;
+      applyPreviewMode();
+      renderEditorToolbar();
+    }
+  });
+  $('#btn-image').addEventListener('click', () => pickImages());
+  $('#ed-img-file').addEventListener('change', (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (files.length) insertImageFiles(files);
+  });
+  $('#ed-text').addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length) {
+      e.preventDefault();
+      insertImageFiles(files);
+    }
+  });
+  $('#ed-text').addEventListener('dragover', (e) => {
+    if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault();
+  });
+  $('#ed-text').addEventListener('drop', (e) => {
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length) {
+      e.preventDefault();
+      e.stopPropagation();
+      insertImageFiles(files);
+    }
   });
   $('#ed-folder').addEventListener('change', (e) => moveCurrentNote(e.target.value || null));
   $('#ed-preview').addEventListener('click', (e) => {
+    const mention = e.target.closest('.md-mention');
+    if (mention) {
+      e.preventDefault();
+      openMentionByTitle(mention.dataset.mention);
+      return;
+    }
+    const img = e.target.closest('img.md-img');
+    if (img) {
+      e.preventDefault();
+      openLightbox(img.src, img.alt);
+      return;
+    }
     const a = e.target.closest('a');
     if (a) {
       e.preventDefault();
@@ -2291,10 +2476,13 @@ function wireEditor() {
     if (e.target.closest('.ctx, .slash')) return;
     closeMenu();
     if (slashState.open && !e.target.closest('#ed-text')) closeSlash();
+    if (mentionState.open && !e.target.closest('#ed-text')) closeMention();
   }, true);
 
   wireSlash($('#ed-text'));
+  wireMention($('#ed-text'));
   wireDragDrop();
+  wireBoard();
 
   // markdown toolbar
   const mdBar = $('#md-bar');
@@ -2418,7 +2606,7 @@ function renderTabs() {
   wrap.innerHTML = state.tabs
     .map(
       (t) => `
-      <div class="tab${t.id === state.currentNoteId ? ' active' : ''}" data-tid="${esc(t.id)}" title="${esc(t.title)}">
+      <div class="tab${t.id === state.currentNoteId ? ' active' : ''}" data-tid="${esc(t.id)}" draggable="true" title="${esc(t.title)}">
         <span class="t-label">${esc(t.title)}</span>
         <button class="t-close" title="Close tab">&times;</button>
       </div>`
@@ -2440,6 +2628,32 @@ function renderTabs() {
         e.preventDefault();
         closeTab(tid);
       }
+    });
+    // v0.8: drag tabs to reorder them
+    el.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', 'nook-tab:' + tid);
+      e.dataTransfer.effectAllowed = 'move';
+      el.classList.add('dragging');
+    });
+    el.addEventListener('dragend', () => el.classList.remove('dragging'));
+    el.addEventListener('dragover', (e) => {
+      if (![...(e.dataTransfer?.types || [])].includes('text/plain')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    el.addEventListener('drop', (e) => {
+      const raw = e.dataTransfer.getData('text/plain') || '';
+      if (!raw.startsWith('nook-tab:')) return; // note-card drops pass through
+      e.preventDefault();
+      e.stopPropagation();
+      const srcId = raw.slice('nook-tab:'.length);
+      if (srcId === tid) return;
+      const from = state.tabs.findIndex((t) => t.id === srcId);
+      const to = state.tabs.findIndex((t) => t.id === tid);
+      if (from === -1 || to === -1) return;
+      const [moved] = state.tabs.splice(from, 1);
+      state.tabs.splice(to, 0, moved);
+      renderTabs();
     });
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -2510,7 +2724,9 @@ const SLASH_COMMANDS = [
   { name: 'Inline code', hint: '`code`', icon: '<>', kind: 'code' },
   { name: 'Link', hint: 'Markdown link', icon: 'link', kind: 'link' },
   { name: 'Divider', hint: 'Visual separator', icon: '—', kind: 'divider' },
-  { name: 'Timestamp', hint: 'Insert current date & time', icon: 'clock', kind: 'timestamp' }
+  { name: 'Timestamp', hint: 'Insert current date & time', icon: 'clock', kind: 'timestamp' },
+  { name: 'Image', hint: 'Embed a picture from this PC', icon: 'image', kind: 'image' },
+  { name: 'Mention note', hint: 'Link another note with [[…]]', icon: 'mention', kind: 'mention' }
 ];
 
 let slashState = { open: false, at: -1, query: '', sel: 0 };
@@ -2616,6 +2832,10 @@ function applySlash(idx, ta) {
     ta.value = v2.slice(0, s2) + chunk + v2.slice(s2);
     ta.setSelectionRange(s2 + chunk.length, s2 + chunk.length);
     ta.dispatchEvent(new Event('input', { bubbles: true }));
+  } else if (c.kind === 'image') {
+    pickImages();
+  } else if (c.kind === 'mention') {
+    openMentionPicker(ta);
   } else {
     mdAction(c.kind);
   }
@@ -2746,6 +2966,490 @@ function wireDragDrop() {
   };
   wireDropTarget($('#sb-views'));
   wireDropTarget($('#sb-folders'));
+}
+
+// ==================================================================
+// v0.8 — IMAGES IN NOTES (paste · drop · picker)
+// ==================================================================
+
+function fileToB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || '');
+      resolve(s.includes(',') ? s.slice(s.indexOf(',') + 1) : s);
+    };
+    r.onerror = () => reject(new Error('Could not read the file'));
+    r.readAsDataURL(file);
+  });
+}
+
+function insertAtCaret(ta, text) {
+  const s = ta.selectionStart ?? ta.value.length;
+  const e = ta.selectionEnd ?? s;
+  const v = ta.value;
+  const needsNlBefore = s > 0 && v[s - 1] !== '\n';
+  const ins = (needsNlBefore ? '\n' : '') + text;
+  ta.value = v.slice(0, s) + ins + v.slice(e);
+  const caret = s + ins.length;
+  ta.setSelectionRange(caret, caret);
+  ta.focus();
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+async function insertImageFiles(files) {
+  const ta = $('#ed-text');
+  if (!ta || !state.openNote || state.openNote.trashed) return;
+  const imgs = [...files].filter((f) => f.type && f.type.startsWith('image/'));
+  if (!imgs.length) return;
+  setSaveState('saving', 'Adding image…');
+  for (const f of imgs) {
+    if (f.size > 10 * 1024 * 1024) {
+      toast(`"${f.name || 'image'}" is over 10 MB — skipped`, { icon: 'image', ms: 4000 });
+      continue;
+    }
+    try {
+      const data = await fileToB64(f);
+      const meta = await call('insert_note_image', {
+        noteId: state.openNote.id,
+        mime: f.type,
+        name: f.name || 'image',
+        data
+      });
+      insertAtCaret(ta, `![${(meta.name || 'image').replace(/[\[\]]/g, '')}](nookimg://${meta.id})\n`);
+      toast('Image added', { icon: 'image' });
+    } catch (err) {
+      toast(err.message, { icon: 'image', ms: 4500 });
+    }
+  }
+}
+
+async function pickImages() {
+  $('#ed-img-file').click();
+}
+
+// ---- @ mentions: type @ to link another note → [[Title]] ----
+
+let mentionState = { open: false, at: -1, query: '', sel: 0 };
+
+function mentionMatches() {
+  const q = mentionState.query.toLowerCase();
+  return (state.allNotesCache || [])
+    .filter((n) => n.id !== state.currentNoteId)
+    .filter((n) => !q || (n.title || 'untitled note').toLowerCase().includes(q))
+    .slice(0, 8);
+}
+
+function closeMention() {
+  mentionState.open = false;
+  const el = $('#mention-menu');
+  if (el) el.remove();
+}
+
+function renderMention(ta) {
+  let el = $('#mention-menu');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'mention-menu';
+    el.className = 'slash mention';
+    $('#ed-body').appendChild(el);
+  }
+  const matches = mentionMatches();
+  mentionState.sel = Math.min(Math.max(0, mentionState.sel), Math.max(0, matches.length - 1));
+  if (!matches.length) {
+    el.innerHTML = `<div class="slash-empty">No note matches "${esc(mentionState.query)}" — Enter to link anyway</div>`;
+    return;
+  }
+  el.innerHTML = matches
+    .map(
+      (n, i) => `
+      <button class="slash-item${i === mentionState.sel ? ' sel' : ''}" data-mi="${i}">
+        <span class="s-ico">${ico('pencil')}</span>
+        <span><span class="s-name">${esc(n.title.trim() || 'Untitled note')}</span><br/><span class="s-hint">${esc((n.snippet || '').slice(0, 52))}</span></span>
+      </button>`
+    )
+    .join('');
+  const coords = caretCoords(ta, mentionState.at);
+  const bodyRect = $('#ed-body').getBoundingClientRect();
+  el.style.left = `${Math.min(coords.left + 6, bodyRect.width - 246)}px`;
+  el.style.top = `${coords.top + 30}px`;
+  el.querySelectorAll('.slash-item').forEach((b) => {
+    b.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      applyMention(Number(b.dataset.mi), ta);
+    });
+  });
+}
+
+function openMentionPicker(ta) {
+  // toolbar / slash-command entry: insert a fresh "@" and open the picker
+  const pos = ta.selectionStart ?? ta.value.length;
+  const before = ta.value.slice(0, pos);
+  const ins = (pos === 0 || before.endsWith('\n') || before.endsWith(' ') ? '' : ' ') + '@';
+  ta.value = ta.value.slice(0, pos) + ins + ta.value.slice(ta.selectionEnd ?? pos);
+  const caret = pos + ins.length;
+  ta.setSelectionRange(caret, caret);
+  ta.focus();
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  mentionState = { open: true, at: caret - 1, query: '', sel: 0 };
+  renderMention(ta);
+}
+
+function applyMention(idx, ta, customTitle) {
+  const matches = mentionMatches();
+  const pick = customTitle || (matches[idx] ? (matches[idx].title.trim() || 'Untitled note') : null);
+  const start = mentionState.at - mentionState.query.length; // position of "@"
+  const end = mentionState.at + mentionState.query.length + 1;
+  const v = ta.value;
+  const linked = `[[${pick || mentionState.query || 'Untitled note'}]]`;
+  ta.value = v.slice(0, start) + linked + v.slice(Math.min(end, v.length));
+  const caret = start + linked.length;
+  ta.setSelectionRange(caret, caret);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  closeMention();
+  ta.focus();
+}
+
+function wireMention(ta) {
+  ta.addEventListener('input', () => {
+    if (!mentionState.open) return;
+    const pos = ta.selectionStart;
+    const v = ta.value;
+    const start = mentionState.at - mentionState.query.length; // "@"
+    if (pos < start || v[start] !== '@') {
+      closeMention();
+      return;
+    }
+    const q = v.slice(start + 1, pos);
+    if (/\s/.test(q)) {
+      closeMention();
+      return;
+    }
+    mentionState.query = q;
+    mentionState.sel = 0;
+    renderMention(ta);
+  });
+  ta.addEventListener('keydown', (e) => {
+    if (!mentionState.open) {
+      // typing "@" (after whitespace / at start) opens the note picker — Notion style
+      if (e.key === '@' && state.openNote && !state.openNote.trashed && !state.preview) {
+        const pos = ta.selectionStart;
+        const before = ta.value.slice(0, pos);
+        if (pos === 0 || /[\s(\[]$/.test(before)) {
+          setTimeout(() => {
+            if (ta.selectionStart === pos + 1) {
+              mentionState = { open: true, at: ta.selectionStart - 1, query: '', sel: 0 };
+              renderMention(ta);
+            }
+          }, 0);
+        }
+      }
+      return;
+    }
+    const matches = mentionMatches();
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      mentionState.sel = (mentionState.sel + 1) % Math.max(1, matches.length);
+      renderMention(ta);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      mentionState.sel = (mentionState.sel - 1 + matches.length) % Math.max(1, matches.length);
+      renderMention(ta);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      applyMention(mentionState.sel, ta);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeMention();
+    } else if (e.key === ' ' || e.key === 'Enter') {
+      closeMention();
+    }
+  });
+}
+
+async function openMentionByTitle(title) {
+  const clean = String(title || '').trim().toLowerCase();
+  if (!clean) return;
+  if (!state.allNotesCache || !state.allNotesCache.length) {
+    state.allNotesCache = await call('list_notes', { view: 'all', sort: 'updated' });
+  }
+  const hit = state.allNotesCache.find(
+    (n) => (n.title || '').trim().toLowerCase() === clean
+  );
+  if (hit) {
+    if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat') {
+      setView({ type: 'all' });
+    }
+    await selectNote(hit.id);
+  } else {
+    toast(`No note named "${title}" yet`, { icon: 'mention' });
+  }
+}
+
+// ---- backlinks ("linked from") under the editor ----
+
+async function loadBacklinks() {
+  const bar = $('#ed-backlinks');
+  if (!bar || !state.openNote || state.view.type === 'trash') {
+    if (bar) bar.classList.add('hidden');
+    return;
+  }
+  try {
+    const links = await call('note_backlinks', { id: state.openNote.id });
+    if (!links.length) {
+      bar.classList.add('hidden');
+      return;
+    }
+    bar.classList.remove('hidden');
+    bar.innerHTML =
+      `<span class="bl-ico">${ico('mention')}</span><span class="bl-label">Linked from</span>` +
+      links
+        .slice(0, 6)
+        .map(
+          (l) =>
+            `<button class="bl-chip" data-bid="${esc(l.id)}" title="${esc(l.snippet || '')}">${esc(l.title.trim() || 'Untitled note')}</button>`
+        )
+        .join('') +
+      (links.length > 6 ? `<span class="bl-more">+${links.length - 6} more</span>` : '');
+    bar.querySelectorAll('.bl-chip').forEach((b) => {
+      b.addEventListener('click', async () => {
+        if (state.view.type === 'trash') setView({ type: 'all' });
+        await selectNote(b.dataset.bid);
+      });
+    });
+  } catch {
+    bar.classList.add('hidden');
+  }
+}
+
+// ---- image lightbox in preview ----
+
+function openLightbox(src, alt) {
+  const root = $('#overlay-root');
+  root.innerHTML = `
+    <div class="overlay lightbox">
+      <div class="lb-inner">
+        <img src="${esc(src)}" alt="${esc(alt || '')}" />
+        <div class="lb-cap">${esc(alt || 'Image')} · click anywhere to close</div>
+      </div>
+    </div>`;
+  root.querySelector('.overlay').addEventListener('mousedown', () => closeModal());
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+      window.removeEventListener('keydown', escHandler);
+    }
+  };
+  window.addEventListener('keydown', escHandler);
+}
+
+// ==================================================================
+// v0.8 — BOARD (Notion-style kanban, drag cards between columns)
+// ==================================================================
+
+const BOARD_COLS = [
+  { status: 0, label: 'To do', dot: 'todo' },
+  { status: 1, label: 'In progress', dot: 'doing' },
+  { status: 2, label: 'Done', dot: 'done' }
+];
+
+let boardDragId = null;
+
+function boardCardHtml(t) {
+  const subs = t.subtasks || [];
+  const subDone = subs.filter((x) => x.done).length;
+  const badges = taskBadges(t);
+  return `
+    <div class="bv-card${t.done ? ' is-done' : ''}" draggable="true" data-tid="${esc(t.id)}" style="--i:${Math.min(12, t.position % 13)}">
+      <div class="bv-prio p${t.priority || 0}"></div>
+      <div class="bv-card-title">${esc(t.title)}</div>
+      ${badges ? `<div class="bv-card-badges">${badges}</div>` : ''}
+      ${subs.length ? `<div class="bv-subs">${ico('checkSq')}${subDone}/${subs.length}</div>` : ''}
+    </div>`;
+}
+
+function renderBoard() {
+  if (state.view.type !== 'board') return;
+  const tasks = state.tasks || [];
+  for (const col of BOARD_COLS) {
+    const cardsEl = $(`#bvc-cards-${col.status}`);
+    const countEl = $(`#bvc-count-${col.status}`);
+    if (!cardsEl) continue;
+    const inCol = tasks
+      .filter((t) => (t.status ?? (t.done ? 2 : 0)) === col.status)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    countEl.textContent = inCol.length || '';
+    cardsEl.innerHTML = inCol.length
+      ? inCol.map(boardCardHtml).join('')
+      : `<div class="bv-empty">Drop cards here</div>`;
+    cardsEl.querySelectorAll('.bv-card').forEach((el) => {
+      const tid = el.dataset.tid;
+      el.addEventListener('dragstart', (e) => {
+        boardDragId = tid;
+        e.dataTransfer.setData('text/plain', tid);
+        e.dataTransfer.effectAllowed = 'move';
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => {
+        el.classList.remove('dragging');
+        boardDragId = null;
+        document.querySelectorAll('.bv-col').forEach((c) => c.classList.remove('drag-over'));
+      });
+      el.addEventListener('click', (e) => {
+        if (e.button !== 0) return;
+        state.expandedTask = tid;
+        setView({ type: 'tasks' });
+      });
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showMenu(e.clientX, e.clientY, [
+          { label: col.status === 2 ? 'Move to To do' : 'Mark done', icon: 'checkSq', fn: () => boardSetStatus(tid, col.status === 2 ? 0 : 2) },
+          { label: 'Open in Tasks', icon: 'chevronD', fn: () => { state.expandedTask = tid; setView({ type: 'tasks' }); } },
+          { sep: true },
+          { label: 'Delete card', icon: 'trash', danger: true, fn: async () => { await call('delete_task', { id: tid }); state.tasks = state.tasks.filter((x) => x.id !== tid); renderBoard(); refreshStatsOnly(); renderSidebar(); } }
+        ]);
+      });
+    });
+  }
+}
+
+async function boardSetStatus(tid, status) {
+  const t = state.tasks.find((x) => x.id === tid);
+  if (!t) return;
+  t.status = status;
+  t.done = status === 2;
+  try {
+    await call('update_task', {
+      id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
+      dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
+      subtasks: t.subtasks || [], status
+    });
+    renderBoard();
+    refreshStatsOnly();
+    renderSidebar();
+    if (status === 2) toast('Card done — nice!', { icon: 'checkSq' });
+  } catch (err) {
+    toast('Could not move card: ' + err.message);
+  }
+}
+
+async function boardDrop(status, insertBeforeTid) {
+  const tid = boardDragId;
+  boardDragId = null;
+  if (!tid) return;
+  const t = state.tasks.find((x) => x.id === tid);
+  if (!t) return;
+  const oldStatus = t.status ?? (t.done ? 2 : 0);
+
+  // local optimistic reorder within state.tasks
+  const colIds = (st) =>
+    state.tasks
+      .filter((x) => (x.status ?? (x.done ? 2 : 0)) === st)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((x) => x.id);
+
+  if (oldStatus !== status) t.status = status;
+  const ids = colIds(status).filter((id) => id !== tid);
+  const at = insertBeforeTid ? ids.indexOf(insertBeforeTid) : ids.length;
+  ids.splice(at === -1 ? ids.length : at, 0, tid);
+  ids.forEach((id, i) => {
+    const task = state.tasks.find((x) => x.id === id);
+    if (task) task.position = i + 1;
+  });
+
+  renderBoard();
+  try {
+    await call('update_task', {
+      id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
+      dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
+      subtasks: t.subtasks || [], status
+    });
+    await Promise.all(
+      ids.map((id) => {
+        const task = state.tasks.find((x) => x.id === id);
+        if (!task) return Promise.resolve();
+        return call('update_task', {
+          id: task.id, title: task.title, notes: task.notes || '', priority: task.priority || 0,
+          dueAt: task.dueAt ?? null, remindAt: task.remindAt ?? null, repeat: task.repeat || 'none',
+          subtasks: task.subtasks || [], status: task.status ?? 0
+        }).catch(() => {});
+      })
+    );
+    refreshStatsOnly();
+    renderSidebar();
+    if (oldStatus !== status && status === 2) toast('Card done — nice!', { icon: 'checkSq' });
+  } catch (err) {
+    toast('Could not move card: ' + err.message);
+  }
+}
+
+function wireBoard() {
+  for (const col of BOARD_COLS) {
+    const cardsEl = $(`#bvc-cards-${col.status}`);
+    if (!cardsEl) continue;
+    cardsEl.addEventListener('dragover', (e) => {
+      if (!boardDragId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const colEl = cardsEl.closest('.bv-col');
+      colEl.classList.add('drag-over');
+      // insertion indicator
+      const cards = [...cardsEl.querySelectorAll('.bv-card:not(.dragging)')];
+      const after = cards.find((c) => {
+        const r = c.getBoundingClientRect();
+        return e.clientY < r.top + r.height / 2;
+      });
+      cards.forEach((c) => c.classList.remove('drop-before'));
+      if (after) after.classList.add('drop-before');
+      cardsEl.dataset.insertBefore = after ? after.dataset.tid : '';
+    });
+    cardsEl.addEventListener('dragleave', (e) => {
+      const colEl = cardsEl.closest('.bv-col');
+      if (!colEl.contains(e.relatedTarget)) colEl.classList.remove('drag-over');
+    });
+    cardsEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const colEl = cardsEl.closest('.bv-col');
+      colEl.classList.remove('drag-over');
+      const before = cardsEl.dataset.insertBefore || null;
+      delete cardsEl.dataset.insertBefore;
+      document.querySelectorAll('.bv-card.drop-before').forEach((c) => c.classList.remove('drop-before'));
+      boardDrop(col.status, before);
+    });
+
+    const form = document.querySelector(`.bv-new[data-status="${col.status}"]`);
+    const addBtn = document.querySelector(`.bv-col[data-status="${col.status}"] .bv-add`);
+    if (addBtn) {
+      addBtn.addEventListener('click', () => {
+        form.classList.toggle('hidden');
+        if (!form.classList.contains('hidden')) form.querySelector('input').focus();
+      });
+    }
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const input = form.querySelector('input');
+        const title = input.value.trim();
+        if (!title) return;
+        try {
+          const t = await call('create_task', { title, status: col.status });
+          state.tasks.push(t);
+          input.value = '';
+          form.classList.add('hidden');
+          renderBoard();
+          refreshStatsOnly();
+          renderSidebar();
+          toast('Card added', { icon: 'board' });
+        } catch (err) {
+          toast(err.message);
+        }
+      });
+    }
+  }
 }
 
 // ==================================================================
@@ -3506,6 +4210,8 @@ function showContextualMenu(e) {
       items.push(
         { sep: true },
         { label: 'Insert date & time', icon: 'clock', fn: () => mdAction('timestamp') },
+        { label: 'Insert image…', icon: 'image', fn: () => pickImages() },
+        { label: 'Mention a note', icon: 'mention', fn: () => openMentionPicker(t) },
         { label: 'Slash commands', icon: 'pencil', fn: () => {
             const ta = t;
             ta.focus();
@@ -3580,6 +4286,17 @@ function showContextualMenu(e) {
     showMenu(e.clientX, e.clientY, [
       { label: 'New task', icon: 'checkSq', fn: () => { $('#tv-input').focus(); } },
       { label: 'Clear completed', icon: 'trash', disabled: !state.tasks.some((x) => x.done), fn: async () => { await call('clear_done_tasks'); await refreshTasks(); renderTasks(); refreshStatsOnly(); } }
+    ]);
+    return;
+  }
+
+  // ---- board view ----
+  if (t.closest('#board-view')) {
+    showMenu(e.clientX, e.clientY, [
+      { label: 'Refresh board', icon: 'all', fn: async () => { await refreshTasks(); renderBoard(); } },
+      { label: 'Open Tasks list', icon: 'checkSq', fn: () => setView({ type: 'tasks' }) },
+      { sep: true },
+      { label: 'New card in To do', icon: 'board', fn: () => { document.querySelector('.bv-new[data-status="0"]').classList.remove('hidden'); document.querySelector('.bv-new[data-status="0"] input').focus(); } }
     ]);
     return;
   }
@@ -3710,14 +4427,17 @@ function openQuickSwitcher() {
 function openGuide() {
   const rows = [
     ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> jump to any note · everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it.'],
-    ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, dividers and more. Filter by typing.'],
-    ['Tabs', 'Open as many notes as you want — each gets a tab. Middle-click or × closes a tab. Right-click a tab to close others.'],
+    ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, images and more. Filter by typing.'],
+    ['Images in notes', 'Paste an image straight into the editor (<b>Ctrl+V</b>), drag an image file onto the page, or use the 🖼️ button / <b>/image</b>. Images live inside your local database, render in preview, and click to zoom.'],
+    ['Mention notes', 'Type <b>@</b> anywhere in a note to link another note — it becomes a [[wiki-link]]. Click one in preview to jump there. Below the editor you\'ll see <b>Linked from</b> — which notes point here.'],
+    ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order, click a card to edit details in Tasks. Each column has its own + button.'],
+    ['Tabs', 'Open as many notes as you want — each gets a tab. Drag tabs to reorder, middle-click or × closes one. Right-click a tab to close others.'],
     ['Tasks & reminders', 'Add a task, press the ⌄ to open details: <b>due date</b>, <b>reminder</b>, <b>priority</b>, <b>repeat</b> and <b>subtasks</b>. Nook notifies you at reminder time.'],
-    ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Start/stop never freezes the app anymore, even if the mic is slow. Play, rename, export or delete anytime.'],
-    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Chat streams live, history stays on this PC, and the 📎 button gives the AI your current note as context. Keys are stored locally and never included in backups.'],
+    ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Start/stop never freezes the app, even if the mic is slow. Play, rename, export or delete anytime.'],
+    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Paste your key and it saves instantly; models appear to click. The 📎 button gives the AI your current note as context. Keys stay on this PC.'],
     ['Note tools with AI', 'The ✨ button summarizes the open note, extracts action items straight into Tasks, or suggests a title — through the same provider you configured.'],
-    ['Themes', 'Settings → Theme — 12 looks. Dark and light. Plus editor size/font/width, note density, autosave and spellcheck toggles, default folder, start-with-Windows.'],
-    ['Backup', 'Settings → Backup — export everything to a file and import it anywhere. API keys are never exported.'],
+    ['Themes', 'Settings → Theme — <b>20 looks</b>. Dark and light. Plus editor size/font/width/line-spacing, note density, default folder, opening view, autosave and spellcheck toggles, start-with-Windows.'],
+    ['Backup', 'Settings → Backup — export everything to a file and import it anywhere. Your images come along; API keys never do.'],
     ['Shortcuts', 'Press <b>Ctrl+/</b> anytime for the full list.']
   ];
   const root = $('#overlay-root');
@@ -3747,14 +4467,17 @@ Your cozy little corner for notes and tasks — **100% offline**, everything sta
 
 ## Quick tips
 - Type **/** on an empty line — Notion-style commands appear
-- Open many notes at once — each gets a **tab**
+- Type **@** anywhere — link another note with [[wiki-links]]
+- **Paste or drop images** straight into a note
+- Open many notes at once — each gets a **tab** (drag to reorder)
 - **Right-click anywhere** — notes, folders, tabs, tasks, even empty space
 - **Ctrl+K** jumps to any note in a heartbeat
 - **Drag** a note onto a folder to file it
 - Tasks have due dates, priorities, subtasks and **reminders**
+- **Board** — a Notion-style kanban; drag cards across columns
 - **Recordings** — record meetings straight to this PC
 - **AI Chat** — add your own key (OpenRouter, Z.ai, OpenAI, Groq, Gemini…) in Settings
-- 12 themes in Settings. Press **Ctrl+/** for all shortcuts.
+- 20 themes in Settings. Press **Ctrl+/** for all shortcuts.
 
 Cozy up and start writing. ☕`;
 
@@ -3787,6 +4510,14 @@ async function boot() {
   renderStatusStats();
   setSaveState('saved', 'Ready');
   state.bootDone = true;
+
+  // land on the opening view chosen in Settings (v0.8)
+  const dv = state.settings.defaultView;
+  if ((dv === 'tasks' || dv === 'board') && state.view.type === 'all') {
+    setView({ type: dv });
+  } else if (dv === 'favorites' && state.stats && state.stats.favorites > 0 && state.view.type === 'all') {
+    setView({ type: 'favorites' });
+  }
 
   // land on the most recent note so the app never feels empty
   if (state.notes.length && state.view.type === 'all') {
