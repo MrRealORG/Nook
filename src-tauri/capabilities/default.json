@@ -17,6 +17,7 @@
     "core:window:allow-set-always-on-top",
     "notification:default",
     "opener:allow-open-url",
+    "opener:allow-default-urls",
     "dialog:allow-save",
     "dialog:allow-open",
     "process:allow-restart",

@@ -900,7 +900,7 @@ fn tasks_patch(c: &Connection, id: &str, b: &Map<String, Value>) -> R {
     if remind_changed {
         let _ = c.execute(r#"UPDATE "Task" SET "notifiedAt"=NULL WHERE "id"=?1"#, params![id]);
     }
-    let next = if done && !was_done { crate::ext::spawn_next_occurrence(&c, id) } else { None };
+    let next = if done && !was_done { crate::ext::spawn_next_occurrence(c, id) } else { None };
     let mut out = c.query_row(r#"SELECT * FROM "Task" WHERE "id"=?1"#, params![id], task_row).unwrap_or(Value::Null);
     if let (Some(n), Value::Object(m)) = (next, &mut out) {
         m.insert("next".into(), n);

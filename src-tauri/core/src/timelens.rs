@@ -1185,7 +1185,7 @@ mod tests {
         let day = local_day_start(now);
         let start = (now - 3 * 3_600_000).max(day);
         let dist = Span { app: "Chrome".into(), title: "x - YouTube - Google Chrome".into(), start, end: (start + 70 * 60_000).min(now), afk: false };
-        write_spans(&c, &[dist.clone()]).unwrap();
+        write_spans(&c, std::slice::from_ref(&dist)).unwrap();
         let goals = goals_status(&c, now);
         let lim = goals.iter().find(|g| g["target"] == "distracting").unwrap();
         if dist.end - dist.start >= 60 * 60_000 {

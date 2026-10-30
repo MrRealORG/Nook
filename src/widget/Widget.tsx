@@ -138,7 +138,8 @@ export function Widget() {
   };
 
   const toggle = async (t: Task) => {
-    setTasks((ts) => ts.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x)));
+    // keep completedAt in step so a just-ticked task stays visible (the list shows tasks done in the last 6h)
+    setTasks((ts) => ts.map((x) => (x.id === t.id ? { ...x, done: !x.done, completedAt: !x.done ? Date.now() : null } : x)));
     await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ done: !t.done }) });
     if (!t.done) ping("happy", "Nice!");
     notifyMain();
