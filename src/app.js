@@ -6,6 +6,7 @@
 import { call, IS_TAURI, mockImageSrc } from './api.js';
 import { renderMarkdown, setImgResolver } from './markdown.js';
 import { frogSvg, ico, setIcons } from './art.js';
+import { sfx, unlockAudio, startMusic, stopMusic, soundState } from './sound.js';
 
 const $ = (sel) => document.querySelector(sel);
 const DAY = 86400000;
@@ -145,6 +146,7 @@ const state = {
     theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal',
     closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy',
     defaultFolder: '', autostart: '0', edLine: '1.6', defaultView: 'all',
+    soundFx: '1', music: '1',
     ai: JSON.parse(JSON.stringify(DEFAULT_AI_SETTINGS))
   },
   tabs: [],              // open note ids, in order
@@ -1260,7 +1262,8 @@ function wireTaskItem(item) {
         if (res && !task.done && task.repeat !== 'none' && res.done === false) {
           toast(`Repeats ${task.repeat} — next: ${dueLabel(res.dueAt) || 'scheduled'}`, { icon: 'repeat' });
         }
-        if (res && res.done && !task.done) confettiAtEl(chk); // v0.10 — small win, small party
+        if (res && res.done && !task.done) { confettiAtEl(chk); sfx('success'); } // v0.10 — small win, small party
+        else if (res && !res.done) sfx('tap');
         renderTasks();
         refreshStatsOnly();
       } catch (err) {
@@ -1441,10 +1444,12 @@ function renderStatusStats() {
 }
 
 function setView(view, opts = {}) {
+  const prevType = state.view.type;
   state.view = view;
   closeSlash();
   closeMention();
   closeMenu();
+  if (prevType !== view.type) sfx('nav');
   if (view.type === 'tasks' || view.type === 'board' || view.type === 'recordings' || view.type === 'chat') {
     state.currentNoteId = null;
     state.openNote = null;
@@ -1552,6 +1557,7 @@ async function createNote() {
     folderId = state.settings.defaultFolder; // v0.7 — default folder setting
   }
   const note = await call('create_note', { folderId });
+  sfx('pop');
   state.openNote = note;
   state.currentNoteId = note.id;
   state.preview = false;
@@ -1867,6 +1873,7 @@ async function trashCurrent() {
   const n = state.openNote;
   if (!n) return;
   await call('trash_note', { id: n.id, trashed: true });
+  sfx('trash');
   closeTab(n.id, { switchAway: false });
   state.notes = state.notes.filter((x) => x.id !== n.id);
   state.currentNoteId = null;
@@ -2194,6 +2201,26 @@ async function openSettings(section) {
           </div>
           <div class="set-row">
             <div>
+              <div class="set-label">Sound effects</div>
+              <div class="set-sub">Soft taps, chimes and whooshes as you use Nook.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-sfx"${state.settings.soundFx === '1' ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Ambient music</div>
+              <div class="set-sub">A gentle generative lofi loop — composed live, never repeats, never leaves this PC.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-music"${state.settings.music === '1' ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="set-row">
+            <div>
               <div class="set-label">Welcome screen</div>
               <div class="set-sub">Miss the clouds? Watch the get-started again.</div>
             </div>
@@ -2318,7 +2345,7 @@ async function openSettings(section) {
           </div>
           <div class="about-box">
             ${frogSvg}
-            <div class="ab-text"><b>Nook v0.12.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
+            <div class="ab-text"><b>Nook v0.15.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
           </div>
         </div>
         </div>
@@ -2358,6 +2385,7 @@ async function openSettings(section) {
       root.querySelectorAll('.theme-chip').forEach((x) => x.classList.toggle('on', x === b));
       await setSetting('theme', b.dataset.t);
       applySettings();
+      sfx('tap');
     });
   });
 
@@ -2437,6 +2465,21 @@ async function openSettings(section) {
   root.querySelector('#set-replay').addEventListener('click', () => {
     closeModal();
     obShow();
+  });
+
+  // v0.15 — sound & music
+  root.querySelector('#set-sfx').addEventListener('change', async (e) => {
+    state.settings.soundFx = e.target.checked ? '1' : '0';
+    soundState.fxOn = e.target.checked;
+    await setSetting('soundFx', state.settings.soundFx);
+    if (e.target.checked) sfx('toggleOn');
+  });
+  root.querySelector('#set-music').addEventListener('change', async (e) => {
+    state.settings.music = e.target.checked ? '1' : '0';
+    soundState.musicOn = e.target.checked;
+    await setSetting('music', state.settings.music);
+    if (e.target.checked) startMusic();
+    else stopMusic();
   });
 
   root.querySelector('#set-trashdays').addEventListener('change', async (e) => {
@@ -2538,6 +2581,8 @@ async function openSettings(section) {
       let keyTimer = null;
       const persistKey = async () => {
         confOf().apiKey = keyInput.value.trim();
+        // v0.15 — a saved key activates its provider automatically
+        if (confOf().apiKey && !state.settings.ai.active) state.settings.ai.active = pid;
         await saveAi();
         refreshProvChips();
         status.innerHTML = '<span style="color:var(--accent)">Key saved ✓</span>';
@@ -2663,6 +2708,10 @@ async function openSettings(section) {
         confOf().url = urlInput.value.trim();
         confOf().model = modelInput2 ? modelInput2.value.trim() : confOf().model;
         confOf().apiKey = keyInput && !keyInput.disabled ? keyInput.value.trim() : confOf().apiKey;
+        // v0.15 FIX — saving a provider now ACTIVATES it. Before, the key and
+        // model saved fine but `ai.active` stayed empty unless you happened to
+        // click the provider chip, so chat kept saying "AI not set up yet".
+        if (!state.settings.ai.active) state.settings.ai.active = pid;
         await saveAi();
         if (!confOf().model) {
           status.innerHTML = '<span style="color:var(--warn)">Pick a model first (or click a popular one below)</span>';
@@ -2673,6 +2722,7 @@ async function openSettings(section) {
           const reply = await call('ai_test', { baseUrl: confOf().url, apiKey: confOf().apiKey || null, model: confOf().model });
           status.innerHTML = `<span style="color:var(--accent)">${esc(reply)}</span>`;
           refreshProvChips();
+          updateChatStatus();
           toast('AI connected — you can chat now!', { icon: 'sparkle' });
         } catch (err) {
           status.innerHTML = `<span style="color:var(--danger)">${esc(err.message)}</span>`;
@@ -2785,6 +2835,11 @@ async function loadSettings() {
   state.settings.trashDays = (await call('get_setting', { key: 'trashDays' })) || '0';
   // v0.11 — accent color override ('' = theme default)
   state.settings.accent = (await call('get_setting', { key: 'accent' })) || '';
+  // v0.15 — sound effects & ambient music
+  state.settings.soundFx = (await call('get_setting', { key: 'soundFx' })) ?? '1';
+  state.settings.music = (await call('get_setting', { key: 'music' })) ?? '1';
+  soundState.fxOn = state.settings.soundFx === '1';
+  soundState.musicOn = state.settings.music === '1';
   // v0.10 — the user's name from onboarding, used for greetings
   state.userName = ((await call('get_setting', { key: 'userName' })) || '').trim();
   // AI providers (JSON blob; API keys stay in the local DB, never in backups)
@@ -2937,6 +2992,7 @@ function wireReminderListener() {
     .then(({ listen }) => {
       listen('reminder', (e) => {
         const { id, title } = e.payload || {};
+        sfx('bell');
         toast(`${title || 'Task reminder'}`, {
           icon: 'bell',
           ms: 10000,
@@ -3144,6 +3200,7 @@ function wireEditor() {
     const title = input.value.trim();
     if (!title) return;
     await call('create_task', { title });
+    sfx('pop');
     input.value = '';
     // if the new task can't be seen under the current filter, show everything
     const visible = state.tasks.some(
@@ -3999,7 +4056,8 @@ async function boardSetStatus(tid, status) {
     renderBoard();
     refreshStatsOnly();
     renderSidebar();
-    if (status === 2) toast('Card done — nice!', { icon: 'checkSq' });
+    if (status === 2) { toast('Card done — nice!', { icon: 'checkSq' }); sfx('success'); }
+    else sfx('tap');
   } catch (err) {
     toast('Could not move card: ' + err.message);
   }
@@ -4034,6 +4092,7 @@ async function boardDrop(status, insertBeforeTid, tid) {
       dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
       subtasks: t.subtasks || [], status, position: t.position ?? null
     });
+    sfx(oldStatus !== status && status === 2 ? 'success' : 'tap');
     await Promise.all(
       ids.map((id) => {
         const task = state.tasks.find((x) => x.id === id);
@@ -4397,6 +4456,7 @@ async function toggleRecording() {
   if (btn.classList.contains('recording')) {
     // stop is fire-and-forget on the Rust side — the `saved` event refreshes
     // the UI when the WAV is finalised. Nothing blocks, nothing freezes.
+    sfx('shutterStop');
     try {
       const info = await call('recorder_stop');
       updateRecUi(false, 0);
@@ -4416,6 +4476,7 @@ async function toggleRecording() {
   try {
     const device = $('#rec-device').value || null;
     await call('recorder_start', { device });
+    sfx('shutter');
     // optimistic UI — the `started`/`error` event confirms or corrects it
     updateRecUi(true, 0);
     if (!state.recPoll) state.recPoll = setInterval(pollRecStatus, 500);
@@ -4630,14 +4691,14 @@ function userAvatarHtml() {
   return `<span class="cv-user-ava">${esc(letter)}</span>`;
 }
 
-function chatBubbleHtml(m) {
+function chatBubbleHtml(m, isLast = false) {
   const isUser = m.role === 'user';
   const body = isUser
     ? esc(m.content).replace(/\n/g, '<br/>')
     : renderMarkdown(m.content);
   const time = fmtChatTime(m.createdAt);
   return `
-    <div class="cv-msg${isUser ? ' user' : ' bot'}" data-mid="${esc(m.id || '')}">
+    <div class="cv-msg${isUser ? ' user' : ' bot'}${isLast ? ' new' : ''}" data-mid="${esc(m.id || '')}">
       <div class="cv-avatar">${isUser ? userAvatarHtml() : frogSvg}</div>
       <div class="cv-msg-main">
         <div class="cv-bubble"><div class="cv-content">${body}</div></div>
@@ -4697,7 +4758,7 @@ function renderChatMessages() {
     });
     return;
   }
-  box.innerHTML = state.chatMsgs.map(chatBubbleHtml).join('');
+  box.innerHTML = state.chatMsgs.map((m, i) => chatBubbleHtml(m, i === state.chatMsgs.length - 1)).join('');
   wireChatMsgActions();
   wireChatCodeCopy(box);
   chatScrollStick(box, true);
@@ -4731,7 +4792,7 @@ async function refreshChats() {
 function renderChatSelect() {
   const sel = $('#cv-chat-select');
   sel.innerHTML = state.chats.length
-    ? state.chats.map((c) => `<option value="${esc(c.id)}"${c.id === state.chatId ? ' selected' : ''}>${esc(c.title)}</option>`).join('')
+    ? `<optgroup label="Chat history">${state.chats.map((c) => `<option value="${esc(c.id)}"${c.id === state.chatId ? ' selected' : ''}>${esc(c.title)}</option>`).join('')}</optgroup>`
     : '<option value="">No chats yet</option>';
 }
 
@@ -4786,6 +4847,7 @@ async function sendChat() {
 
   input.value = '';
   autoGrowChatInput();
+  sfx('send');
 
   const userMsg = await call('add_chat_message', { chatId: state.chatId, role: 'user', content: text });
   state.chatMsgs.push(userMsg);
@@ -4875,6 +4937,7 @@ function handleAiEvent(p) {
   if (!state.aiStreaming || p.id !== state.aiReqId) return;
   if (p.error) {
     state.aiStreaming = false;
+    sfx('error');
     const el = $('#cv-streaming');
     if (el) el.remove();
     if (state.chatMsgs[state.chatMsgs.length - 1]?.role === 'assistant') state.chatMsgs.pop();
@@ -4897,6 +4960,7 @@ function handleAiEvent(p) {
 }
 
 async function finishChatStream() {
+  if (!state.aiStreaming) return; // v0.15 — stop double-finish (Stop click + done event)
   state.aiStreaming = false;
   const text = state.aiStreamText.trim();
   const el = $('#cv-streaming');
@@ -4905,6 +4969,7 @@ async function finishChatStream() {
   if (text) {
     const m = await call('add_chat_message', { chatId: state.chatId, role: 'assistant', content: text });
     state.chatMsgs.push(m);
+    sfx('reply');
   } else {
     toast('The model replied with nothing', { icon: 'sparkle' });
   }
@@ -5359,6 +5424,7 @@ async function obDismiss({ celebrate = false } = {}) {
   const ob = $('#onboarding');
   ob.classList.add('bye');
   if (celebrate) {
+    sfx('success');
     confettiBurst(window.innerWidth / 2, window.innerHeight / 2.4, 36);
     setTimeout(() => confettiBurst(window.innerWidth / 2.6, window.innerHeight / 2.1, 22), 160);
     setTimeout(() => confettiBurst(window.innerWidth / 1.6, window.innerHeight / 2.1, 22), 300);
@@ -5452,6 +5518,7 @@ async function ensureWelcome() {
 }
 
 async function boot() {
+  const t0 = performance.now();
   setIcons();
   wireTitlebar();
   wireEditor();
@@ -5459,6 +5526,7 @@ async function boot() {
   wireReminderListener();
   wireChatView();
   wireOnboarding();
+  unlockAudio(); // audio wakes on the first tap — v0.15
 
   // settings first so the theme applies before first paint of content
   await loadSettings();
@@ -5487,6 +5555,19 @@ async function boot() {
   if (state.notes.length && state.view.type === 'all') {
     selectNote(state.notes[0].id);
   }
+
+  // v0.15 — launch moment: let the splash breathe, then lift the curtain
+  const SPLASH_MIN = 1400;
+  const wait = Math.max(0, SPLASH_MIN - (performance.now() - t0));
+  setTimeout(() => {
+    const sp = document.getElementById('splash');
+    if (sp) {
+      sp.classList.add('bye');
+      setTimeout(() => sp.remove(), 700);
+    }
+    sfx('launch');
+    if (soundState.musicOn) startMusic();
+  }, wait);
 
   // v0.10 — first run: the dreamy cloud get-started takes the stage
   maybeOnboarding();

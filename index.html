@@ -8,10 +8,39 @@
   <link rel="stylesheet" href="./src/styles.css" />
 </head>
 <body>
-  <!-- ======= onboarding — v0.12: soft pastel sky + get-started steps ======= -->
+  <!-- ======= launch splash — v0.15: the curtain before the app ======= -->
+  <div id="splash">
+    <div class="sp-aurora"></div>
+    <div class="sp-stars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="sp-core">
+      <div class="sp-orb">
+        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="21" cy="21" r="9.5" fill="#9fe09b"/>
+          <circle cx="43" cy="21" r="9.5" fill="#9fe09b"/>
+          <rect x="7" y="19" width="50" height="33" rx="16" fill="#9fe09b"/>
+          <rect x="7" y="19" width="50" height="33" rx="16" fill="none" stroke="#7cc487" stroke-width="1.4"/>
+          <circle cx="22" cy="21" r="2.5" fill="#20263a"/>
+          <circle cx="42" cy="21" r="2.5" fill="#20263a"/>
+          <path d="M26 41 q6 5.5 12 0" stroke="#4c8a5a" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="sp-name">Nook</div>
+      <div class="sp-bar"><i></i></div>
+      <div class="sp-tag">your cozy corner is waking up</div>
+    </div>
+  </div>
+
+  <!-- ======= onboarding — v0.15: rich pastel sunrise + get-started steps ======= -->
   <div id="onboarding" class="hidden" aria-modal="true">
     <div class="ob-sky">
       <div class="ob-orb"></div>
+      <div class="ob-rays" aria-hidden="true"></div>
+      <div class="ob-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="ob-hills" aria-hidden="true">
+        <svg class="hill h3" viewBox="0 0 1440 220" preserveAspectRatio="none"><path d="M0,150 C240,80 420,120 720,95 C1020,70 1220,120 1440,88 L1440,220 L0,220 Z" fill="rgba(164,214,178,.5)"></path></svg>
+        <svg class="hill h2" viewBox="0 0 1440 220" preserveAspectRatio="none"><path d="M0,180 C260,110 480,160 760,130 C1040,100 1240,155 1440,120 L1440,220 L0,220 Z" fill="rgba(136,196,160,.62)"></path></svg>
+        <svg class="hill h1" viewBox="0 0 1440 220" preserveAspectRatio="none"><path d="M0,205 C280,150 520,190 800,165 C1080,140 1280,185 1440,155 L1440,220 L0,220 Z" fill="rgba(112,176,138,.72)"></path></svg>
+      </div>
       <div class="ob-clouds">
         <div class="ob-cloud c1"></div>
         <div class="ob-cloud c2"></div>
@@ -85,7 +114,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.14</span>
+        <span class="tb-ver">v0.15</span>
       </div>
 
       <div class="tb-search">
@@ -312,16 +341,20 @@
             </div>
             <span class="tb-spacer"></span>
             <span class="cv-prov hidden" id="cv-prov"></span>
-            <select id="cv-chat-select" title="Chat history"></select>
-            <button class="btn ghost small" id="cv-new" title="Start a fresh chat"><span class="b-ico" data-ico="plus"></span>New chat</button>
+            <label class="cv-hist" title="Chat history">
+              <span class="cv-hist-ico" data-ico="clock"></span>
+              <select id="cv-chat-select"></select>
+              <span class="cv-hist-chev" data-ico="chevronD"></span>
+            </label>
+            <button class="btn ghost small" id="cv-new" title="Start a fresh chat"><span class="b-ico" data-ico="plus"></span>New</button>
             <button class="icon-ghost" id="cv-del" title="Delete this chat"><span data-ico="trash"></span></button>
           </div>
           <div class="cv-scroll" id="cv-messages"></div>
-          <form id="cv-composer">
+          <form id="cv-composer" class="cv-composer">
             <button type="button" id="cv-use-note" title="Attach the current note as context for the next message"><span class="b-ico" data-ico="clip"></span>Note</button>
             <textarea id="cv-input" rows="1" placeholder="Message Nook AI…" spellcheck="false"></textarea>
             <button class="cv-send" type="submit" id="cv-send" title="Send (Enter)"></button>
-            <button class="btn danger hidden" type="button" id="cv-stop">Stop</button>
+            <button class="cv-stop hidden" type="button" id="cv-stop" title="Stop generating"><span data-ico="stop"></span></button>
           </form>
           <div class="cv-foot" id="cv-status">Choose an AI provider & model in Settings — keys stay on this PC.</div>
         </div>
