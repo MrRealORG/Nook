@@ -3123,6 +3123,12 @@ function wireEditor() {
   wireDragDrop();
   wireBoard();
 
+  // v0.13 — native file drops reach the webview now (dragDropEnabled is off so in-page drag
+  // works). Block the default "navigate to the dropped file" behaviour everywhere; the note
+  // editor has its own drop handlers that run first and accept image files.
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
+
   // markdown toolbar
   const mdBar = $('#md-bar');
   mdBar.addEventListener('mousedown', (e) => e.preventDefault()); // keep text selection
@@ -3930,14 +3936,17 @@ const BOARD_COLS = [
   { status: 2, label: 'Done', dot: 'done' }
 ];
 
-let boardDragId = null;
+// v0.13 — drag is pointer-based now (setPointerCapture + floating ghost). The old HTML5
+// dragstart/drop system silently died inside Tauri's WebView2 on Windows, so cards could not
+// move at all. Pointer events work in every webview, mouse and touch, and feel smoother.
+let bd = null; // active board drag state
 
 function boardCardHtml(t) {
   const subs = t.subtasks || [];
   const subDone = subs.filter((x) => x.done).length;
   const badges = taskBadges(t);
   return `
-    <div class="bv-card${t.done ? ' is-done' : ''}" draggable="true" data-tid="${esc(t.id)}" style="--i:${Math.min(12, t.position % 13)}">
+    <div class="bv-card${t.done ? ' is-done' : ''}" data-tid="${esc(t.id)}" style="--i:${Math.min(12, t.position % 13)}">
       <div class="bv-prio p${t.priority || 0}"></div>
       <div class="bv-card-title">${esc(t.title)}</div>
       ${badges ? `<div class="bv-card-badges">${badges}</div>` : ''}
@@ -3961,22 +3970,7 @@ function renderBoard() {
       : `<div class="bv-empty">Drop cards here</div>`;
     cardsEl.querySelectorAll('.bv-card').forEach((el) => {
       const tid = el.dataset.tid;
-      el.addEventListener('dragstart', (e) => {
-        boardDragId = tid;
-        e.dataTransfer.setData('text/plain', tid);
-        e.dataTransfer.effectAllowed = 'move';
-        el.classList.add('dragging');
-      });
-      el.addEventListener('dragend', () => {
-        el.classList.remove('dragging');
-        boardDragId = null;
-        document.querySelectorAll('.bv-col').forEach((c) => c.classList.remove('drag-over'));
-      });
-      el.addEventListener('click', (e) => {
-        if (e.button !== 0) return;
-        state.expandedTask = tid;
-        setView({ type: 'tasks' });
-      });
+      el.addEventListener('pointerdown', boardCardPointerDown);
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -4011,9 +4005,7 @@ async function boardSetStatus(tid, status) {
   }
 }
 
-async function boardDrop(status, insertBeforeTid) {
-  const tid = boardDragId;
-  boardDragId = null;
+async function boardDrop(status, insertBeforeTid, tid) {
   if (!tid) return;
   const t = state.tasks.find((x) => x.id === tid);
   if (!t) return;
@@ -4065,39 +4057,115 @@ async function boardDrop(status, insertBeforeTid) {
   }
 }
 
+// ---- v0.13 pointer drag engine (board) ----
+
+function boardCardPointerDown(e) {
+  if (e.button !== 0) return;
+  if (e.target.closest('button, input, textarea, select, a')) return;
+  const card = e.currentTarget;
+  const r = card.getBoundingClientRect();
+  bd = {
+    id: e.pointerId,
+    card,
+    tid: card.dataset.tid,
+    started: false,
+    sx: e.clientX,
+    sy: e.clientY,
+    ox: e.clientX - r.left,
+    oy: e.clientY - r.top,
+    w: r.width,
+    ghost: null,
+    beforeTid: null
+  };
+  try { card.setPointerCapture(e.pointerId); } catch {}
+  e.preventDefault(); // no text selection while grabbing a card
+}
+
+function boardDragGhostStart() {
+  bd.started = true;
+  bd.card.classList.add('dragging');
+  const g = bd.card.cloneNode(true);
+  g.classList.remove('dragging', 'drop-before', 'is-done');
+  g.classList.add('bv-ghost');
+  g.style.width = bd.w + 'px';
+  document.body.appendChild(g);
+  bd.ghost = g;
+  document.body.classList.add('bv-dragging');
+}
+
+function boardDragCleanup() {
+  if (bd && bd.ghost) bd.ghost.remove();
+  if (bd && bd.started) bd.card.classList.remove('dragging');
+  bd = null;
+  document.body.classList.remove('bv-dragging');
+  document.querySelectorAll('.bv-col.drag-over').forEach((c) => c.classList.remove('drag-over'));
+  document.querySelectorAll('.bv-card.drop-before').forEach((c) => c.classList.remove('drop-before'));
+}
+
+function boardPointerMove(e) {
+  if (!bd || e.pointerId !== bd.id) return;
+  if (!bd.started) {
+    if (Math.hypot(e.clientX - bd.sx, e.clientY - bd.sy) < 6) return;
+    boardDragGhostStart();
+  }
+  bd.ghost.style.left = e.clientX - bd.ox + 'px';
+  bd.ghost.style.top = e.clientY - bd.oy + 'px';
+
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  const cardsEl = hit ? hit.closest('.bv-cards') : null;
+  bd.beforeTid = null;
+  document.querySelectorAll('.bv-col.drag-over').forEach((c) => {
+    if (!cardsEl || c !== cardsEl.closest('.bv-col')) c.classList.remove('drag-over');
+  });
+  document.querySelectorAll('.bv-card.drop-before').forEach((c) => c.classList.remove('drop-before'));
+  if (cardsEl) {
+    cardsEl.closest('.bv-col').classList.add('drag-over');
+    const cr = cardsEl.getBoundingClientRect();
+    if (e.clientY < cr.top + 30) cardsEl.scrollTop -= 8;        // gentle autoscroll
+    else if (e.clientY > cr.bottom - 30) cardsEl.scrollTop += 8;
+    const cards = [...cardsEl.querySelectorAll('.bv-card:not(.dragging)')];
+    const after = cards.find((c) => {
+      const r = c.getBoundingClientRect();
+      return e.clientY < r.top + r.height / 2;
+    });
+    if (after) {
+      after.classList.add('drop-before');
+      bd.beforeTid = after.dataset.tid;
+    }
+  }
+}
+
+function boardPointerUp(e) {
+  if (!bd || e.pointerId !== bd.id) return;
+  const { started, tid, beforeTid } = bd;
+  let status = null;
+  if (started) {
+    const hit = document.elementFromPoint(e.clientX, e.clientY);
+    const colEl = hit ? hit.closest('.bv-col') : null;
+    status = colEl ? Number(colEl.dataset.status) : null;
+  }
+  boardDragCleanup();
+  if (!started) {
+    // plain click — open the card in Tasks (click handler replaced by pointerup)
+    state.expandedTask = tid;
+    setView({ type: 'tasks' });
+    return;
+  }
+  if (status !== null) boardDrop(status, beforeTid, tid);
+}
+
+function boardPointerCancel(e) {
+  if (!bd || e.pointerId !== bd.id) return;
+  boardDragCleanup();
+}
+
 function wireBoard() {
+  document.addEventListener('pointermove', boardPointerMove);
+  document.addEventListener('pointerup', boardPointerUp);
+  document.addEventListener('pointercancel', boardPointerCancel);
   for (const col of BOARD_COLS) {
     const cardsEl = $(`#bvc-cards-${col.status}`);
     if (!cardsEl) continue;
-    cardsEl.addEventListener('dragover', (e) => {
-      if (!boardDragId) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      const colEl = cardsEl.closest('.bv-col');
-      colEl.classList.add('drag-over');
-      // insertion indicator
-      const cards = [...cardsEl.querySelectorAll('.bv-card:not(.dragging)')];
-      const after = cards.find((c) => {
-        const r = c.getBoundingClientRect();
-        return e.clientY < r.top + r.height / 2;
-      });
-      cards.forEach((c) => c.classList.remove('drop-before'));
-      if (after) after.classList.add('drop-before');
-      cardsEl.dataset.insertBefore = after ? after.dataset.tid : '';
-    });
-    cardsEl.addEventListener('dragleave', (e) => {
-      const colEl = cardsEl.closest('.bv-col');
-      if (!colEl.contains(e.relatedTarget)) colEl.classList.remove('drag-over');
-    });
-    cardsEl.addEventListener('drop', (e) => {
-      e.preventDefault();
-      const colEl = cardsEl.closest('.bv-col');
-      colEl.classList.remove('drag-over');
-      const before = cardsEl.dataset.insertBefore || null;
-      delete cardsEl.dataset.insertBefore;
-      document.querySelectorAll('.bv-card.drop-before').forEach((c) => c.classList.remove('drop-before'));
-      boardDrop(col.status, before);
-    });
 
     const form = document.querySelector(`.bv-new[data-status="${col.status}"]`);
     const addBtn = document.querySelector(`.bv-col[data-status="${col.status}"] .bv-add`);

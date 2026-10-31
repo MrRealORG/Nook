@@ -454,6 +454,7 @@ body.light .stars { display: none; }
   padding: 8px 10px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* v0.13 — greeting gets its own line, no more 3-line squeeze */
   gap: 8px;
 }
 .sb-bottom .sb-row { margin-bottom: 0; }
@@ -3286,14 +3287,19 @@ body.ob-lock { overflow: hidden; }
   margin-top: 4px;
 }
 
-/* sidebar greeting (v0.10) */
+/* sidebar greeting (v0.10, reworked v0.13 — one tidy line above the buttons) */
 #sb-greet {
-  padding: 10px 12px 12px;
-  border-bottom: 1px solid var(--border-soft);
-  margin-bottom: 8px;
+  flex: 1 1 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 2px 0;
+  border-bottom: none;
+  margin-bottom: 0;
 }
-.greet-hi { font-size: 10.5px; color: var(--text-faint); letter-spacing: .2px; }
-.greet-name { font-size: 14.5px; font-weight: 800; color: var(--text); display: flex; align-items: center; gap: 5px; }
+.greet-hi { font-size: 10.5px; color: var(--text-faint); letter-spacing: .2px; white-space: nowrap; }
+.greet-name { font-size: 14px; font-weight: 800; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
 .greet-wave { display: inline-block; animation: obWave 2.2s ease-in-out infinite; transform-origin: 70% 70%; }
 @keyframes obWave {
   0%, 60%, 100% { transform: rotate(0deg); }
@@ -3363,3 +3369,79 @@ body.light .acc-dot { box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .18) inset; }
 
 /* zen pill + focus rings pick up the glow too */
 .ed-btn:focus-visible, button:focus-visible { outline-color: var(--accent-glow); }
+
+/* ============================================================
+   v0.13 — BOARD POINTER DRAG (replaces broken HTML5 drag in the
+   Tauri WebView2) + general polish
+   ============================================================ */
+
+.bv-card {
+  touch-action: none;               /* pointer drag works with touch too */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* the card follows the cursor as a tilted floating ghost */
+.bv-ghost {
+  position: fixed;
+  z-index: 900;
+  margin: 0 !important;
+  pointer-events: none;
+  animation: none !important;
+  transform: rotate(2.2deg) scale(1.04);
+  cursor: grabbing;
+  opacity: 0.97;
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.38), 0 0 0 1px var(--accent-soft),
+    0 0 22px var(--accent-glow);
+}
+.bv-card.dragging { opacity: 0.28; transform: scale(0.97); }
+body.bv-dragging { -webkit-user-select: none; user-select: none; }
+body.bv-dragging, body.bv-dragging * { cursor: grabbing !important; }
+
+/* insertion indicator — glowing accent line at the drop point */
+.bv-card.drop-before { border-color: var(--accent); }
+.bv-card.drop-before::after {
+  content: '';
+  position: absolute;
+  left: 7px; right: 7px; top: -1px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+  animation: bvLineIn 0.14s ease both;
+}
+@keyframes bvLineIn {
+  from { opacity: 0; transform: scaleX(0.55); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+
+/* target column lights up while hovering */
+.bv-col.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 10px 30px var(--accent-glow);
+}
+.bv-col.drag-over .bv-empty {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.bv-col.drag-over .bv-col-title { color: var(--text); }
+
+/* board + / stop glyphs are SVG now */
+.bv-add { display: inline-flex; align-items: center; justify-content: center; padding: 2px 6px; }
+.bv-add svg { width: 14px; height: 14px; display: block; }
+#rec-pill-stop { display: inline-flex; align-items: center; justify-content: center; }
+#rec-pill-stop svg { width: 8px; height: 8px; display: block; }
+
+/* status pill above the chat composer — softer, with a real border */
+.cv-pill {
+  border: 1px solid transparent;
+  padding: 5px 13px;
+  border-radius: 12px;
+  font-size: 11.5px;
+}
+.cv-pill.warn {
+  border-color: color-mix(in srgb, var(--warn) 38%, transparent);
+  box-shadow: 0 2px 12px var(--warn-soft);
+}

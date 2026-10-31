@@ -85,7 +85,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.12</span>
+        <span class="tb-ver">v0.13</span>
       </div>
 
       <div class="tb-search">
@@ -266,17 +266,17 @@
           </div>
           <div class="bv-columns" id="bv-columns">
             <div class="bv-col" data-status="0">
-              <div class="bv-col-head"><span class="bv-dot todo"></span><span class="bv-col-title">To do</span><span class="bv-count" id="bvc-count-0"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card">+</button></div>
+              <div class="bv-col-head"><span class="bv-dot todo"></span><span class="bv-col-title">To do</span><span class="bv-count" id="bvc-count-0"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card" aria-label="Add card"><span data-ico="plus"></span></button></div>
               <form class="bv-new hidden" data-status="0"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
               <div class="bv-cards" id="bvc-cards-0"></div>
             </div>
             <div class="bv-col" data-status="1">
-              <div class="bv-col-head"><span class="bv-dot doing"></span><span class="bv-col-title">In progress</span><span class="bv-count" id="bvc-count-1"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card">+</button></div>
+              <div class="bv-col-head"><span class="bv-dot doing"></span><span class="bv-col-title">In progress</span><span class="bv-count" id="bvc-count-1"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card" aria-label="Add card"><span data-ico="plus"></span></button></div>
               <form class="bv-new hidden" data-status="1"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
               <div class="bv-cards" id="bvc-cards-1"></div>
             </div>
             <div class="bv-col" data-status="2">
-              <div class="bv-col-head"><span class="bv-dot done"></span><span class="bv-col-title">Done</span><span class="bv-count" id="bvc-count-2"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card">+</button></div>
+              <div class="bv-col-head"><span class="bv-dot done"></span><span class="bv-col-title">Done</span><span class="bv-count" id="bvc-count-2"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card" aria-label="Add card"><span data-ico="plus"></span></button></div>
               <form class="bv-new hidden" data-status="2"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
               <div class="bv-cards" id="bvc-cards-2"></div>
             </div>
@@ -331,7 +331,7 @@
     <!-- ======= status bar ======= -->
     <footer id="statusbar">
       <span id="save-state"><span class="dot"></span><span id="save-text">Ready</span></span>
-      <span id="rec-pill" class="hidden"><span class="rp-dot"></span><span id="rec-pill-time">00:00</span><button id="rec-pill-stop" title="Stop recording">■</button></span>
+      <span id="rec-pill" class="hidden"><span class="rp-dot"></span><span id="rec-pill-time">00:00</span><button id="rec-pill-stop" title="Stop recording" aria-label="Stop recording"><span data-ico="stop"></span></button></span>
       <span class="tb-spacer"></span>
       <span id="stats-right"></span>
     </footer>
