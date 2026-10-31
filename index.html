@@ -114,7 +114,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.15</span>
+        <span class="tb-ver">v0.16</span>
       </div>
 
       <div class="tb-search">
@@ -162,6 +162,13 @@
           <nav id="sb-folders"></nav>
         </div>
         <div class="sb-bottom">
+          <button class="sb-profile" id="sb-profile" title="Your profile">
+            <span class="sb-avatar" id="sb-avatar"></span>
+            <span class="sb-profile-meta">
+              <span class="sb-profile-name" id="sb-profile-name">You</span>
+              <span class="sb-profile-sub">Personal space</span>
+            </span>
+          </button>
           <button class="sb-row" id="btn-guide">
             <span class="sb-ico" data-ico="book"></span>
             <span class="sb-name">Guide</span>
@@ -291,23 +298,32 @@
         <div class="bv-wrap">
           <div class="bv-head">
             <h1>Board</h1>
-            <span class="bv-sub">Drag cards between columns — Notion style</span>
+            <span class="bv-sub" id="bv-stats"></span>
+            <span class="tb-spacer"></span>
+            <div class="bv-filter">
+              <span class="bv-filter-ico" data-ico="search"></span>
+              <input id="bv-filter-input" type="text" placeholder="Filter cards…" spellcheck="false" autocomplete="off" maxlength="80" />
+              <button id="bv-filter-clear" class="hidden" title="Clear filter">&times;</button>
+            </div>
           </div>
           <div class="bv-columns" id="bv-columns">
             <div class="bv-col" data-status="0">
               <div class="bv-col-head"><span class="bv-dot todo"></span><span class="bv-col-title">To do</span><span class="bv-count" id="bvc-count-0"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card" aria-label="Add card"><span data-ico="plus"></span></button></div>
               <form class="bv-new hidden" data-status="0"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
               <div class="bv-cards" id="bvc-cards-0"></div>
+              <button class="bv-foot" data-status="0"><span data-ico="plus"></span>Add a card</button>
             </div>
             <div class="bv-col" data-status="1">
               <div class="bv-col-head"><span class="bv-dot doing"></span><span class="bv-col-title">In progress</span><span class="bv-count" id="bvc-count-1"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card" aria-label="Add card"><span data-ico="plus"></span></button></div>
               <form class="bv-new hidden" data-status="1"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
               <div class="bv-cards" id="bvc-cards-1"></div>
+              <button class="bv-foot" data-status="1"><span data-ico="plus"></span>Add a card</button>
             </div>
             <div class="bv-col" data-status="2">
               <div class="bv-col-head"><span class="bv-dot done"></span><span class="bv-col-title">Done</span><span class="bv-count" id="bvc-count-2"></span><span class="tb-spacer"></span><button class="bv-add" title="Add card" aria-label="Add card"><span data-ico="plus"></span></button></div>
               <form class="bv-new hidden" data-status="2"><input type="text" placeholder="Card name… Enter to add" maxlength="200" spellcheck="false" /><button type="submit" class="btn primary small">Add</button></form>
               <div class="bv-cards" id="bvc-cards-2"></div>
+              <button class="bv-foot" data-status="2"><span data-ico="plus"></span>Add a card</button>
             </div>
           </div>
         </div>

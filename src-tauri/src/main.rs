@@ -118,6 +118,8 @@ struct Task {
     remind_at: Option<i64>, // reminder (UTC ms)
     repeat: String,         // none | daily | weekly | monthly
     subtasks: Vec<Subtask>,
+    #[serde(default)]       // old backups have no labels — import them anyway
+    labels: Vec<String>,    // v0.16 — board label color keys ("red","green",...)
     reminded: bool,
     position: i64,
     created_at: i64,
@@ -302,6 +304,7 @@ fn migrate(conn: &Connection) {
     ensure_column(conn, "tasks", "remind_at", "INTEGER");
     ensure_column(conn, "tasks", "repeat", "TEXT NOT NULL DEFAULT 'none'");
     ensure_column(conn, "tasks", "subtasks", "TEXT NOT NULL DEFAULT '[]'");
+    ensure_column(conn, "tasks", "labels", "TEXT NOT NULL DEFAULT '[]'");
     ensure_column(conn, "tasks", "reminded", "INTEGER NOT NULL DEFAULT 0");
     ensure_column(conn, "tasks", "completed_at", "INTEGER");
 }
@@ -775,11 +778,13 @@ async fn empty_trash(state: State<'_, Db>) -> CmdResult<()> {
 
 // ----------------------------------------------------------------- tasks ----
 
-const TASK_COLS: &str = "id, title, notes, done, priority, due_at, remind_at, repeat, subtasks, reminded, position, created_at, completed_at, status";
+const TASK_COLS: &str = "id, title, notes, done, priority, due_at, remind_at, repeat, subtasks, labels, reminded, position, created_at, completed_at, status";
 
 fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
     let subtasks_raw: String = r.get(8)?;
     let subtasks: Vec<Subtask> = serde_json::from_str(&subtasks_raw).unwrap_or_default();
+    let labels_raw: String = r.get(9)?;
+    let labels: Vec<String> = serde_json::from_str(&labels_raw).unwrap_or_default();
     Ok(Task {
         id: r.get(0)?,
         title: r.get(1)?,
@@ -790,11 +795,12 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
         remind_at: r.get(6)?,
         repeat: r.get(7)?,
         subtasks,
-        reminded: r.get::<_, i64>(9)? != 0,
-        position: r.get(10)?,
-        created_at: r.get(11)?,
-        completed_at: r.get(12)?,
-        status: r.get::<_, i64>(13).unwrap_or(0),
+        labels,
+        reminded: r.get::<_, i64>(10)? != 0,
+        position: r.get(11)?,
+        created_at: r.get(12)?,
+        completed_at: r.get(13)?,
+        status: r.get::<_, i64>(14).unwrap_or(0),
     })
 }
 
@@ -858,6 +864,7 @@ async fn create_task(
         remind_at,
         repeat: "none".into(),
         subtasks: vec![],
+        labels: vec![],
         reminded: false,
         position: pos,
         created_at: now_ms(),
@@ -866,7 +873,7 @@ async fn create_task(
     };
     conn.execute(
         &format!(
-            "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'none', '[]', 0, ?8, ?9, ?10, ?11)"
+            "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'none', '[]', '[]', 0, ?8, ?9, ?10, ?11)"
         ),
         params![
             t.id, t.title, t.notes, t.done as i64, t.priority, t.due_at, t.remind_at,
@@ -888,6 +895,7 @@ async fn update_task(
     remind_at: Option<i64>,
     repeat: String,
     subtasks: Vec<Subtask>,
+    labels: Option<Vec<String>>,
     status: Option<i64>,
     position: Option<i64>,
 ) -> CmdResult<()> {
@@ -900,6 +908,7 @@ async fn update_task(
         _ => "none".to_string(),
     };
     let subs = serde_json::to_string(&subtasks).unwrap_or_else(|_| "[]".into());
+    let labels_json = serde_json::to_string(&labels.unwrap_or_default()).unwrap_or_else(|_| "[]".into());
     let conn = db(&state);
     // a newly-set future reminder must fire again
     let rearm = match remind_at {
@@ -909,7 +918,8 @@ async fn update_task(
     conn.execute(
         &format!(
             "UPDATE tasks SET title = ?2, notes = ?3, priority = ?4, due_at = ?5,
-             remind_at = ?6, repeat = ?7, subtasks = ?8, position = COALESCE(?10, position),
+             remind_at = ?6, repeat = ?7, subtasks = ?8, labels = COALESCE(?11, labels),
+             position = COALESCE(?10, position),
              reminded = CASE WHEN ?9 = 0 THEN 0 ELSE reminded END
              WHERE id = ?1"
         ),
@@ -923,7 +933,8 @@ async fn update_task(
             repeat,
             subs,
             rearm,
-            position
+            position,
+            labels_json
         ],
     )
     .map_err(es)?;
@@ -1520,11 +1531,12 @@ async fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option
         }
         for t in &data.tasks {
             let subs = serde_json::to_string(&t.subtasks).unwrap_or_else(|_| "[]".into());
+            let labels = serde_json::to_string(&t.labels).unwrap_or_else(|_| "[]".into());
             let _ = tx.execute(
             &format!(
-                "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+                "INSERT INTO tasks({TASK_COLS}) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
             ),
-            params![t.id, t.title, t.notes, t.done as i64, t.priority, t.due_at, t.remind_at, t.repeat, subs, t.reminded as i64, t.position, t.created_at, t.completed_at, t.status],
+            params![t.id, t.title, t.notes, t.done as i64, t.priority, t.due_at, t.remind_at, t.repeat, subs, labels, t.reminded as i64, t.position, t.created_at, t.completed_at, t.status],
         );
         }
         for img in &data.images {

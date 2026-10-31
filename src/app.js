@@ -142,6 +142,9 @@ const state = {
   preview: false,
   query: '',
   userName: '',         // v0.10 — set during onboarding, used for greetings
+  userPfp: null,        // v0.16 — profile photo dataURL (localStorage)
+  userPfpKey: '',       // v0.16 — which preset gradient, or 'custom'
+  boardFilter: '',      // v0.16 — quick text filter on the board
   settings: {
     theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal',
     closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy',
@@ -1071,6 +1074,10 @@ const TASK_SORTS = {
 
 function taskBadges(t) {
   const b = [];
+  for (const k of t.labels || []) {
+    const L = BOARD_LABELS.find((x) => x.key === k);
+    if (L) b.push(`<span class="badge b-lab" style="--lab:${L.c}">${L.name}</span>`);
+  }
   if (t.priority > 0) {
     b.push(`<span class="badge b-prio p${t.priority}">${PRIO_LABEL[t.priority]}</span>`);
   }
@@ -1305,6 +1312,7 @@ function wireTaskItem(item) {
         remindAt: task.remindAt ?? null,
         repeat: task.repeat || 'none',
         subtasks: task.subtasks || [],
+        labels: task.labels || [],
         ...patch
       };
       try {
@@ -2194,11 +2202,26 @@ async function openSettings(section) {
         <div class="set-page hidden" data-page="general">
           <div class="set-row">
             <div>
+              <div class="set-label">Profile photo</div>
+              <div class="set-sub">Your avatar — sidebar, chat, everywhere you are. Pick a color or upload a photo.</div>
+              <div class="pfp-actions">
+                <button class="btn ghost small" id="pfp-upload">Upload photo</button>
+                <button class="btn ghost small hidden" id="pfp-remove">Remove photo</button>
+              </div>
+            </div>
+            <div class="pfp-edit">
+              <span class="pfp-preview" id="pfp-preview"></span>
+              <div class="pfp-presets" id="pfp-presets"></div>
+            </div>
+          </div>
+          <div class="set-row">
+            <div>
               <div class="set-label">Your name</div>
               <div class="set-sub">Nook greets you by name — sidebar, AI chat, daily notes.</div>
             </div>
             <input type="text" id="set-username" class="set-text" value="${esc(state.userName)}" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" style="width:180px" />
           </div>
+          <input type="file" id="pfp-file" accept="image/png, image/jpeg, image/webp" class="hidden" />
           <div class="set-row">
             <div>
               <div class="set-label">Sound effects</div>
@@ -2459,8 +2482,28 @@ async function openSettings(section) {
     state.userName = e.target.value.trim();
     await setSetting('userName', state.userName);
     applyGreeting();
+    renderPfpSettings(root); // initial letter may change
     toast(state.userName ? `Nice to meet you, ${state.userName}` : 'Name cleared');
   });
+
+  // v0.16 — profile photo
+  const pfpFile = root.querySelector('#pfp-file');
+  if (pfpFile) {
+    root.querySelector('#pfp-upload').addEventListener('click', () => pfpFile.click());
+    pfpFile.addEventListener('change', (e) => {
+      pfpPick(e.target.files && e.target.files[0]);
+      e.target.value = '';
+    });
+    root.querySelector('#pfp-remove').addEventListener('click', () => {
+      state.userPfp = null;
+      state.userPfpKey = '';
+      pfpSave();
+      renderProfile();
+      renderPfpSettings(root);
+      sfx('tap');
+    });
+    renderPfpSettings(root);
+  }
 
   root.querySelector('#set-replay').addEventListener('click', () => {
     closeModal();
@@ -2842,6 +2885,9 @@ async function loadSettings() {
   soundState.musicOn = state.settings.music === '1';
   // v0.10 — the user's name from onboarding, used for greetings
   state.userName = ((await call('get_setting', { key: 'userName' })) || '').trim();
+  // v0.16 — profile photo lives in localStorage (a 128px dataURL, tiny + instant)
+  state.userPfp = localStorage.getItem('nook.pfp') || null;
+  state.userPfpKey = localStorage.getItem('nook.pfpKey') || '';
   // AI providers (JSON blob; API keys stay in the local DB, never in backups)
   let ai = null;
   try {
@@ -3149,6 +3195,7 @@ function wireEditor() {
   });
   $('#btn-new-folder').addEventListener('click', newFolder);
   $('#btn-settings').addEventListener('click', () => openSettings());
+  $('#sb-profile').addEventListener('click', () => openSettings('general'));
   $('#btn-guide').addEventListener('click', openGuide);
   $('#btn-empty-trash').addEventListener('click', emptyTrash);
   $('#btn-ai').addEventListener('click', openAiMenu);
@@ -3386,7 +3433,7 @@ function showMenu(x, y, items) {
       if (it.header) return `<div class="ctx-label">${esc(it.label || '')}</div>`;
       return `
         <button class="ctx-item${it.danger ? ' danger' : ''}${it.disabled ? ' disabled' : ''}" data-mi="${idx}">
-          <span class="ci-ico">${it.icon ? ico(it.icon) : ''}</span>
+          <span class="ci-ico">${it.dot ? `<span class="ci-dot" style="background:${it.dot}"></span>` : it.icon ? ico(it.icon) : ''}</span>
           <span>${esc(it.label)}</span>
           ${it.key ? `<span class="ci-key">${esc(it.key)}</span>` : ''}
         </button>`;
@@ -3993,27 +4040,54 @@ const BOARD_COLS = [
   { status: 2, label: 'Done', dot: 'done' }
 ];
 
-// v0.13 — drag is pointer-based now (setPointerCapture + floating ghost). The old HTML5
-// dragstart/drop system silently died inside Tauri's WebView2 on Windows, so cards could not
-// move at all. Pointer events work in every webview, mouse and touch, and feel smoother.
+// v0.16 — board labels (right-click a card). Color keys stored on the task in SQLite.
+const BOARD_LABELS = [
+  { key: 'red',    name: 'Red',    c: '#ff6b7d' },
+  { key: 'amber',  name: 'Amber',  c: '#ffb648' },
+  { key: 'green',  name: 'Green',  c: '#4ade80' },
+  { key: 'blue',   name: 'Blue',   c: '#5ea2ff' },
+  { key: 'purple', name: 'Purple', c: '#a78bfa' },
+  { key: 'teal',   name: 'Teal',   c: '#4de3c1' }
+];
+
+// v0.13 — drag is pointer-based (setPointerCapture + floating ghost) because the old HTML5
+// dragstart/drop system silently dies inside Tauri's WebView2 on Windows.
+// v0.16 — drag is also FAST now: one layout pass when the drag starts, then every frame is
+// pure math (cached rect table, no elementFromPoint, no getBoundingClientRect per move),
+// the ghost rides translate3d (compositor-only) and pointermove storms are coalesced to
+// one visual update per animation frame.
 let bd = null; // active board drag state
 
 function boardCardHtml(t) {
   const subs = t.subtasks || [];
   const subDone = subs.filter((x) => x.done).length;
   const badges = taskBadges(t);
+  const labs = (t.labels || []).map((k) => {
+    const L = BOARD_LABELS.find((x) => x.key === k);
+    return L ? `<span class="bv-lab" style="--lab:${L.c}">${esc(L.name)}</span>` : '';
+  }).filter(Boolean).join('');
   return `
     <div class="bv-card${t.done ? ' is-done' : ''}" data-tid="${esc(t.id)}" style="--i:${Math.min(12, t.position % 13)}">
       <div class="bv-prio p${t.priority || 0}"></div>
       <div class="bv-card-title">${esc(t.title)}</div>
+      ${labs ? `<div class="bv-labs">${labs}</div>` : ''}
       ${badges ? `<div class="bv-card-badges">${badges}</div>` : ''}
       ${subs.length ? `<div class="bv-subs">${ico('checkSq')}${subDone}/${subs.length}</div>` : ''}
     </div>`;
 }
 
-function renderBoard() {
+function renderBoard(animate = true) {
   if (state.view.type !== 'board') return;
+  const q = (state.boardFilter || '').toLowerCase();
+  const match = (t) =>
+    !q ||
+    (t.title || '').toLowerCase().includes(q) ||
+    (t.labels || []).some((k) => {
+      const L = BOARD_LABELS.find((x) => x.key === k);
+      return L && L.name.toLowerCase().includes(q);
+    });
   const tasks = state.tasks || [];
+  const counts = [0, 0, 0];
   for (const col of BOARD_COLS) {
     const cardsEl = $(`#bvc-cards-${col.status}`);
     const countEl = $(`#bvc-count-${col.status}`);
@@ -4021,24 +4095,70 @@ function renderBoard() {
     const inCol = tasks
       .filter((t) => (t.status ?? (t.done ? 2 : 0)) === col.status)
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    counts[col.status] = inCol.length;
+    const shown = q ? inCol.filter(match) : inCol;
     countEl.textContent = inCol.length || '';
-    cardsEl.innerHTML = inCol.length
-      ? inCol.map(boardCardHtml).join('')
-      : `<div class="bv-empty">Drop cards here</div>`;
+    cardsEl.innerHTML = shown.length
+      ? shown.map(boardCardHtml).join('')
+      : `<div class="bv-empty">${q ? 'No cards match' : 'Drop cards here'}</div>`;
+    // instant re-render (drop / filter): kill the entrance stagger so nothing replays
+    if (!animate) cardsEl.querySelectorAll('.bv-card').forEach((el) => { el.style.animation = 'none'; });
     cardsEl.querySelectorAll('.bv-card').forEach((el) => {
       const tid = el.dataset.tid;
       el.addEventListener('pointerdown', boardCardPointerDown);
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const t = state.tasks.find((x) => x.id === tid);
+        if (!t) return;
+        const my = t.labels || [];
         showMenu(e.clientX, e.clientY, [
           { label: col.status === 2 ? 'Move to To do' : 'Mark done', icon: 'checkSq', fn: () => boardSetStatus(tid, col.status === 2 ? 0 : 2) },
           { label: 'Open in Tasks', icon: 'chevronD', fn: () => { state.expandedTask = tid; setView({ type: 'tasks' }); } },
+          { sep: true },
+          { header: 'Label' },
+          ...BOARD_LABELS.map((L) => ({
+            label: L.name,
+            dot: L.c,
+            fn: () => boardPatch(tid, { labels: my.includes(L.key) ? my.filter((k) => k !== L.key) : [...my, L.key] })
+          })),
+          ...(my.length ? [{ label: 'Clear labels', icon: 'close', fn: () => boardPatch(tid, { labels: [] }) }] : []),
+          { sep: true },
+          { header: 'Due date' },
+          { label: 'Due today', icon: 'calendar', fn: () => boardPatch(tid, { dueAt: startOfToday() + DAY - 1 }) },
+          { label: 'Due tomorrow', icon: 'calendar', fn: () => boardPatch(tid, { dueAt: startOfToday() + 2 * DAY - 1 }) },
+          ...(t.dueAt != null ? [{ label: 'Clear due date', icon: 'close', fn: () => boardPatch(tid, { dueAt: null }) }] : []),
           { sep: true },
           { label: 'Delete card', icon: 'trash', danger: true, fn: async () => { await call('delete_task', { id: tid }); state.tasks = state.tasks.filter((x) => x.id !== tid); renderBoard(); refreshStatsOnly(); renderSidebar(); } }
         ]);
       });
     });
+  }
+  const total = counts[0] + counts[1] + counts[2];
+  const pct = total ? Math.round((counts[2] / total) * 100) : 0;
+  const statsEl = $('#bv-stats');
+  if (statsEl) statsEl.textContent = total
+    ? `${total} card${total === 1 ? '' : 's'} · ${counts[2]} done · ${pct}% complete`
+    : 'Drag cards between columns — right-click a card for labels';
+}
+
+// small in-place patch from the card context menu (labels, due date)
+async function boardPatch(tid, patch) {
+  const t = state.tasks.find((x) => x.id === tid);
+  if (!t) return;
+  Object.assign(t, patch);
+  try {
+    await call('update_task', {
+      id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
+      dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
+      subtasks: t.subtasks || [], labels: t.labels || [], status: t.status ?? 0, position: t.position ?? null
+    });
+    renderBoard(false);
+    refreshStatsOnly();
+    renderSidebar();
+    sfx('tap');
+  } catch (err) {
+    toast('Could not update card: ' + err.message);
   }
 }
 
@@ -4051,9 +4171,9 @@ async function boardSetStatus(tid, status) {
     await call('update_task', {
       id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
       dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
-      subtasks: t.subtasks || [], status
+      subtasks: t.subtasks || [], labels: t.labels || [], status
     });
-    renderBoard();
+    renderBoard(false);
     refreshStatsOnly();
     renderSidebar();
     if (status === 2) { toast('Card done — nice!', { icon: 'checkSq' }); sfx('success'); }
@@ -4070,14 +4190,14 @@ async function boardDrop(status, insertBeforeTid, tid) {
   const oldStatus = t.status ?? (t.done ? 2 : 0);
 
   // local optimistic reorder within state.tasks
-  const colIds = (st) =>
+  const colTasks = (st) =>
     state.tasks
       .filter((x) => (x.status ?? (x.done ? 2 : 0)) === st)
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      .map((x) => x.id);
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
   if (oldStatus !== status) t.status = status;
-  const ids = colIds(status).filter((id) => id !== tid);
+  const oldPos = new Map(colTasks(status).map((x) => [x.id, x.position]));
+  const ids = colTasks(status).map((x) => x.id).filter((id) => id !== tid);
   const at = insertBeforeTid ? ids.indexOf(insertBeforeTid) : ids.length;
   ids.splice(at === -1 ? ids.length : at, 0, tid);
   ids.forEach((id, i) => {
@@ -4085,24 +4205,26 @@ async function boardDrop(status, insertBeforeTid, tid) {
     if (task) task.position = i + 1;
   });
 
-  renderBoard();
+  renderBoard(false); // instant — no entrance animation replay on drop
   try {
     await call('update_task', {
       id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
       dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
-      subtasks: t.subtasks || [], status, position: t.position ?? null
+      subtasks: t.subtasks || [], labels: t.labels || [], status, position: t.position ?? null
     });
     sfx(oldStatus !== status && status === 2 ? 'success' : 'tap');
+    // v0.16 — only write rows whose position actually changed (a drop used to rewrite the whole column)
+    const moved = ids
+      .map((id) => state.tasks.find((x) => x.id === id))
+      .filter((task) => task && oldPos.get(task.id) !== task.position);
     await Promise.all(
-      ids.map((id) => {
-        const task = state.tasks.find((x) => x.id === id);
-        if (!task) return Promise.resolve();
-        return call('update_task', {
+      moved.map((task) =>
+        call('update_task', {
           id: task.id, title: task.title, notes: task.notes || '', priority: task.priority || 0,
           dueAt: task.dueAt ?? null, remindAt: task.remindAt ?? null, repeat: task.repeat || 'none',
-          subtasks: task.subtasks || [], status: task.status ?? 0, position: task.position ?? null
-        }).catch(() => {});
-      })
+          subtasks: task.subtasks || [], labels: task.labels || [], status: task.status ?? 0, position: task.position ?? null
+        }).catch(() => {})
+      )
     );
     refreshStatsOnly();
     renderSidebar();
@@ -4116,7 +4238,7 @@ async function boardDrop(status, insertBeforeTid, tid) {
   }
 }
 
-// ---- v0.13 pointer drag engine (board) ----
+// ---- v0.16 pointer drag engine (board) — rAF-throttled, zero layout reads per move ----
 
 function boardCardPointerDown(e) {
   if (e.button !== 0) return;
@@ -4134,10 +4256,38 @@ function boardCardPointerDown(e) {
     oy: e.clientY - r.top,
     w: r.width,
     ghost: null,
-    beforeTid: null
+    beforeTid: null,
+    // v0.16 perf kit — last pointer pos, rAF coalescing, cached rect table, tracked hover state
+    lx: e.clientX,
+    ly: e.clientY,
+    raf: 0,
+    cols: [],
+    overCol: null,
+    beforeEl: null,
+    scrollBound: null
   };
   try { card.setPointerCapture(e.pointerId); } catch {}
   e.preventDefault(); // no text selection while grabbing a card
+}
+
+// the ONE layout pass per drag (refreshed on column scroll) — after this, every frame is pure math
+function boardCacheRects() {
+  if (!bd) return;
+  bd.cols = [...document.querySelectorAll('#bv-columns .bv-col')].map((col) => {
+    const cardsEl = col.querySelector('.bv-cards');
+    const cr = col.getBoundingClientRect();
+    const cb = cardsEl.getBoundingClientRect();
+    return {
+      el: col,
+      cardsEl,
+      x: cr.left, y: cr.top, w: cr.width, h: cr.height,
+      zoneTop: cb.top, zoneBottom: cb.bottom,
+      cards: [...cardsEl.querySelectorAll('.bv-card:not(.dragging)')].map((el) => {
+        const b = el.getBoundingClientRect();
+        return { el, top: b.top, mid: b.top + b.height / 2 };
+      })
+    };
+  });
 }
 
 function boardDragGhostStart() {
@@ -4147,51 +4297,87 @@ function boardDragGhostStart() {
   g.classList.remove('dragging', 'drop-before', 'is-done');
   g.classList.add('bv-ghost');
   g.style.width = bd.w + 'px';
+  g.style.setProperty('--i', 0); // no entrance replay on the clone
+  g.style.setProperty('--gx', `${bd.lx - bd.ox}px`);
+  g.style.setProperty('--gy', `${bd.ly - bd.oy}px`);
   document.body.appendChild(g);
   bd.ghost = g;
   document.body.classList.add('bv-dragging');
+  $('#board-view').classList.add('bv-drag'); // kills hover lifts + transitions while dragging
+  boardCacheRects();
+  // scrolling a column invalidates cached card tops — refresh them (only while dragging)
+  bd.scrollBound = () => { if (bd && bd.started) boardCacheRects(); };
+  $('#bv-columns').addEventListener('scroll', bd.scrollBound, true);
 }
 
 function boardDragCleanup() {
-  if (bd && bd.ghost) bd.ghost.remove();
-  if (bd && bd.started) bd.card.classList.remove('dragging');
-  bd = null;
+  if (!bd) return;
+  if (bd.raf) cancelAnimationFrame(bd.raf);
+  if (bd.ghost) bd.ghost.remove();
+  if (bd.started) {
+    bd.card.classList.remove('dragging');
+    $('#board-view').classList.remove('bv-drag');
+  }
+  if (bd.scrollBound) $('#bv-columns').removeEventListener('scroll', bd.scrollBound, true);
   document.body.classList.remove('bv-dragging');
   document.querySelectorAll('.bv-col.drag-over').forEach((c) => c.classList.remove('drag-over'));
   document.querySelectorAll('.bv-card.drop-before').forEach((c) => c.classList.remove('drop-before'));
+  bd = null;
 }
 
 function boardPointerMove(e) {
   if (!bd || e.pointerId !== bd.id) return;
+  bd.lx = e.clientX;
+  bd.ly = e.clientY;
   if (!bd.started) {
     if (Math.hypot(e.clientX - bd.sx, e.clientY - bd.sy) < 6) return;
     boardDragGhostStart();
   }
-  bd.ghost.style.left = e.clientX - bd.ox + 'px';
-  bd.ghost.style.top = e.clientY - bd.oy + 'px';
+  // coalesce pointermove storms (gaming mice fire up to 1000Hz) into one visual update per frame
+  if (!bd.raf) bd.raf = requestAnimationFrame(boardDragFrame);
+}
 
-  const hit = document.elementFromPoint(e.clientX, e.clientY);
-  const cardsEl = hit ? hit.closest('.bv-cards') : null;
-  bd.beforeTid = null;
-  document.querySelectorAll('.bv-col.drag-over').forEach((c) => {
-    if (!cardsEl || c !== cardsEl.closest('.bv-col')) c.classList.remove('drag-over');
-  });
-  document.querySelectorAll('.bv-card.drop-before').forEach((c) => c.classList.remove('drop-before'));
-  if (cardsEl) {
-    cardsEl.closest('.bv-col').classList.add('drag-over');
-    const cr = cardsEl.getBoundingClientRect();
-    if (e.clientY < cr.top + 30) cardsEl.scrollTop -= 8;        // gentle autoscroll
-    else if (e.clientY > cr.bottom - 30) cardsEl.scrollTop += 8;
-    const cards = [...cardsEl.querySelectorAll('.bv-card:not(.dragging)')];
-    const after = cards.find((c) => {
-      const r = c.getBoundingClientRect();
-      return e.clientY < r.top + r.height / 2;
-    });
-    if (after) {
-      after.classList.add('drop-before');
-      bd.beforeTid = after.dataset.tid;
-    }
+function boardDragFrame() {
+  bd.raf = 0;
+  if (!bd || !bd.started) return;
+  const x = bd.lx;
+  const y = bd.ly;
+
+  // 1) ghost follows the cursor — transform only, the compositor does the moving
+  bd.ghost.style.setProperty('--gx', `${x - bd.ox}px`);
+  bd.ghost.style.setProperty('--gy', `${y - bd.oy}px`);
+
+  // 2) which column? rect math on the cached table — no elementFromPoint, no forced layout
+  const col = bd.cols.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
+
+  // 3) column highlight — DOM is only touched when the target actually changes
+  if (col !== bd.overCol) {
+    if (bd.overCol) bd.overCol.el.classList.remove('drag-over');
+    if (col) col.el.classList.add('drag-over');
+    bd.overCol = col;
+    if (bd.beforeEl) { bd.beforeEl.classList.remove('drop-before'); bd.beforeEl = null; }
+    bd.beforeTid = null;
   }
+  if (!col) { bd.beforeTid = null; return; }
+
+  // 4) edge autoscroll (keeps flowing while the pointer holds at the edge)
+  let scrolled = false;
+  if (y < col.zoneTop + 34) { col.cardsEl.scrollTop -= 9; scrolled = true; }
+  else if (y > col.zoneBottom - 34) { col.cardsEl.scrollTop += 9; scrolled = true; }
+  if (scrolled && !bd.raf) bd.raf = requestAnimationFrame(boardDragFrame);
+
+  // 5) insertion point from cached card tops
+  let after = null;
+  for (const c of col.cards) {
+    if (y < c.mid) { after = c; break; }
+  }
+  const afterEl = after ? after.el : null;
+  if (afterEl !== bd.beforeEl) {
+    if (bd.beforeEl) bd.beforeEl.classList.remove('drop-before');
+    if (afterEl) afterEl.classList.add('drop-before');
+    bd.beforeEl = afterEl;
+  }
+  bd.beforeTid = afterEl ? afterEl.dataset.tid : null;
 }
 
 function boardPointerUp(e) {
@@ -4199,9 +4385,12 @@ function boardPointerUp(e) {
   const { started, tid, beforeTid } = bd;
   let status = null;
   if (started) {
-    const hit = document.elementFromPoint(e.clientX, e.clientY);
-    const colEl = hit ? hit.closest('.bv-col') : null;
-    status = colEl ? Number(colEl.dataset.status) : null;
+    if (bd.raf) { cancelAnimationFrame(bd.raf); bd.raf = 0; }
+    // resolve the column from cached rects — no elementFromPoint
+    const col = bd.cols.find(
+      (c) => e.clientX >= c.x && e.clientX <= c.x + c.w && e.clientY >= c.y && e.clientY <= c.y + c.h
+    );
+    status = col ? Number(col.el.dataset.status) : null;
   }
   boardDragCleanup();
   if (!started) {
@@ -4228,12 +4417,16 @@ function wireBoard() {
 
     const form = document.querySelector(`.bv-new[data-status="${col.status}"]`);
     const addBtn = document.querySelector(`.bv-col[data-status="${col.status}"] .bv-add`);
-    if (addBtn) {
-      addBtn.addEventListener('click', () => {
-        form.classList.toggle('hidden');
-        if (!form.classList.contains('hidden')) form.querySelector('input').focus();
-      });
-    }
+    const footBtn = document.querySelector(`.bv-foot[data-status="${col.status}"]`);
+    const openForm = () => {
+      form.classList.remove('hidden');
+      form.querySelector('input').focus();
+    };
+    if (addBtn) addBtn.addEventListener('click', () => {
+      if (form.classList.contains('hidden')) openForm();
+      else { form.classList.add('hidden'); form.querySelector('input').blur(); }
+    });
+    if (footBtn) footBtn.addEventListener('click', openForm);
     if (form) {
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -4244,7 +4437,6 @@ function wireBoard() {
           const t = await call('create_task', { title, status: col.status });
           state.tasks.push(t);
           input.value = '';
-          form.classList.add('hidden');
           renderBoard();
           refreshStatsOnly();
           renderSidebar();
@@ -4254,6 +4446,25 @@ function wireBoard() {
         }
       });
     }
+  }
+  // v0.16 — quick filter
+  const fInput = $('#bv-filter-input');
+  const fClear = $('#bv-filter-clear');
+  if (fInput) {
+    fInput.value = state.boardFilter;
+    fClear.classList.toggle('hidden', !state.boardFilter);
+    fInput.addEventListener('input', () => {
+      state.boardFilter = fInput.value.trim();
+      fClear.classList.toggle('hidden', !state.boardFilter);
+      renderBoard(false);
+    });
+    fClear.addEventListener('click', () => {
+      state.boardFilter = '';
+      fInput.value = '';
+      fClear.classList.add('hidden');
+      renderBoard(false);
+      fInput.focus();
+    });
   }
 }
 
@@ -4687,8 +4898,11 @@ const CHAT_SUGGESTIONS = [
 ];
 
 function userAvatarHtml() {
+  // v0.16 — your photo if you set one, otherwise your initial on a preset gradient
+  if (state.userPfp) return `<img class="cv-user-ava pfp-img" src="${state.userPfp}" alt="" />`;
   const letter = (state.userName || 'You').trim().charAt(0).toUpperCase() || 'Y';
-  return `<span class="cv-user-ava">${esc(letter)}</span>`;
+  const preset = PFP_PRESETS.find((p) => p.key === state.userPfpKey);
+  return `<span class="cv-user-ava"${preset ? ` style="background:${preset.g};color:#fff"` : ''}>${esc(letter)}</span>`;
 }
 
 function chatBubbleHtml(m, isLast = false) {
@@ -5420,6 +5634,7 @@ async function obDismiss({ celebrate = false } = {}) {
     state.userName = nameVal;
     await setSetting('userName', nameVal);
   }
+  applyGreeting(); // v0.16 — sidebar profile chip + greeting stay in sync
   await setSetting('onboarded', '1');
   const ob = $('#onboarding');
   ob.classList.add('bye');
@@ -5471,9 +5686,100 @@ async function maybeOnboarding() {
 
 // ------------------------------------------------------------------ greeting row (v0.10) ----
 
+// v0.16 — profile: name + photo. The photo lives in localStorage as a 128px JPEG dataURL
+// (a few KB, instant to load, nothing leaves the PC). Preset gradients give everyone a
+// nice avatar even without uploading a picture.
+const PFP_PRESETS = [
+  { key: 'p1', g: 'linear-gradient(135deg,#5b7cfa,#8b5cf6)' },
+  { key: 'p2', g: 'linear-gradient(135deg,#f472b6,#ef4444)' },
+  { key: 'p3', g: 'linear-gradient(135deg,#38bdf8,#2563eb)' },
+  { key: 'p4', g: 'linear-gradient(135deg,#34d399,#059669)' },
+  { key: 'p5', g: 'linear-gradient(135deg,#fbbf24,#f97316)' },
+  { key: 'p6', g: 'linear-gradient(135deg,#2dd4bf,#0d9488)' }
+];
+
+function avatarHtml() {
+  const initial = (state.userName || 'You').trim().charAt(0).toUpperCase() || 'Y';
+  if (state.userPfp) return `<img class="pfp-img" src="${state.userPfp}" alt="" />`;
+  const preset = PFP_PRESETS.find((p) => p.key === state.userPfpKey);
+  return `<span class="pfp-initials"${preset ? ` style="background:${preset.g}"` : ''}>${esc(initial)}</span>`;
+}
+
+function renderProfile() {
+  const av = $('#sb-avatar');
+  if (!av) return;
+  av.innerHTML = avatarHtml();
+  const nm = $('#sb-profile-name');
+  if (nm) nm.textContent = state.userName || 'You';
+}
+
+function pfpSave() {
+  if (state.userPfp) localStorage.setItem('nook.pfp', state.userPfp);
+  else localStorage.removeItem('nook.pfp');
+  localStorage.setItem('nook.pfpKey', state.userPfpKey || '');
+}
+
+function pfpPick(file) {
+  if (!file) return;
+  if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) { toast('Use a PNG, JPG or WebP image'); return; }
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    try {
+      const S = 128; // small canvas — keeps the dataURL a few KB
+      const c = document.createElement('canvas');
+      c.width = S;
+      c.height = S;
+      const ctx = c.getContext('2d');
+      const m = Math.min(img.width, img.height); // center-crop to a square
+      ctx.drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, S, S);
+      const data = c.toDataURL('image/jpeg', 0.85);
+      state.userPfp = data;
+      state.userPfpKey = 'custom';
+      pfpSave();
+      renderProfile();
+      const root = $('#overlay-root');
+      if (root.querySelector('#pfp-preview')) renderPfpSettings(root);
+      toast('Profile photo saved', { icon: 'user' });
+      sfx('success');
+    } catch {
+      toast('Could not read that image');
+    }
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    toast('Could not read that image');
+  };
+  img.src = url;
+}
+
+function renderPfpSettings(root) {
+  const prev = root.querySelector('#pfp-preview');
+  const pres = root.querySelector('#pfp-presets');
+  const rm = root.querySelector('#pfp-remove');
+  if (!prev || !pres) return;
+  prev.innerHTML = avatarHtml();
+  pres.innerHTML = PFP_PRESETS.map(
+    (p) => `<button class="pfp-preset${!state.userPfp && state.userPfpKey === p.key ? ' on' : ''}" data-k="${p.key}" style="background:${p.g}" title="Color ${p.key.slice(1)}"></button>`
+  ).join('');
+  if (rm) rm.classList.toggle('hidden', !state.userPfp && !state.userPfpKey);
+  pres.querySelectorAll('.pfp-preset').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.userPfp = null;
+      state.userPfpKey = b.dataset.k;
+      pfpSave();
+      renderProfile();
+      renderPfpSettings(root);
+      sfx('tap');
+    })
+  );
+}
+
 function applyGreeting() {
   const sb = document.querySelector('.sb-bottom');
   if (!sb) return;
+  renderProfile();
   let g = $('#sb-greet');
   if (!state.userName) { if (g) g.remove(); return; }
   if (!g) {

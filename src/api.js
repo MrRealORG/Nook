@@ -290,6 +290,7 @@ function mockCall(cmd, args) {
       if (a.remindAt !== undefined) t.remindAt = a.remindAt;
       if (a.repeat !== undefined) t.repeat = a.repeat;
       if (a.subtasks !== undefined) t.subtasks = a.subtasks;
+      if (a.labels !== undefined) t.labels = a.labels;
       if (a.status !== undefined) {
         t.status = Math.max(0, Math.min(2, Number(a.status) || 0));
         t.done = t.status === 2;

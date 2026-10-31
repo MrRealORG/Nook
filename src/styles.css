@@ -3400,22 +3400,30 @@ body.light .acc-dot { box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .18) inset; }
   user-select: none;
 }
 
-/* the card follows the cursor as a tilted floating ghost */
+/* the card follows the cursor as a tilted floating ghost —
+   v0.16: positioned purely via translate3d custom props (--gx/--gy), compositor-only, no layout */
 .bv-ghost {
   position: fixed;
+  left: 0;
+  top: 0;
   z-index: 900;
   margin: 0 !important;
   pointer-events: none;
   animation: none !important;
-  transform: rotate(2.2deg) scale(1.04);
+  transform: translate3d(var(--gx, 0px), var(--gy, 0px), 0) rotate(2.2deg) scale(1.03);
   cursor: grabbing;
   opacity: 0.97;
-  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.38), 0 0 0 1px var(--accent-soft),
-    0 0 22px var(--accent-glow);
+  will-change: transform;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.32), 0 0 0 1px var(--accent-soft),
+    0 0 18px var(--accent-glow);
 }
 .bv-card.dragging { opacity: 0.28; transform: scale(0.97); }
 body.bv-dragging { -webkit-user-select: none; user-select: none; }
 body.bv-dragging, body.bv-dragging * { cursor: grabbing !important; }
+
+/* while a drag is live: no hover lifts, no transition storms — every frame stays cheap */
+#board-view.bv-drag .bv-card { transition: none !important; }
+#board-view.bv-drag .bv-card:hover { transform: none; box-shadow: none; border-color: var(--border-soft); }
 
 /* insertion indicator — glowing accent line at the drop point */
 .bv-card.drop-before { border-color: var(--accent); }
@@ -3725,3 +3733,236 @@ body.light #cv-composer { box-shadow: 0 12px 34px rgba(60, 90, 140, .16), 0 2px 
     0 6px 22px rgba(110, 155, 205, .2),
     inset 0 1px 0 rgba(255, 255, 255, .95);
 }
+
+/* ============================================================
+   v0.16 — BOARD RESKIN (faster + better looking), PROFILE
+   ============================================================ */
+
+/* --- columns: quiet glass with a status accent line on top --- */
+.bv-col {
+  position: relative;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 60%, transparent), transparent 46%),
+    var(--bg-list);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  contain: layout style;
+}
+.bv-col::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--col-accent, var(--accent-soft)), transparent);
+  opacity: 0.65;
+  pointer-events: none;
+}
+.bv-col[data-status="0"] { --col-accent: var(--lav); }
+.bv-col[data-status="1"] { --col-accent: var(--warn); }
+.bv-col[data-status="2"] { --col-accent: var(--accent); }
+
+.bv-col-head { padding: 13px 14px 9px; align-items: center; }
+.bv-col-title { text-transform: uppercase; font-size: 11.5px; letter-spacing: 0.7px; }
+.bv-count {
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  font-size: 10.5px;
+  padding: 1px 8px;
+}
+.bv-col.drag-over .bv-count { color: var(--text); border-color: var(--accent-soft); }
+
+/* --- cards: calmer surface, cleaner hover, label pills --- */
+.bv-card {
+  border-radius: 13px;
+  padding: 11px 12px 10px 17px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10);
+  contain: layout style;
+}
+.bv-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.20), 0 0 0 1px var(--accent-soft);
+}
+.bv-card.is-done { opacity: 0.7; }
+.bv-card.is-done:hover { opacity: 1; }
+
+.bv-labs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.bv-lab {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--lab);
+  background: color-mix(in srgb, var(--lab) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lab) 30%, transparent);
+  border-radius: 999px;
+  padding: 1.5px 8px;
+  line-height: 1.4;
+}
+
+/* tasks-view badge twin of the board label pill */
+.badge.b-lab {
+  color: var(--lab);
+  background: color-mix(in srgb, var(--lab) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lab) 28%, transparent);
+}
+
+/* --- add-a-card ghost button at the bottom of every column --- */
+.bv-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  margin: 2px 12px 12px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1.5px dashed var(--border);
+  border-radius: 11px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+.bv-foot:hover { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.bv-foot svg { width: 13px; height: 13px; display: block; }
+
+/* --- board header: live stats + quick filter --- */
+#bv-stats { font-variant-numeric: tabular-nums; }
+.bv-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 5px 12px;
+  width: 210px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.bv-filter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.bv-filter-ico { display: inline-flex; color: var(--text-faint); flex: none; }
+.bv-filter-ico svg { width: 13px; height: 13px; display: block; }
+.bv-filter input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.bv-filter input::placeholder { color: var(--text-faint); }
+.bv-filter button {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  flex: none;
+}
+.bv-filter button:hover { color: var(--text); }
+
+/* --- empty column drop zone --- */
+.bv-empty { border-radius: 12px; padding: 26px 10px; font-size: 12.5px; }
+
+/* --- context-menu color dot (label picker) --- */
+.ci-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+/* --- sidebar profile chip (name + photo) --- */
+.sb-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 20px);
+  margin: 2px 10px 8px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: 13px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+.sb-profile:hover { border-color: var(--accent-soft); background: var(--bg-hover); transform: translateY(-1px); }
+.sb-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex: none;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 3.5px var(--border-soft);
+}
+.pfp-img { object-fit: cover; display: block; }
+.pfp-initials {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.sb-avatar .pfp-img { width: 100%; height: 100%; }
+.sb-avatar .pfp-initials { font-size: 14px; }
+.sb-profile-meta { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sb-profile-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-profile-sub { font-size: 10.5px; color: var(--text-faint); }
+
+/* --- chat avatar uses the photo --- */
+.cv-user-ava.pfp-img { width: 100%; height: 100%; border-radius: 0; display: block; }
+
+/* --- settings: profile photo editor --- */
+.pfp-edit { display: flex; align-items: center; gap: 14px; }
+.pfp-preview {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  flex: none;
+  box-shadow: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--border-soft);
+}
+.pfp-preview .pfp-img { width: 100%; height: 100%; }
+.pfp-preview .pfp-initials { font-size: 20px; }
+.pfp-presets { display: flex; gap: 7px; flex-wrap: wrap; max-width: 210px; }
+.pfp-preset {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  transition: transform 0.12s ease, border-color 0.15s ease;
+}
+.pfp-preset:hover { transform: scale(1.14); }
+.pfp-preset.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg-app); }
+.pfp-actions { display: flex; gap: 8px; margin-top: 8px; }
