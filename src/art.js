@@ -48,6 +48,9 @@ const I = {
   play: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>`,
   pause: `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9z"/></svg>`,
+  user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.2-3.6 4-5.5 7.5-5.5s6.3 1.9 7.5 5.5"/></svg>`,
+  clip: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.8-8.8a3.7 3.7 0 0 1 5.2 5.2l-8.8 8.8a1.85 1.85 0 0 1-2.6-2.6l8.1-8.1"/></svg>`,
+  quote: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 16.5c-1.2 0-2.1-.9-2.1-2.2 0-2.7 1.9-5.4 4.6-6.9l.8 1.3c-1.7 1-2.7 2.4-2.9 3.8.3-.1.5-.1.8-.1 1.2 0 2.1.9 2.1 2.1S7.3 16.5 5 16.5zm8.6 0c-1.2 0-2.1-.9-2.1-2.2 0-2.7 1.9-5.4 4.6-6.9l.8 1.3c-1.7 1-2.7 2.4-2.9 3.8.3-.1.5-.1.8-.1 1.2 0 2.1.9 2.1 2.1s-1.1 2-3.3 2z"/></svg>`,
   book: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4H6.5A2.5 2.5 0 0 0 4 6.5zM20 17v4H6.5A2.5 2.5 0 0 1 4 18.5"/></svg>`,
   board: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/></svg>`,
   image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="9.5" r="1.8"/><path d="M3 17l5.2-5.2a1.5 1.5 0 0 1 2.1 0L16 17.5M14 15l2.2-2.2a1.5 1.5 0 0 1 2.1 0L21 15.5"/></svg>`,
@@ -65,8 +68,10 @@ export function ico(name) {
 }
 
 export function setIcons() {
-  document.querySelectorAll('.sb-ico[data-ico]').forEach((el) => {
+  document.querySelectorAll('[data-ico]').forEach((el) => {
+    if (el.dataset.filled) return;
     el.innerHTML = ico(el.dataset.ico);
+    el.dataset.filled = '1';
   });
   const logo = document.querySelector('.tb-logo');
   if (logo) {

@@ -8,15 +8,9 @@
   <link rel="stylesheet" href="./src/styles.css" />
 </head>
 <body>
-  <!-- ======= onboarding — v0.11: blue aurora sky + get-started steps ======= -->
+  <!-- ======= onboarding — v0.12: soft pastel sky + get-started steps ======= -->
   <div id="onboarding" class="hidden" aria-modal="true">
     <div class="ob-sky">
-      <div class="ob-stars"></div>
-      <div class="ob-shoot s1"></div>
-      <div class="ob-shoot s2"></div>
-      <div class="ob-shoot s3"></div>
-      <div class="ob-aurora a1"></div>
-      <div class="ob-aurora a2"></div>
       <div class="ob-orb"></div>
       <div class="ob-clouds">
         <div class="ob-cloud c1"></div>
@@ -29,17 +23,17 @@
         <div class="ob-cloud c8"></div>
       </div>
       <div class="ob-waves" aria-hidden="true">
-        <svg class="wv wv3" viewBox="0 0 1440 320" preserveAspectRatio="none"><path d="M0,192L60,186.7C120,181,240,171,360,176C480,181,600,203,720,208C840,213,960,203,1080,186.7C1200,171,1320,149,1380,138.7L1440,128L1440,320L0,320Z" fill="rgba(46,110,200,.35)"></path></svg>
-        <svg class="wv wv2" viewBox="0 0 1440 320" preserveAspectRatio="none"><path d="M0,224L80,213.3C160,203,320,181,480,186.7C640,192,800,224,960,229.3C1120,235,1280,213,1360,202.7L1440,192L1440,320L0,320Z" fill="rgba(24,66,138,.55)"></path></svg>
-        <svg class="wv wv1" viewBox="0 0 1440 320" preserveAspectRatio="none"><path d="M0,256L96,245.3C192,235,384,213,576,218.7C768,224,960,256,1152,261.3C1344,267,1440,245,1440,245.3L1440,320L0,320Z" fill="rgba(8,27,64,.9)"></path></svg>
+        <svg class="wv wv3" viewBox="0 0 1440 320" preserveAspectRatio="none"><path d="M0,192L60,186.7C120,181,240,171,360,176C480,181,600,203,720,208C840,213,960,203,1080,186.7C1200,171,1320,149,1380,138.7L1440,128L1440,320L0,320Z" fill="rgba(168,207,240,.45)"></path></svg>
+        <svg class="wv wv2" viewBox="0 0 1440 320" preserveAspectRatio="none"><path d="M0,224L80,213.3C160,203,320,181,480,186.7C640,192,800,224,960,229.3C1120,235,1280,213,1360,202.7L1440,192L1440,320L0,320Z" fill="rgba(126,178,228,.55)"></path></svg>
+        <svg class="wv wv1" viewBox="0 0 1440 320" preserveAspectRatio="none"><path d="M0,256L96,245.3C192,235,384,213,576,218.7C768,224,960,256,1152,261.3C1344,267,1440,245,1440,245.3L1440,320L0,320Z" fill="rgba(88,140,200,.62)"></path></svg>
       </div>
       <div class="ob-deco" aria-hidden="true">
-        <div class="ob-chip ch1">📝 Notes</div>
-        <div class="ob-chip ch2">✅ Tasks</div>
-        <div class="ob-chip ch3">🎤 Recorder</div>
-        <div class="ob-chip ch4">✨ AI Chat</div>
-        <div class="ob-chip ch5">📋 Board</div>
-        <div class="ob-chip ch6">🎨 24 themes</div>
+        <div class="ob-chip ch1"><span class="ob-ico" data-ico="all"></span>Notes</div>
+        <div class="ob-chip ch2"><span class="ob-ico" data-ico="checkSq"></span>Tasks</div>
+        <div class="ob-chip ch3"><span class="ob-ico" data-ico="mic"></span>Recorder</div>
+        <div class="ob-chip ch4"><span class="ob-ico" data-ico="sparkle"></span>AI Chat</div>
+        <div class="ob-chip ch5"><span class="ob-ico" data-ico="board"></span>Board</div>
+        <div class="ob-chip ch6"><span class="ob-ico" data-ico="palette"></span>24 themes</div>
       </div>
     </div>
     <div class="ob-card">
@@ -54,7 +48,7 @@
       </div>
 
       <div class="ob-step" data-step="1">
-        <div class="ob-emoji">👋</div>
+        <div class="ob-badge"><span data-ico="user"></span></div>
         <h1>What should I call you?</h1>
         <p class="ob-tag">Nook will greet you by name.</p>
         <input id="ob-name" maxlength="24" placeholder="Type your name…" spellcheck="false" autocomplete="off" />
@@ -62,7 +56,7 @@
       </div>
 
       <div class="ob-step" data-step="2">
-        <div class="ob-emoji">🎨</div>
+        <div class="ob-badge"><span data-ico="palette"></span></div>
         <h1>Pick your look</h1>
         <p class="ob-tag">24 cozy themes — tap one, it applies instantly.</p>
         <div class="ob-themes" id="ob-themes"></div>
@@ -74,10 +68,10 @@
         <h1 id="ob-done-title">You're all set!</h1>
         <p class="ob-tag">One cozy place for everything you think of.</p>
         <div class="ob-feats">
-          <div class="ob-feat"><b>📝</b><span>Notes with images, tabs &amp; [[links]]</span></div>
-          <div class="ob-feat"><b>✅</b><span>Tasks with reminders &amp; a Board</span></div>
-          <div class="ob-feat"><b>🎤</b><span>Offline meeting recorder</span></div>
-          <div class="ob-feat"><b>✨</b><span>AI chat with your own key</span></div>
+          <div class="ob-feat"><span class="ob-f-ico" data-ico="all"></span><span>Notes with images, tabs &amp; links</span></div>
+          <div class="ob-feat"><span class="ob-f-ico" data-ico="checkSq"></span><span>Tasks with reminders &amp; a Board</span></div>
+          <div class="ob-feat"><span class="ob-f-ico" data-ico="mic"></span><span>Offline meeting recorder</span></div>
+          <div class="ob-feat"><span class="ob-f-ico" data-ico="sparkle"></span><span>AI chat with your own key</span></div>
         </div>
         <button class="ob-btn primary big" id="ob-finish" type="button">Take me to Nook</button>
       </div>
@@ -91,7 +85,7 @@
       <div class="tb-zone tb-left">
         <span class="tb-logo"></span>
         <span class="tb-name">Nook</span>
-        <span class="tb-ver">v0.11</span>
+        <span class="tb-ver">v0.12</span>
       </div>
 
       <div class="tb-search">
@@ -156,7 +150,7 @@
             <h1 id="nl-title">All Notes</h1>
             <span class="nl-count" id="nl-count"></span>
             <span class="nl-spacer"></span>
-            <button class="btn ghost small" id="btn-daily" title="Open (or create) today's daily note">📅 Today</button>
+            <button class="btn ghost small" id="btn-daily" title="Open (or create) today's daily note"><span class="b-ico" data-ico="calendar"></span>Today</button>
             <button class="btn danger small hidden" id="btn-empty-trash">Empty trash</button>
             <select id="nl-sort" title="Sort notes">
               <option value="updated">Recently edited</option>
@@ -203,8 +197,8 @@
             <button data-md="h2" title="Heading 2">H2</button>
             <span class="ed-sep"></span>
             <button data-md="ul" title="Bullet list">• ―</button>
-            <button data-md="check" title="Checklist">☑</button>
-            <button data-md="quote" title="Quote">❝</button>
+            <button data-md="check" title="Checklist"><span data-ico="checkSq"></span></button>
+            <button data-md="quote" title="Quote"><span data-ico="quote"></span></button>
             <button data-md="code" title="Inline code">&lt;&gt;</button>
             <button data-md="link" title="Link"></button>
             <span class="ed-sep"></span>
@@ -324,7 +318,7 @@
           </div>
           <div class="cv-scroll" id="cv-messages"></div>
           <form id="cv-composer">
-            <button type="button" id="cv-use-note" title="Attach the current note as context for the next message">📎 Note</button>
+            <button type="button" id="cv-use-note" title="Attach the current note as context for the next message"><span class="b-ico" data-ico="clip"></span>Note</button>
             <textarea id="cv-input" rows="1" placeholder="Message Nook AI…" spellcheck="false"></textarea>
             <button class="cv-send" type="submit" id="cv-send" title="Send (Enter)"></button>
             <button class="btn danger hidden" type="button" id="cv-stop">Stop</button>

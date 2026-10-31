@@ -1193,10 +1193,10 @@ function renderTasks() {
   const list = $('#tv-list');
   if (!visible.length) {
     const emptyMsg = {
-      all: 'Nothing to do — enjoy the quiet. ☕',
-      today: 'Nothing due today. Sip your chai. ☕',
+      all: 'Nothing to do — enjoy the quiet.',
+      today: 'Nothing due today. Sip your chai.',
       upcoming: 'Nothing scheduled ahead yet.',
-      overdue: 'Nothing overdue. You are on top of it! 🎉',
+      overdue: 'Nothing overdue. You are on top of it!',
       done: 'Nothing completed yet — go finish something!'
     };
     list.innerHTML = `<div class="tv-empty">${frogSvg}<div>${emptyMsg[state.taskFilter] || emptyMsg.all}</div></div>`;
@@ -2054,7 +2054,7 @@ async function openSettings(section) {
           <button class="btn primary small" id="pv-connect">Save &amp; connect</button>
           <span id="pv-status">${configured ? '<span style="color:var(--accent)">Ready ✓</span>' : ''}</span>
         </div>
-        <div class="prov-note">🔑 Keys are stored only in the local Nook database on this PC — never in backups, never sent anywhere except the provider you picked.</div>
+        <div class="prov-note">Keys are stored only in the local Nook database on this PC — never in backups, never sent anywhere except the provider you picked.</div>
       </div>`;
   };
 
@@ -2076,7 +2076,7 @@ async function openSettings(section) {
           <div class="set-row" style="display:block">
             <div class="set-label">Theme</div>
             <div class="set-sub">24 cozy looks — pick your mood. Applies instantly.</div>
-            <div class="theme-group"><div class="tg-label">🌙 Dark</div>
+            <div class="theme-group"><div class="tg-label">Dark</div>
               <div class="theme-grid">${THEMES.filter((t) => !t.light).map((t) => `
                 <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
                   <span class="theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
@@ -2084,7 +2084,7 @@ async function openSettings(section) {
                 </button>`).join('')}
               </div>
             </div>
-            <div class="theme-group"><div class="tg-label">☀️ Light</div>
+            <div class="theme-group"><div class="tg-label">Light</div>
               <div class="theme-grid">${THEMES.filter((t) => t.light).map((t) => `
                 <button class="theme-chip${theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
                   <span class="theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
@@ -2318,7 +2318,7 @@ async function openSettings(section) {
           </div>
           <div class="about-box">
             ${frogSvg}
-            <div class="ab-text"><b>Nook v0.9.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real 🐸</div>
+            <div class="ab-text"><b>Nook v0.12.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
           </div>
         </div>
         </div>
@@ -2937,7 +2937,7 @@ function wireReminderListener() {
     .then(({ listen }) => {
       listen('reminder', (e) => {
         const { id, title } = e.payload || {};
-        toast(`⏰ ${title || 'Task reminder'}`, {
+        toast(`${title || 'Task reminder'}`, {
           icon: 'bell',
           ms: 10000,
           action: {
@@ -3357,8 +3357,8 @@ const SLASH_COMMANDS = [
   { name: 'Heading 3', hint: 'Small section title', icon: 'H3', kind: 'h3' },
   { name: 'Bullet list', hint: 'Simple list', icon: '•', kind: 'ul' },
   { name: 'Numbered list', hint: '1. 2. 3.', icon: '1.', kind: 'ol' },
-  { name: 'To-do list', hint: 'Track things with checkboxes', icon: '☑', kind: 'check' },
-  { name: 'Quote', hint: 'Capture a quote', icon: '❝', kind: 'quote' },
+  { name: 'To-do list', hint: 'Track things with checkboxes', icon: 'checkSq', kind: 'check' },
+  { name: 'Quote', hint: 'Capture a quote', icon: 'quote', kind: 'quote' },
   { name: 'Code block', hint: 'Monospaced code', icon: '<>', kind: 'codeblock' },
   { name: 'Inline code', hint: '`code`', icon: '<>', kind: 'code' },
   { name: 'Link', hint: 'Markdown link', icon: 'link', kind: 'link' },
@@ -3375,15 +3375,15 @@ const SLASH_COMMANDS = [
 const NOTE_TEMPLATES = {
   tplJournal: () => {
     const d = new Date().toLocaleDateString(undefined, { dateStyle: 'full' });
-    return `## 🌤 ${d}\n\n### Grateful for\n- \n\n### Wins of today\n- \n\n### On my mind\n- \n\n### To do\n- [ ] `;
+    return `## ${d}\n\n### Grateful for\n- \n\n### Wins of today\n- \n\n### On my mind\n- \n\n### To do\n- [ ] `;
   },
   tplMeeting: () => {
     const d = new Date().toLocaleDateString(undefined, { dateStyle: 'medium' });
-    return `## 📌 Meeting — ${d}\n\n**With:**  \n**Agenda:**\n\n### Notes\n- \n\n### Decisions\n- \n\n### Action items\n- [ ] `;
+    return `## Meeting — ${d}\n\n**With:**  \n**Agenda:**\n\n### Notes\n- \n\n### Decisions\n- \n\n### Action items\n- [ ] `;
   },
   tplWeek: () => {
     const d = new Date().toLocaleDateString(undefined, { dateStyle: 'medium' });
-    return `## 🗓 Weekly review — ${d}\n\n### Wins\n- \n\n### Lessons\n- \n\n### What to drop\n- \n\n### Focus next week\n- [ ] `;
+    return `## Weekly review — ${d}\n\n### Wins\n- \n\n### Lessons\n- \n\n### What to drop\n- \n\n### Focus next week\n- [ ] `;
   }
 };
 
@@ -4549,12 +4549,12 @@ function updateChatStatus() {
 }
 
 const CHAT_SUGGESTIONS = [
-  { icon: '💡', text: 'Brainstorm 10 ideas for my next project' },
-  { icon: '🗓', text: 'Plan my day in 3 priority blocks' },
-  { icon: '🧠', text: 'Explain a hard topic simply' },
-  { icon: '✉️', text: 'Write a short email for me' },
-  { icon: '📝', text: 'Summarize the note I have open' },
-  { icon: '🎯', text: 'Turn my notes into action items' }
+  { icon: 'sparkle', text: 'Brainstorm 10 ideas for my next project' },
+  { icon: 'calendar', text: 'Plan my day in 3 priority blocks' },
+  { icon: 'book', text: 'Explain a hard topic simply' },
+  { icon: 'external', text: 'Write a short email for me' },
+  { icon: 'pencil', text: 'Summarize the note I have open' },
+  { icon: 'checkSq', text: 'Turn my notes into action items' }
 ];
 
 function userAvatarHtml() {
@@ -4612,7 +4612,7 @@ function renderChatMessages() {
         <h2>Salam${who}!</h2>
         <p>I live right here in Nook — draft ideas, summarize your notes,<br/>plan your day. Chats are saved on this PC only.</p>
         <div class="cv-suggest">
-          ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s.text)}"><span class="cv-sug-ico">${s.icon}</span><span>${esc(s.text)}</span></button>`).join('')}
+          ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s.text)}"><span class="cv-sug-ico">${ico(s.icon)}</span><span>${esc(s.text)}</span></button>`).join('')}
         </div>
       </div>`;
     box.querySelectorAll('.cv-sug').forEach((b) => {
@@ -5200,19 +5200,19 @@ function openGuide() {
   const rows = [
     ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> jump to any note · everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it. <b>Ctrl+Shift+F</b> is Zen mode — everything hides but your words.'],
     ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, images and more. Filter by typing. At the bottom you\'ll find <b>Templates</b> — daily journal, meeting notes and weekly review, one click each.'],
-    ['Images in notes', 'Paste an image straight into the editor (<b>Ctrl+V</b>), drag an image file onto the page, or use the 🖼️ button / <b>/image</b>. Images live inside your local database, render in preview, and click to zoom.'],
+    ['Images in notes', 'Paste an image straight into the editor (<b>Ctrl+V</b>), drag an image file onto the page, or use the image button / <b>/image</b>. Images live inside your local database, render in preview, and click to zoom.'],
     ['Mention notes', 'Type <b>@</b> anywhere in a note to link another note — it becomes a [[wiki-link]]. Click one in preview to jump there. Below the editor you\'ll see <b>Linked from</b> — which notes point here.'],
     ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order, click a card to edit details in Tasks. Each column has its own + button. Card order sticks after restart.'],
     ['Tags', 'Under the editor there\'s a <b>+ tag</b> box — type a tag and press Enter. Tags show on note cards and in the sidebar; click one to filter. Backspace in the box removes the last tag.'],
     ['Find & Replace', 'Press <b>Ctrl+H</b> in any note — find with match counter, Enter/Shift+Enter to hop between matches, replace one or everything. Esc closes.'],
-    ['Daily note', 'The <b>📅 Today</b> button in the list header opens (or creates) today\'s dated note, tagged <b>#daily</b> — one tidy page per day.'],
+    ['Daily note', 'The <b>Today</b> button in the list header opens (or creates) today\'s dated note, tagged <b>#daily</b> — one tidy page per day.'],
     ['Tabs', 'Open as many notes as you want — each gets a tab. Drag tabs to reorder, middle-click or × closes one. Right-click a tab to close others.'],
     ['Tasks & reminders', 'Add a task, press the ⌄ to open details: <b>due date</b>, <b>reminder</b>, <b>priority</b>, <b>repeat</b> and <b>subtasks</b>. Nook notifies you at reminder time.'],
     ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Start/stop never freezes the app, even if the mic is slow. Play, rename, export or delete anytime.'],
-    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Paste your key and it saves instantly; models appear to click. The 📎 button gives the AI your current note as context. Keys stay on this PC.'],
-    ['Note tools with AI', 'The ✨ button can <b>continue writing</b> where you stopped, summarize the open note, extract action items straight into Tasks, or suggest a title — through the same provider you configured.'],
+    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Paste your key and it saves instantly; models appear to click. The <b>Note</b> button gives the AI your current note as context. Keys stay on this PC.'],
+    ['Note tools with AI', 'The <b>AI</b> button in the toolbar can <b>continue writing</b> where you stopped, summarize the open note, extract action items straight into Tasks, or suggest a title — through the same provider you configured.'],
     ['Markdown extras', 'Preview supports tables (<code>| a | b |</code> over <code>|---|---|</code>), <code>==highlight==</code>, <code>~~strikethrough~~</code>, checklists, code blocks and [[wiki-links]].'],
-    ['Export', 'The ⬆️ button in the toolbar exports the open note as <b>Markdown</b> or as a <b>pretty web page</b> — images embedded, opens in any browser, ready to share.'],
+    ['Export', 'The <b>Export</b> button in the toolbar exports the open note as <b>Markdown</b> or as a <b>pretty web page</b> — images embedded, opens in any browser, ready to share.'],
     ['Themes', 'Settings → Look — <b>24 looks</b>, dark and light, grouped. Plus zoom, editor size/font/width/line-spacing, note density, default folder, opening view, autosave, spellcheck, trash auto-cleanup and start-with-Windows.'],
     ['Backup', 'Settings → Backup — export everything to a file and import it anywhere. Your images come along; API keys never do.'],
     ['Shortcuts', 'Press <b>Ctrl+/</b> anytime for the full list.']
@@ -5343,12 +5343,12 @@ function applyGreeting() {
     g.id = 'sb-greet';
     sb.prepend(g);
   }
-  g.innerHTML = `<div class="greet-hi">${greetingWord()},</div><div class="greet-name">${esc(state.userName)} <span class="greet-wave">👋</span></div>`;
+  g.innerHTML = `<div class="greet-hi">${greetingWord()},</div><div class="greet-name">${esc(state.userName)}</div>`;
 }
 
 // ------------------------------------------------------------------ boot ----
 
-const WELCOME_CONTENT = `# Welcome to Nook 🐸
+const WELCOME_CONTENT = `# Welcome to Nook
 
 Your cozy little corner for notes and tasks — **100% offline**, everything stays on this PC.
 
@@ -5362,20 +5362,20 @@ Your cozy little corner for notes and tasks — **100% offline**, everything sta
 - **Ctrl+K** jumps to any note in a heartbeat
 - **Ctrl+Shift+F** = Zen mode — nothing but your words
 - **Drag** a note onto a folder to file it
-- Tasks have due dates, priorities, subtasks and **reminders** — tick one for confetti 🎉
+- Tasks have due dates, priorities, subtasks and **reminders** — tick one and see the confetti
 - **Board** — a Notion-style kanban; drag cards across columns
 - **Recordings** — record meetings straight to this PC
 - **AI Chat** — add your own key (OpenRouter, Z.ai, OpenAI, Groq, Gemini…) in Settings
 - **Export** any note as Markdown or as a pretty web page
 - 24 themes in Settings. Press **Ctrl+/** for all shortcuts.
 
-Cozy up and start writing. ☕`;
+Cozy up and start writing.`;
 
 async function ensureWelcome() {
   const initialized = await call('get_setting', { key: 'initialized' });
   if (initialized) return;
   const note = await call('create_note', { folderId: null });
-  await call('save_note', { id: note.id, title: 'Welcome to Nook 🐸', content: WELCOME_CONTENT });
+  await call('save_note', { id: note.id, title: 'Welcome to Nook', content: WELCOME_CONTENT });
   await call('set_setting', { key: 'initialized', value: '1' });
 }
 
@@ -5423,7 +5423,7 @@ async function boot() {
 boot().catch((err) => {
   console.error('NOOK BOOT FAILURE:', err.stack || err);
   document.body.innerHTML = `
-    <div style="height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:system-ui;color:#ece7f8;background:#171126">
+    <div style="height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:system-ui;color:#ece7f8;background:#131a2a">
       ${frogSvg}
       <h2 style="font-size:18px">Nook could not start</h2>
       <p style="font-size:13px;color:#a99cc9;max-width:420px;text-align:center;line-height:1.6">${esc(err.message)}</p>
