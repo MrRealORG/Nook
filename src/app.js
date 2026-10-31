@@ -1,4 +1,4 @@
-// Nook — main application logic.
+// NookNook — main application logic.
 // v0.5: fixed window dragging, real task manager (due dates, priorities,
 // subtasks, repeat, reminders), 8 themes, realtime autosave, backup,
 // markdown toolbar, close-to-tray.
@@ -122,7 +122,7 @@ const AI_PROVIDERS = [
 const DEFAULT_AI_SETTINGS = {
   active: '',
   providers: {},   // id -> { url, apiKey, model }
-  systemPrompt: 'You are Nook AI, a friendly assistant inside a notes app. Be concise. Use Markdown.'
+  systemPrompt: 'You are NookNook AI, a friendly assistant inside a notes app. Be concise. Use Markdown.'
 };
 
 const state = {
@@ -1990,7 +1990,7 @@ async function exportCurrentHtml() {
     if (IS_TAURI) await Promise.all(ids.map((id) => loadImageData(id)));
     const body = renderMarkdown(n.content || '');
     const title = esc(n.title || 'Untitled note');
-    const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1"/>\n<title>${title}</title>\n<style>\n  :root{color-scheme:light dark}\n  body{margin:0;background:#101418;color:#e8e6e3;font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}\n  article{max-width:760px;margin:0 auto;padding:48px 24px 80px}\n  h1,h2,h3,h4{line-height:1.25;color:#f4f2ee;margin:1.4em 0 .5em}\n  h1{font-size:2em;border-bottom:1px solid #2c333a;padding-bottom:.3em}\n  a{color:#7ec9ff}\n  blockquote{margin:1em 0;padding:.6em 1.2em;border-left:3px solid #5aa2ff;background:#16202e;border-radius:0 8px 8px 0;color:#c6d3e2}\n  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#1c232b;padding:.15em .4em;border-radius:5px}\n  pre{background:#161c23;padding:16px 18px;border-radius:12px;overflow:auto;border:1px solid #26303a}\n  pre code{background:none;padding:0}\n  mark{background:#5a4a18;color:#ffd98a;padding:0 .2em;border-radius:3px}\n  del{color:#8b949e}\n  hr{border:none;border-top:1px solid #2c333a;margin:2em 0}\n  table{border-collapse:collapse;margin:1em 0;width:100%}\n  th,td{border:1px solid #2c333a;padding:8px 12px;text-align:left}\n  th{background:#1a2027}\n  .md-tablewrap{overflow-x:auto}\n  img{max-width:100%;border-radius:10px}\n  li.md-task{list-style:none;margin-left:-1.4em}\n  .md-box{display:inline-flex;width:15px;height:15px;border:1.5px solid #6b7684;border-radius:4px;margin-right:.5em;vertical-align:-2px;align-items:center;justify-content:center}\n  li.md-task.on .md-box{background:#5aa2ff;border-color:#5aa2ff}\n  li.md-task.on .md-box svg{width:11px;height:11px;color:#0a2550}\n  footer{max-width:760px;margin:0 auto;padding:0 24px 48px;color:#69737e;font-size:13px}\n  @media (prefers-color-scheme:light){body{background:#fbfaf8;color:#26282b}h1,h2,h3,h4{color:#1c1e21}a{color:#0b62c4}blockquote{background:#f2f4f1;color:#4a5349}code{background:#eef0f3}pre{background:#f3f5f7;border-color:#e1e4e8}mark{background:#ffe9a8;color:#5c4708}hr,th,td{border-color:#e1e4e8}th{background:#f2f4f1}}\n</style>\n</head>\n<body>\n<article>${body}</article>\n<footer>Exported from Nook — the cozy notes app</footer>\n</body>\n</html>`;
+    const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1"/>\n<title>${title}</title>\n<style>\n  :root{color-scheme:light dark}\n  body{margin:0;background:#101418;color:#e8e6e3;font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}\n  article{max-width:760px;margin:0 auto;padding:48px 24px 80px}\n  h1,h2,h3,h4{line-height:1.25;color:#f4f2ee;margin:1.4em 0 .5em}\n  h1{font-size:2em;border-bottom:1px solid #2c333a;padding-bottom:.3em}\n  a{color:#7ec9ff}\n  blockquote{margin:1em 0;padding:.6em 1.2em;border-left:3px solid #5aa2ff;background:#16202e;border-radius:0 8px 8px 0;color:#c6d3e2}\n  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#1c232b;padding:.15em .4em;border-radius:5px}\n  pre{background:#161c23;padding:16px 18px;border-radius:12px;overflow:auto;border:1px solid #26303a}\n  pre code{background:none;padding:0}\n  mark{background:#5a4a18;color:#ffd98a;padding:0 .2em;border-radius:3px}\n  del{color:#8b949e}\n  hr{border:none;border-top:1px solid #2c333a;margin:2em 0}\n  table{border-collapse:collapse;margin:1em 0;width:100%}\n  th,td{border:1px solid #2c333a;padding:8px 12px;text-align:left}\n  th{background:#1a2027}\n  .md-tablewrap{overflow-x:auto}\n  img{max-width:100%;border-radius:10px}\n  li.md-task{list-style:none;margin-left:-1.4em}\n  .md-box{display:inline-flex;width:15px;height:15px;border:1.5px solid #6b7684;border-radius:4px;margin-right:.5em;vertical-align:-2px;align-items:center;justify-content:center}\n  li.md-task.on .md-box{background:#5aa2ff;border-color:#5aa2ff}\n  li.md-task.on .md-box svg{width:11px;height:11px;color:#0a2550}\n  footer{max-width:760px;margin:0 auto;padding:0 24px 48px;color:#69737e;font-size:13px}\n  @media (prefers-color-scheme:light){body{background:#fbfaf8;color:#26282b}h1,h2,h3,h4{color:#1c1e21}a{color:#0b62c4}blockquote{background:#f2f4f1;color:#4a5349}code{background:#eef0f3}pre{background:#f3f5f7;border-color:#e1e4e8}mark{background:#ffe9a8;color:#5c4708}hr,th,td{border-color:#e1e4e8}th{background:#f2f4f1}}\n</style>\n</head>\n<body>\n<article>${body}</article>\n<footer>Exported from NookNook — the cozy notes app</footer>\n</body>\n</html>`;
     const path = await call('export_note_html', { title: n.title || 'Untitled note', html });
     if (path) toast(`Web page saved — ${path.split(/[\\/]/).pop()}`, { icon: 'export' });
   } catch (err) {
@@ -2081,7 +2081,7 @@ async function openSettings(section) {
           <button class="btn primary small" id="pv-connect">Save &amp; connect</button>
           <span id="pv-status">${configured ? '<span style="color:var(--accent)">Ready ✓</span>' : ''}</span>
         </div>
-        <div class="prov-note">Keys are stored only in the local Nook database on this PC — never in backups, never sent anywhere except the provider you picked.</div>
+        <div class="prov-note">Keys are stored only in the local NookNook database on this PC — never in backups, never sent anywhere except the provider you picked.</div>
       </div>`;
   };
 
@@ -2229,7 +2229,7 @@ async function openSettings(section) {
           <div class="set-row">
             <div>
               <div class="set-label">Your name</div>
-              <div class="set-sub">Nook greets you by name — sidebar, AI chat, daily notes.</div>
+              <div class="set-sub">NookNook greets you by name — sidebar, AI chat, daily notes.</div>
             </div>
             <input type="text" id="set-username" class="set-text" value="${esc(state.userName)}" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" style="width:180px" />
           </div>
@@ -2237,7 +2237,7 @@ async function openSettings(section) {
           <div class="set-row">
             <div>
               <div class="set-label">Sound effects</div>
-              <div class="set-sub">Soft taps, chimes and whooshes as you use Nook.</div>
+              <div class="set-sub">Soft taps, chimes and whooshes as you use NookNook.</div>
             </div>
             <label class="switch">
               <input type="checkbox" id="set-sfx"${state.settings.soundFx === '1' ? ' checked' : ''} />
@@ -2272,7 +2272,7 @@ async function openSettings(section) {
           </div>
           <div class="set-row">
             <div>
-              <div class="set-label">Open Nook on</div>
+              <div class="set-label">Open NookNook on</div>
               <div class="set-sub">Where the app lands when it starts.</div>
             </div>
             <select id="set-defaultview" class="set-select">
@@ -2307,7 +2307,7 @@ async function openSettings(section) {
           <div class="set-row">
             <div>
               <div class="set-label">Close button hides to tray</div>
-              <div class="set-sub">Nook keeps running (reminders still fire) — reopen it from the tray icon.</div>
+              <div class="set-sub">NookNook keeps running (reminders still fire) — reopen it from the tray icon.</div>
             </div>
             <label class="switch">
               <input type="checkbox" id="set-ctt"${ctt ? ' checked' : ''} />
@@ -2316,7 +2316,7 @@ async function openSettings(section) {
           </div>
           <div class="set-row">
             <div>
-              <div class="set-label">Start Nook when I log in</div>
+              <div class="set-label">Start NookNook when I log in</div>
               <div class="set-sub">Launches quietly in the background with Windows.</div>
             </div>
             <label class="switch">
@@ -2329,7 +2329,7 @@ async function openSettings(section) {
         <!-- ================= AI ================= -->
         <div class="set-page hidden" data-page="ai">
           <div class="set-row" style="display:block" id="sec-ai">
-            <div class="set-label">Nook AI — bring your own key</div>
+            <div class="set-label">NookNook AI — bring your own key</div>
             <div class="set-sub">Pick a provider, paste the key, hit <b>Save &amp; connect</b>. Works with OpenRouter, Z.ai (GLM), OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio.</div>
             <div class="prov-grid" id="prov-grid">
               ${AI_PROVIDERS.map((p) => {
@@ -2380,7 +2380,7 @@ async function openSettings(section) {
           </div>
           <div class="about-box">
             ${frogSvg}
-            <div class="ab-text"><b>Nook v0.15.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
+            <div class="ab-text"><b>NookNook v0.18.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
           </div>
         </div>
         </div>
@@ -2546,13 +2546,13 @@ async function openSettings(section) {
   root.querySelector('#set-defaultview').addEventListener('change', async (e) => {
     state.settings.defaultView = e.target.value || 'all';
     await setSetting('defaultView', state.settings.defaultView);
-    toast('Nook will open on ' + e.target.selectedOptions[0].textContent);
+    toast('NookNook will open on ' + e.target.selectedOptions[0].textContent);
   });
 
   root.querySelector('#set-ctt').addEventListener('change', async (e) => {
     state.settings.closeToTray = e.target.checked ? '1' : '0';
     await setSetting('closeToTray', state.settings.closeToTray);
-    toast(e.target.checked ? 'Nook will hide to the tray' : 'Nook will quit when closed');
+    toast(e.target.checked ? 'NookNook will hide to the tray' : 'NookNook will quit when closed');
   });
 
   root.querySelector('#set-autosave').addEventListener('change', async (e) => {
@@ -2577,7 +2577,7 @@ async function openSettings(section) {
     try {
       await call('autostart_set', { enabled: e.target.checked });
       state.settings.autostart = e.target.checked ? '1' : '0';
-      toast(e.target.checked ? 'Nook will start with Windows' : 'Nook will not start with Windows');
+      toast(e.target.checked ? 'NookNook will start with Windows' : 'NookNook will not start with Windows');
     } catch (err) {
       e.target.checked = !e.target.checked;
       toast('Could not change: ' + err.message);
@@ -2810,7 +2810,7 @@ async function openSettings(section) {
   root.querySelector('#btn-backup-import').addEventListener('click', async () => {
     const ok = await confirmModal({
       title: 'Import backup?',
-      body: 'Everything currently in Nook will be REPLACED by the backup file. This cannot be undone.',
+      body: 'Everything currently in NookNook will be REPLACED by the backup file. This cannot be undone.',
       confirmLabel: 'Choose backup file',
       danger: true
     });
@@ -5086,7 +5086,7 @@ function aiActiveReady() {
 async function aiEnsureModel() {
   if (aiActiveReady()) return true;
   openSettings('ai');
-  toast('Pick an AI provider, add your key & model first — Settings → Nook AI', { icon: 'sparkle', ms: 5000 });
+  toast('Pick an AI provider, add your key & model first — Settings → NookNook AI', { icon: 'sparkle', ms: 5000 });
   return false;
 }
 
@@ -5299,7 +5299,7 @@ function chatBubbleHtml(m, isLast = false) {
           <button class="cv-act" data-act="copy" title="Copy">${ico('copy')} Copy</button>
           <button class="cv-act" data-act="note" title="Append to the current note">${ico('pencil')} → Note</button>
         </div>` : ''}
-        <div class="cv-meta"><b>${isUser ? esc(state.userName || 'You') : 'Nook AI'}</b><span>${time}</span></div>
+        <div class="cv-meta"><b>${isUser ? esc(state.userName || 'You') : 'NookNook AI'}</b><span>${time}</span></div>
       </div>
     </div>`;
 }
@@ -5335,7 +5335,7 @@ function renderChatMessages() {
           <div class="cv-hero-orb">${frogSvg}</div>
         </div>
         <h2>Salam${who}.</h2>
-        <p>I live right here in Nook — draft ideas, summarize your notes,<br/>plan your day. Chats are saved on this PC only.</p>
+        <p>I live right here in NookNook — draft ideas, summarize your notes,<br/>plan your day. Chats are saved on this PC only.</p>
         <div class="cv-suggest">
           ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s.text)}"><span class="cv-sug-ico">${ico(s.icon)}</span><span>${esc(s.text)}</span></button>`).join('')}
         </div>
@@ -5417,7 +5417,7 @@ function aiProviderOrWarn() {
   const p = activeAiProvider();
   if (!p || !p.ready) {
     openSettings('ai');
-    toast('Add an API key & model first — Settings → Nook AI', { icon: 'sparkle', ms: 5000 });
+    toast('Add an API key & model first — Settings → NookNook AI', { icon: 'sparkle', ms: 5000 });
     return null;
   }
   return p;
@@ -5486,7 +5486,7 @@ async function sendChat() {
       <div class="cv-avatar">${frogSvg}</div>
       <div class="cv-msg-main">
         <div class="cv-bubble"><div class="cv-content"><span class="cv-typing"><i></i><i></i><i></i></span></div></div>
-        <div class="cv-meta"><b>Nook AI</b><span>thinking…</span></div>
+        <div class="cv-meta"><b>NookNook AI</b><span>thinking…</span></div>
       </div>
     </div>`);
   chatScrollStick(box, true);
@@ -6005,9 +6005,9 @@ function openGuide() {
     ['Find & Replace', 'Press <b>Ctrl+H</b> in any note — find with match counter, Enter/Shift+Enter to hop between matches, replace one or everything. Esc closes.'],
     ['Daily note', 'The <b>Today</b> button in the list header opens (or creates) today\'s dated note, tagged <b>#daily</b> — one tidy page per day.'],
     ['Tabs', 'Open as many notes as you want — each gets a tab. Drag tabs to reorder, middle-click or × closes one. Right-click a tab to close others.'],
-    ['Tasks & reminders', 'Add a task, press the ⌄ to open details: <b>due date</b>, <b>reminder</b>, <b>priority</b>, <b>repeat</b> and <b>subtasks</b>. Nook notifies you at reminder time.'],
+    ['Tasks & reminders', 'Add a task, press the ⌄ to open details: <b>due date</b>, <b>reminder</b>, <b>priority</b>, <b>repeat</b> and <b>subtasks</b>. NookNook notifies you at reminder time.'],
     ['Meeting recorder', 'Sidebar → <b>Recordings</b>. Record meetings as .wav straight to this PC — no upload, no account. Start/stop never freezes the app, even if the mic is slow. Play, rename, export or delete anytime.'],
-    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Paste your key and it saves instantly; models appear to click. The <b>Note</b> button gives the AI your current note as context. Keys stay on this PC.'],
+    ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → NookNook AI). Paste your key and it saves instantly; models appear to click. The <b>Note</b> button gives the AI your current note as context. Keys stay on this PC.'],
     ['Note tools with AI', 'The <b>AI</b> button in the toolbar can <b>continue writing</b> where you stopped, summarize the open note, extract action items straight into Tasks, or suggest a title — through the same provider you configured.'],
     ['Markdown extras', 'Preview supports tables (<code>| a | b |</code> over <code>|---|---|</code>), <code>==highlight==</code>, <code>~~strikethrough~~</code>, checklists, code blocks and [[wiki-links]].'],
     ['Export', 'The <b>Export</b> button in the toolbar exports the open note as <b>Markdown</b> or as a <b>pretty web page</b> — images embedded, opens in any browser, ready to share.'],
@@ -6019,7 +6019,7 @@ function openGuide() {
   root.innerHTML = `
     <div class="overlay">
       <div class="modal" style="width:540px">
-        <h3>${ico('book')} Nook in 2 minutes</h3>
+        <h3>${ico('book')} NookNook in 2 minutes</h3>
         <div class="guide-grid">
           ${rows.map(([h, p]) => `<div class="guide-sec"><h4>${h}</h4><p>${p}</p></div>`).join('')}
         </div>
@@ -6098,7 +6098,7 @@ async function obDismiss({ celebrate = false } = {}) {
   }, celebrate ? 620 : 420);
   applyGreeting();
   if (celebrate) {
-    toast(state.userName ? `Salam, ${state.userName} — welcome to Nook!` : 'Welcome to Nook!', { icon: 'sparkle', ms: 4500 });
+    toast(state.userName ? `Salam, ${state.userName} — welcome to NookNook!` : 'Welcome to NookNook!', { icon: 'sparkle', ms: 4500 });
   }
 }
 
@@ -6239,7 +6239,7 @@ function applyGreeting() {
 
 // ------------------------------------------------------------------ boot ----
 
-const WELCOME_CONTENT = `# Welcome to Nook
+const WELCOME_CONTENT = `# Welcome to NookNook
 
 Your cozy little corner for notes and tasks — **100% offline**, everything stays on this PC.
 
@@ -6266,7 +6266,7 @@ async function ensureWelcome() {
   const initialized = await call('get_setting', { key: 'initialized' });
   if (initialized) return;
   const note = await call('create_note', { folderId: null });
-  await call('save_note', { id: note.id, title: 'Welcome to Nook', content: WELCOME_CONTENT });
+  await call('save_note', { id: note.id, title: 'Welcome to NookNook', content: WELCOME_CONTENT });
   await call('set_setting', { key: 'initialized', value: '1' });
 }
 
@@ -6331,7 +6331,7 @@ boot().catch((err) => {
   document.body.innerHTML = `
     <div style="height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:system-ui;color:#ece7f8;background:#131a2a">
       ${frogSvg}
-      <h2 style="font-size:18px">Nook could not start</h2>
+      <h2 style="font-size:18px">NookNook could not start</h2>
       <p style="font-size:13px;color:#a99cc9;max-width:420px;text-align:center;line-height:1.6">${esc(err.message)}</p>
     </div>`;
 });

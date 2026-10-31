@@ -70,7 +70,7 @@ fn auth_headers(req: ureq::Request, api_key: &str) -> ureq::Request {
     } else {
         req.set("Authorization", &format!("Bearer {}", api_key.trim()))
     };
-    req.set("X-Title", "Nook")
+    req.set("X-Title", "NookNook")
 }
 
 /// Extracts a human-readable message from a ureq error (incl. provider body).

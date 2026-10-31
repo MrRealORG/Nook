@@ -1631,9 +1631,9 @@ async fn export_backup(state: State<'_, Db>) -> CmdResult<Option<String>> {
     };
     tauri::async_runtime::spawn_blocking(move || {
         let path = rfd::FileDialog::new()
-            .set_title("Save Nook backup")
-            .set_file_name(&format!("nook-backup-{stamp}.json"))
-            .add_filter("Nook backup (JSON)", &["json"])
+            .set_title("Save NookNook backup")
+            .set_file_name(&format!("nooknook-backup-{stamp}.json"))
+            .add_filter("NookNook backup (JSON)", &["json"])
             .save_file();
         match path {
             Some(p) => {
@@ -1652,15 +1652,15 @@ async fn import_backup(app: AppHandle, state: State<'_, Db>) -> CmdResult<Option
     // dialog + file read + parse run on a worker thread — never block the UI
     let picked = tauri::async_runtime::spawn_blocking(|| -> Result<Option<Backup>, String> {
         let path = rfd::FileDialog::new()
-            .set_title("Choose a Nook backup file")
-            .add_filter("Nook backup (JSON)", &["json"])
+            .set_title("Choose a NookNook backup file")
+            .add_filter("NookNook backup (JSON)", &["json"])
             .pick_file();
         let Some(path) = path else { return Ok(None) };
         let raw = std::fs::read_to_string(&path).map_err(es)?;
         let data: Backup = serde_json::from_str(&raw)
-            .map_err(|e| format!("Not a valid Nook backup file: {e}"))?;
+            .map_err(|e| format!("Not a valid NookNook backup file: {e}"))?;
         if data.app != "nook" {
-            return Err("This file is not a Nook backup".to_string());
+            return Err("This file is not a NookNook backup".to_string());
         }
         Ok(Some(data))
     })
@@ -2042,7 +2042,7 @@ fn spawn_reminder_engine(app: AppHandle, db_path: PathBuf) {
             let _ = app
                 .notification()
                 .builder()
-                .title("Nook — task reminder")
+                .title("NookNook — task reminder")
                 .body(&title)
                 .show();
             let _ = app.emit("reminder", serde_json::json!({ "id": id, "title": title }));
@@ -2188,8 +2188,8 @@ fn main() {
             let _ = win.set_focus();
 
             // tray icon — Show Nook / Quit
-            let show_i = MenuItem::with_id(app, "open", "Show Nook", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Quit Nook", true, None::<&str>)?;
+            let show_i = MenuItem::with_id(app, "open", "Show NookNook", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit NookNook", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
             let mut tray = TrayIconBuilder::with_id("nook-tray")
                 .menu(&menu)

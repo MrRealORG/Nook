@@ -1,8 +1,8 @@
 [package]
 name = "nook"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
-description = "Nook — a cozy little notes desk for your PC. 100% local, offline-first."
+description = "NookNook — a cozy little notes desk for your PC. 100% local, offline-first."
 authors = ["Mr Real"]
 
 [build-dependencies]
@@ -30,5 +30,5 @@ panic = "abort"
 codegen-units = 1
 
 [[bin]]
-name = "Nook"
+name = "NookNook"
 path = "src/main.rs"
