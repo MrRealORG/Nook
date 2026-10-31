@@ -50,7 +50,9 @@ test.describe.serial("Nook 1.2", () => {
     expect(await html(page, "data-theme")).toBe("light");
     expect(await html(page, "data-power")).toBe("low");
     expect(await html(page, "data-icons")).toBe("pixel");
-    // colour pixel sprites are the default icon style
+    // colour pixel sprites are the default icon style (1.3.1: the app mounts only once onboarding is closed)
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("onboarding")).toHaveCount(0);
     await expect(page.locator(".nav-px").first()).toBeVisible();
     await ctx.close();
     // fresh install, dark OS → Pixel dark
@@ -251,6 +253,12 @@ test.describe.serial("Nook 1.2", () => {
     await expect(cap).toHaveAttribute("min", "5");
     await expect(cap).toHaveAttribute("max", "50");
     await expect(cap).toHaveValue("10");
+    // 1.3.1: the background CPU limit is opt-in (off by default, slider disabled until enabled)
+    await expect(page.getByTestId("cpu-cap-value")).toHaveText("off");
+    await expect(cap).toBeDisabled();
+    await expect(perf).toContainText("Limit CPU in the background");
+    await expect(perf).not.toContainText(/hard cap/i);
+    await page.getByTestId("cpu-cap-on").check();
     await expect(page.getByTestId("cpu-cap-value")).toHaveText("10%");
     await cap.fill("25");
     await expect(page.getByTestId("cpu-cap-value")).toHaveText("25%");

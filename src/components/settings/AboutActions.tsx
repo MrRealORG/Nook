@@ -15,7 +15,7 @@ export async function debugInfoText(): Promise<string> {
       `OS: ${[sys.os, sys.osVersion, sys.arch].filter(Boolean).join(" ")}`,
       `WebView: ${sys.webview ?? navigator.userAgent}`,
       sys.logDir ? `Logs: ${sys.logDir}` : "",
-      sys.perf ? `CPU cap: ${JSON.stringify(sys.perf)}` : "",
+      sys.perf ? `Background CPU limit: ${JSON.stringify(sys.perf)}` : "",
       `Settings: ${JSON.stringify(settings)}`,
       "",
       "--- recent logs ---",

@@ -345,7 +345,7 @@ test.describe.serial("Nook 1.3", () => {
     await expect.poll(() => page.evaluate(() => document.querySelector('link[rel="icon"]')?.getAttribute("href"))).toBe("/brand/favicon-light-32.png");
     await st(page, `(s) => { s.setView("settings"); s.set({ settingsSection: "about" }); }`);
     await expect(page.getByTestId("about-icon")).toHaveAttribute("src", /nook-light-256\.webp$/);
-    await expect(page.getByTestId("about-version")).toHaveText(/1\.3\.0/);
+    await expect(page.getByTestId("about-version")).toHaveText(/1\.3\.1/);
     // the images decode and stay small
     for (const f of ["nook-dark-128.webp", "nook-light-256.webp", "favicon-dark-32.png"]) {
       const r = await page.request.get(`/brand/${f}`);

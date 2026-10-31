@@ -272,7 +272,9 @@ fn system_info(app: AppHandle) -> Value {
 fn os_version() -> String {
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd").args(["/C", "ver"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: never flash a console window from the GUI app.
+        std::process::Command::new("cmd").args(["/C", "ver"]).creation_flags(0x0800_0000).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
     }
     #[cfg(not(windows))]
     {

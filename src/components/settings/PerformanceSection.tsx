@@ -1,4 +1,4 @@
-/** Settings → Performance & widget: low-power mode, the hard CPU cap, desktop-widget tiles. */
+/** Settings → Performance & widget: low-power mode, the optional background CPU limit, desktop-widget tiles. */
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { refreshDesktopInfo, setDesktopSettings, useDesktopInfo } from "@/lib/desktop";
@@ -15,7 +15,7 @@ export function PerformanceSection() {
   useEffect(() => onPowerChange(() => setLow(isLowPower())), []);
   // the cap lives in the desktop settings; the browser build mirrors it locally so the UI works
   const [cap, setCap] = useState<number>(() => (isTauri ? info.settings.cpuCap : Number(JSON.parse(localStorage.getItem(CAP_KEY) ?? "{}").cap) || 10));
-  const [capOn, setCapOn] = useState<boolean>(() => (isTauri ? info.settings.cpuCapOn : JSON.parse(localStorage.getItem(CAP_KEY) ?? "{}").on !== false));
+  const [capOn, setCapOn] = useState<boolean>(() => (isTauri ? info.settings.cpuCapOn : JSON.parse(localStorage.getItem(CAP_KEY) ?? "{}").on === true));
   const [w, setW] = useState<WidgetCfg>(readWidgetCfg);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -36,7 +36,7 @@ export function PerformanceSection() {
       try {
         await setDesktopSettings({ cpuCap: v, cpuCapOn: on });
       } catch (e) {
-        useStore.getState().toast(`Could not apply the CPU cap: ${e}`, "close");
+        useStore.getState().toast(`Could not apply the background CPU limit: ${e}`, "close");
       }
     }
   };
@@ -60,7 +60,10 @@ export function PerformanceSection() {
         <div className="mt-3 border-t border-line pt-3">
           <label className="flex items-center gap-3 text-[13px]">
             <input type="checkbox" checked={capOn} onChange={(e) => void saveCap(cap, e.target.checked)} aria-label="Limit Nook's CPU" data-testid="cpu-cap-on" />
-            <span className="flex-1 font-medium">Hard CPU limit</span>
+            <span className="flex-1">
+              <span className="block font-medium">Limit CPU in the background <span className="text-faint">(optional)</span></span>
+              <span className="block text-[12px] text-faint">Off by default. Only applies while Nook is hidden or minimised — never while you're using it.</span>
+            </span>
             <b className="tabular-nums" data-testid="cpu-cap-value">{capOn ? `${cap}%` : "off"}</b>
           </label>
           <input
@@ -78,15 +81,15 @@ export function PerformanceSection() {
               debounce.current = setTimeout(() => void saveCap(v, capOn), 250);
             }}
             className="mt-2 w-full accent-[var(--accent)]"
-            aria-label="CPU cap percent"
+            aria-label="Background CPU limit percent"
             data-testid="cpu-cap"
           />
           <div className="flex justify-between text-[11px] text-faint"><span>5%</span><span>default 10%</span><span>50%</span></div>
           <div className="mt-2 text-[12px] text-faint">
-            Windows enforces this for Nook and its WebView2 processes together (a Job Object hard cap), as a share of the whole machine. Nook also runs at below-normal priority and in efficiency mode while hidden.
+            When on, Windows limits Nook and its WebView2 processes together to this share of the whole machine — but only while Nook is in the background. As soon as you bring Nook back, the limit lifts so nothing feels slow. Nook also runs at below-normal priority and in efficiency mode while hidden, with or without this.
             {isTauri && perf && (
               <span className="mt-1 block" data-testid="cpu-cap-status">
-                {perf.supported ? (perf.applied ? `Active · ${perf.childrenInJob} child process${perf.childrenInJob === 1 ? "" : "es"} in the job${perf.childrenAdopted ? ` (${perf.childrenAdopted} adopted)` : ""}` : `Not active${perf.error ? ` — ${perf.error}` : ""}`) : "Not supported on this OS"}
+                {perf.supported ? (perf.error ? `Not available — ${perf.error}` : !capOn || !perf.capPct ? "Off" : perf.applied ? `Limiting now (Nook is in the background) · ${perf.childrenInJob} child process${perf.childrenInJob === 1 ? "" : "es"} covered` : "On · waits until Nook is in the background") : "Not supported on this OS"}
               </span>
             )}
           </div>

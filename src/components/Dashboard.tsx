@@ -5,6 +5,7 @@ import type { IconName } from "@/components/icons";
 import { Leaderboard } from "@/components/Leaderboard";
 import { PetView } from "@/components/PetView";
 import { PHASE_TINT, PhaseCelestial, useAmbience } from "@/lib/ambience";
+import { motionAllowed } from "@/lib/power";
 import { levelOf, moodFor, stageOf } from "@/lib/pet";
 import { feedPet, patPet } from "@/lib/petActions";
 import { DAILY_REWARDS, pendingGiftDay, useStore } from "@/lib/store";
@@ -17,8 +18,13 @@ const greetByHour = () => {
 };
 
 function CountUp({ to }: { to: number }) {
-  const [v, setV] = useState(0);
+  // decorative: in low-power mode (the default) the number is shown as-is, no rAF at all
+  const [v, setV] = useState(() => (motionAllowed() ? 0 : to));
   useEffect(() => {
+    if (!motionAllowed()) {
+      setV(to);
+      return;
+    }
     let raf = 0;
     const t0 = performance.now();
     const loop = (now: number) => {

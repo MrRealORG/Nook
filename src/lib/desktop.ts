@@ -17,7 +17,7 @@ export type DesktopSettings = {
   closeToTray: boolean;
   glass: "off" | "mica" | "acrylic";
   autoUpdate: boolean;
-  /** 1.2: hard CPU cap (Windows Job Object), % of the machine, 5–50 */
+  /** optional background-only CPU limit (Windows Job Object), % of the machine, 5–50; off by default since 1.3.1 */
   cpuCap: number;
   cpuCapOn: boolean;
   widgetOnTop: boolean;
@@ -43,7 +43,7 @@ export type DesktopInfo = {
   update: { available: boolean; version?: string; notes?: string } | null;
 };
 
-const DEFAULTS: DesktopSettings = { mcpEnabled: true, mcpPort: 3000, lanShare: false, widget: false, autostart: false, hotkeys: true, closeToTray: true, glass: "off", autoUpdate: false, cpuCap: 10, cpuCapOn: true, widgetOnTop: false };
+const DEFAULTS: DesktopSettings = { mcpEnabled: true, mcpPort: 3000, lanShare: false, widget: false, autostart: false, hotkeys: true, closeToTray: true, glass: "off", autoUpdate: false, cpuCap: 10, cpuCapOn: false, widgetOnTop: false };
 
 export const useDesktopInfo = create<DesktopInfo>(() => ({
   ready: false,

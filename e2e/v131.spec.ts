@@ -399,7 +399,8 @@ test.describe.serial("Nook 1.3.1", () => {
     for (const sec of SECRETS) expect(dbg).not.toContain(sec);
     // pure builder: a huge body is trimmed under the limit
     const trimmed = await page.evaluate(async () => {
-      const m = await import("/src/lib/bugreport.ts").catch(() => null);
+      const mod = "/src/lib/bugreport.ts";
+      const m: any = await import(/* @vite-ignore */ mod).catch(() => null);
       return m ? m.githubIssueUrl("t", "y".repeat(50_000)).length : -1;
     });
     if (trimmed !== -1) expect(trimmed).toBeLessThanOrEqual(7800);
