@@ -1650,6 +1650,27 @@ async fn export_note(_app: AppHandle, state: State<'_, Db>, id: String) -> CmdRe
     .map_err(|e| es(e))?
 }
 
+#[tauri::command]
+async fn export_note_html(title: String, html: String) -> CmdResult<Option<String>> {
+    let file_name = format!("{}.html", sanitize_filename(&title));
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = rfd::FileDialog::new()
+            .set_title("Export note as web page")
+            .set_file_name(&file_name)
+            .add_filter("Web page", &["html"])
+            .save_file();
+        match path {
+            Some(p) => {
+                std::fs::write(&p, html.as_bytes()).map_err(es)?;
+                Ok(Some(p.to_string_lossy().into_owned()))
+            }
+            None => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| es(e))?
+}
+
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -2094,6 +2115,7 @@ fn main() {
             ai::ai_test,
             data_dir,
             export_note,
+            export_note_html,
             open_url,
             reveal_data_dir
         ])

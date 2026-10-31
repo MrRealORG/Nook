@@ -128,6 +128,7 @@ const state = {
   openNote: null,       // full note object being edited
   preview: false,
   query: '',
+  userName: '',         // v0.10 — set during onboarding, used for greetings
   settings: {
     theme: 'midnight', fontSize: '15', editorFont: 'sans', editorWidth: 'normal',
     closeToTray: '0', autosave: '1', spellcheck: '0', density: 'cozy',
@@ -268,6 +269,71 @@ function setSaveState(mode, text) {
 function closeModal() {
   const root = $('#overlay-root');
   root.innerHTML = '';
+}
+
+// ------------------------------------------------------------------ zen mode (v0.10) ----
+// Ctrl+Shift+F / Ctrl+\ / the ⊞ toolbar button — everything hides but your words.
+function toggleZen() {
+  const on = document.body.classList.toggle('zen');
+  let pill = $('#zen-pill');
+  if (on) {
+    if (!pill) {
+      pill = document.createElement('button');
+      pill.id = 'zen-pill';
+      pill.type = 'button';
+      pill.innerHTML = `${ico('zen')} Zen — Esc to exit`;
+      pill.addEventListener('click', toggleZen);
+      document.body.appendChild(pill);
+    }
+    pill.classList.remove('hidden');
+    toast('Zen mode — nothing between you and the page', { icon: 'zen' });
+  } else if (pill) {
+    pill.classList.add('hidden');
+  }
+}
+
+// ------------------------------------------------------------------ confetti (v0.10) ----
+// A tiny burst of paper squares wherever a little win just happened:
+// a task ticked done, a Board card sailed into Done, onboarding finished.
+const CONFETTI_COLORS = ['#8fe3a0', '#b9a8ff', '#f5c26b', '#ff8fab', '#7dd3fc', '#a9efb4', '#ffd6a5'];
+function confettiBurst(x, y, n = 18) {
+  for (let i = 0; i < n; i++) {
+    const p = document.createElement('i');
+    p.className = 'confetti';
+    const size = 5 + Math.random() * 5;
+    p.style.cssText = `left:${x}px;top:${y}px;width:${size}px;height:${size * (Math.random() > 0.5 ? 1 : 0.45)}px;background:${CONFETTI_COLORS[i % CONFETTI_COLORS.length]}`;
+    document.body.appendChild(p);
+    const ang = Math.random() * Math.PI * 2;
+    const v = 46 + Math.random() * 78;
+    const dx = Math.cos(ang) * v;
+    const dy = Math.sin(ang) * v - 70;
+    p.animate(
+      [
+        { transform: 'translate(-50%,-50%) rotate(0deg)', opacity: 1 },
+        { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy + 150}px)) rotate(${360 + Math.random() * 420}deg)`, opacity: 0 }
+      ],
+      { duration: 750 + Math.random() * 550, easing: 'cubic-bezier(.15,.6,.4,1)' }
+    ).onfinish = () => p.remove();
+    setTimeout(() => p.remove(), 1600); // belt & braces
+  }
+}
+
+function confettiAtEl(el) {
+  try {
+    const r = el.getBoundingClientRect();
+    confettiBurst(r.left + r.width / 2, r.top + r.height / 2, 16);
+  } catch { /* never let confetti break anything */ }
+}
+
+// ------------------------------------------------------------------ greetings (v0.10) ----
+function greetingWord() {
+  const h = new Date().getHours();
+  return h < 5 ? 'Late night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 21 ? 'Good evening' : 'Good night';
+}
+
+// v0.10 — global settings writer (openSettings has its own local one)
+async function setSetting(key, value) {
+  await call('set_setting', { key, value });
 }
 
 function confirmModal({ title, body, confirmLabel = 'Confirm', danger = false }) {
@@ -760,10 +826,12 @@ function renderEditorToolbar() {
   $('#btn-image').innerHTML = ico('image');
   $('#btn-preview').innerHTML = ico('eye');
   $('#btn-preview').classList.toggle('on', state.preview);
+  $('#btn-zen').innerHTML = ico('zen');
+  $('#btn-zen').classList.toggle('on', document.body.classList.contains('zen'));
   $('#btn-export').innerHTML = ico('export');
   $('#btn-trash').innerHTML = ico('trash');
 
-  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-ai', '#btn-image', '#btn-preview', '#btn-export', '#btn-trash'].forEach((s) => {
+  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-ai', '#btn-image', '#btn-preview', '#btn-zen', '#btn-export', '#btn-trash'].forEach((s) => {
     $(s).style.display = editable ? '' : 'none';
   });
   $('.ed-folder-wrap').style.display = editable ? '' : 'none';
@@ -1180,6 +1248,7 @@ function wireTaskItem(item) {
         if (res && !task.done && task.repeat !== 'none' && res.done === false) {
           toast(`Repeats ${task.repeat} — next: ${dueLabel(res.dueAt) || 'scheduled'}`, { icon: 'repeat' });
         }
+        if (res && res.done && !task.done) confettiAtEl(chk); // v0.10 — small win, small party
         renderTasks();
         refreshStatsOnly();
       } catch (err) {
@@ -1719,7 +1788,10 @@ async function openDailyNote() {
   }
   let folderId = state.view.type === 'folder' ? state.view.folderId : state.settings.defaultFolder || null;
   const note = await call('create_note', { folderId });
-  const content = `# ${title}\n\n## Good things\n- \n\n## To do\n- [ ] \n\n## Notes\n`;
+  const h = d.getHours();
+  const part = h < 5 ? 'quiet night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 21 ? 'evening' : 'night';
+  const who = state.userName ? `, ${state.userName}` : '';
+  const content = `# ${title}\n\nGood ${part}${who} — here's today's page.\n\n## Good things\n- \n\n## To do\n- [ ] \n\n## Notes\n`;
   await call('save_note', { id: note.id, title, content, tags: '["daily"]' });
   note.title = title;
   note.content = content;
@@ -1865,6 +1937,36 @@ async function exportCurrent() {
   } catch (err) {
     if (!/cancel/i.test(err.message)) toast('Export failed: ' + err.message);
   }
+}
+
+// v0.10 — self-contained web page export: images embedded, pretty styles,
+// opens in any browser. Built from the same markdown the preview uses.
+async function exportCurrentHtml() {
+  const n = state.openNote;
+  if (!n) return;
+  try {
+    // make sure every nookimg:// id in the note is in the async cache first,
+    // so the rendered HTML carries real data: URLs instead of placeholders
+    const ids = [...new Set([...String(n.content || '').matchAll(/nookimg:\/\/([A-Za-z0-9_-]+)/g)].map((m) => m[1]))];
+    if (IS_TAURI) await Promise.all(ids.map((id) => loadImageData(id)));
+    const body = renderMarkdown(n.content || '');
+    const title = esc(n.title || 'Untitled note');
+    const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1"/>\n<title>${title}</title>\n<style>\n  :root{color-scheme:light dark}\n  body{margin:0;background:#101418;color:#e8e6e3;font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}\n  article{max-width:760px;margin:0 auto;padding:48px 24px 80px}\n  h1,h2,h3,h4{line-height:1.25;color:#f4f2ee;margin:1.4em 0 .5em}\n  h1{font-size:2em;border-bottom:1px solid #2c333a;padding-bottom:.3em}\n  a{color:#7ec9ff}\n  blockquote{margin:1em 0;padding:.6em 1.2em;border-left:3px solid #8fe3a0;background:#1a2027;border-radius:0 8px 8px 0;color:#c9d4cd}\n  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#1c232b;padding:.15em .4em;border-radius:5px}\n  pre{background:#161c23;padding:16px 18px;border-radius:12px;overflow:auto;border:1px solid #26303a}\n  pre code{background:none;padding:0}\n  mark{background:#5a4a18;color:#ffd98a;padding:0 .2em;border-radius:3px}\n  del{color:#8b949e}\n  hr{border:none;border-top:1px solid #2c333a;margin:2em 0}\n  table{border-collapse:collapse;margin:1em 0;width:100%}\n  th,td{border:1px solid #2c333a;padding:8px 12px;text-align:left}\n  th{background:#1a2027}\n  .md-tablewrap{overflow-x:auto}\n  img{max-width:100%;border-radius:10px}\n  li.md-task{list-style:none;margin-left:-1.4em}\n  .md-box{display:inline-flex;width:15px;height:15px;border:1.5px solid #6b7684;border-radius:4px;margin-right:.5em;vertical-align:-2px;align-items:center;justify-content:center}\n  li.md-task.on .md-box{background:#8fe3a0;border-color:#8fe3a0}\n  li.md-task.on .md-box svg{width:11px;height:11px;color:#0d3015}\n  footer{max-width:760px;margin:0 auto;padding:0 24px 48px;color:#69737e;font-size:13px}\n  @media (prefers-color-scheme:light){body{background:#fbfaf8;color:#26282b}h1,h2,h3,h4{color:#1c1e21}a{color:#0b62c4}blockquote{background:#f2f4f1;color:#4a5349}code{background:#eef0f3}pre{background:#f3f5f7;border-color:#e1e4e8}mark{background:#ffe9a8;color:#5c4708}hr,th,td{border-color:#e1e4e8}th{background:#f2f4f1}}\n</style>\n</head>\n<body>\n<article>${body}</article>\n<footer>Exported from Nook — the cozy notes app</footer>\n</body>\n</html>`;
+    const path = await call('export_note_html', { title: n.title || 'Untitled note', html });
+    if (path) toast(`Web page saved — ${path.split(/[\\/]/).pop()}`, { icon: 'export' });
+  } catch (err) {
+    if (!/cancel/i.test(err.message)) toast('Export failed: ' + err.message);
+  }
+}
+
+// the export button offers both flavours
+function exportMenu(anchor) {
+  const r = anchor.getBoundingClientRect();
+  showMenu(r.right, r.bottom + 6, [
+    { header: true, label: 'Export this note as…' },
+    { label: 'Markdown (.md)', icon: 'download', fn: exportCurrent },
+    { label: 'Web page (.html)', icon: 'external', fn: exportCurrentHtml }
+  ]);
 }
 
 // ------------------------------------------------------------------ folders ----
@@ -2060,6 +2162,20 @@ async function openSettings(section) {
 
         <!-- ================= GENERAL ================= -->
         <div class="set-page hidden" data-page="general">
+          <div class="set-row">
+            <div>
+              <div class="set-label">Your name</div>
+              <div class="set-sub">Nook greets you by name — sidebar, AI chat, daily notes.</div>
+            </div>
+            <input type="text" id="set-username" class="set-text" value="${esc(state.userName)}" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" style="width:180px" />
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Welcome screen</div>
+              <div class="set-sub">Miss the clouds? Watch the get-started again.</div>
+            </div>
+            <button class="btn ghost small" id="set-replay">Replay welcome</button>
+          </div>
           <div class="set-row">
             <div>
               <div class="set-label">Zoom</div>
@@ -2276,6 +2392,18 @@ async function openSettings(section) {
       applySettings();
       toast(`Zoom ${b.dataset.v}%`);
     });
+  });
+
+  root.querySelector('#set-username').addEventListener('change', async (e) => {
+    state.userName = e.target.value.trim();
+    await setSetting('userName', state.userName);
+    applyGreeting();
+    toast(state.userName ? `Nice to meet you, ${state.userName}` : 'Name cleared');
+  });
+
+  root.querySelector('#set-replay').addEventListener('click', () => {
+    closeModal();
+    obShow();
   });
 
   root.querySelector('#set-trashdays').addEventListener('change', async (e) => {
@@ -2579,6 +2707,7 @@ function openShortcuts() {
     ['Find & replace', 'Ctrl + H'],
     ['Bold / Italic', 'Ctrl + B / I'],
     ['Duplicate note', 'Ctrl + D'],
+    ['Zen mode (nothing but your words)', 'Ctrl + Shift + F'],
     ['Open settings', 'Ctrl + ,'],
     ['This list', 'Ctrl + /'],
     ['Hide sidebar (focus mode)', 'Ctrl + \\'],
@@ -2621,6 +2750,8 @@ async function loadSettings() {
   state.settings.defaultView = (await call('get_setting', { key: 'defaultView' })) || 'all';
   state.settings.zoom = (await call('get_setting', { key: 'zoom' })) || '100';
   state.settings.trashDays = (await call('get_setting', { key: 'trashDays' })) || '0';
+  // v0.10 — the user's name from onboarding, used for greetings
+  state.userName = ((await call('get_setting', { key: 'userName' })) || '').trim();
   // AI providers (JSON blob; API keys stay in the local DB, never in backups)
   let ai = null;
   try {
@@ -2683,8 +2814,10 @@ function wireShortcuts() {
     const ctrl = e.ctrlKey || e.metaKey;
     if (!ctrl) {
       if (e.key === 'Escape') {
+        if ($('#onboarding') && !$('#onboarding').classList.contains('hidden')) return; // onboarding handles its own keys
         if (mentionState.open) { closeMention(); return; }
         if (slashState.open) { closeSlash(); return; }
+        if (document.body.classList.contains('zen')) { toggleZen(); return; }
         if ($('#menu-root').innerHTML) { closeMenu(); return; }
         if ($('#overlay-root').innerHTML) closeModal();
         return;
@@ -2698,6 +2831,7 @@ function wireShortcuts() {
         break;
       case 'f':
         e.preventDefault();
+        if (e.shiftKey) { toggleZen(); break; } // Ctrl+Shift+F = zen (v0.10)
         $('#search-input').focus();
         $('#search-input').select();
         break;
@@ -2743,7 +2877,7 @@ function wireShortcuts() {
         break;
       case '\\':
         e.preventDefault();
-        document.body.classList.toggle('zen');
+        toggleZen();
         break;
       default:
         break;
@@ -2846,7 +2980,11 @@ function wireEditor() {
   $('#btn-trash').addEventListener('click', trashCurrent);
   $('#btn-restore').addEventListener('click', restoreCurrent);
   $('#btn-purge').addEventListener('click', purgeCurrent);
-  $('#btn-export').addEventListener('click', exportCurrent);
+  $('#btn-export').addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportMenu(e.currentTarget);
+  });
+  $('#btn-zen').addEventListener('click', toggleZen);
   $('#btn-preview').addEventListener('click', () => {
     if (state.preview) {
       state.preview = false;
@@ -3183,15 +3321,34 @@ const SLASH_COMMANDS = [
   { name: 'Divider', hint: 'Visual separator', icon: '—', kind: 'divider' },
   { name: 'Timestamp', hint: 'Insert current date & time', icon: 'clock', kind: 'timestamp' },
   { name: 'Image', hint: 'Embed a picture from this PC', icon: 'image', kind: 'image' },
-  { name: 'Mention note', hint: 'Link another note with [[…]]', icon: 'mention', kind: 'mention' }
+  { name: 'Mention note', hint: 'Link another note with [[…]]', icon: 'mention', kind: 'mention' },
+  { name: 'Template · Daily journal', hint: 'Gratitude, wins, worries, to-dos', icon: 'date', kind: 'tplJournal' },
+  { name: 'Template · Meeting notes', hint: 'Agenda, notes, action items', icon: 'book', kind: 'tplMeeting' },
+  { name: 'Template · Weekly review', hint: 'Wins, lessons, next week', icon: 'clock', kind: 'tplWeek' }
 ];
+
+// v0.10 — ready-made page skeletons, one /command away
+const NOTE_TEMPLATES = {
+  tplJournal: () => {
+    const d = new Date().toLocaleDateString(undefined, { dateStyle: 'full' });
+    return `## 🌤 ${d}\n\n### Grateful for\n- \n\n### Wins of today\n- \n\n### On my mind\n- \n\n### To do\n- [ ] `;
+  },
+  tplMeeting: () => {
+    const d = new Date().toLocaleDateString(undefined, { dateStyle: 'medium' });
+    return `## 📌 Meeting — ${d}\n\n**With:**  \n**Agenda:**\n\n### Notes\n- \n\n### Decisions\n- \n\n### Action items\n- [ ] `;
+  },
+  tplWeek: () => {
+    const d = new Date().toLocaleDateString(undefined, { dateStyle: 'medium' });
+    return `## 🗓 Weekly review — ${d}\n\n### Wins\n- \n\n### Lessons\n- \n\n### What to drop\n- \n\n### Focus next week\n- [ ] `;
+  }
+};
 
 let slashState = { open: false, at: -1, query: '', sel: 0 };
 
 function slashMatches() {
   const q = slashState.query.toLowerCase();
   return SLASH_COMMANDS.filter(
-    (c) => !q || c.name.toLowerCase().includes(q) || c.kind.includes(q)
+    (c) => !q || c.name.toLowerCase().includes(q) || c.kind.includes(q) || (c.hint || '').toLowerCase().includes(q)
   );
 }
 
@@ -3247,13 +3404,16 @@ function renderSlash(ta) {
     return;
   }
   el.innerHTML = matches
-    .map(
-      (c, i) => `
+    .map((c, i) => {
+      const sepRow = c.kind.startsWith('tpl') && !matches.slice(0, i).some((m) => m.kind.startsWith('tpl'))
+        ? '<div class="slash-sep">Templates</div>'
+        : '';
+      return `${sepRow}
       <button class="slash-item${i === slashState.sel ? ' sel' : ''}" data-si="${i}">
         <span class="s-ico">${c.icon.startsWith('<') || c.icon.length <= 2 ? esc(c.icon) : ico(c.icon)}</span>
         <span><span class="s-name">${esc(c.name)}</span><br/><span class="s-hint">${esc(c.hint)}</span></span>
-      </button>`
-    )
+      </button>`;
+    })
     .join('');
   const coords = caretCoords(ta, slashState.at);
   const bodyRect = $('#ed-body').getBoundingClientRect();
@@ -3272,16 +3432,28 @@ function applySlash(idx, ta) {
   const c = slashMatches()[idx];
   if (!c) return closeSlash();
   const v = ta.value;
-  const removeLen = slashState.query.length + 1; // "/query"
-  const before = v.slice(0, slashState.at - removeLen + 1);
-  const after = v.slice(slashState.at + 1);
+  // v0.10 FIX: slashState.at is the anchor — the exact index of "/".
+  // The old math drifted by query.length, so filtering more than one
+  // character closed the menu and applying left "h1"-style residue behind.
+  const anchor = slashState.at;
+  const tokenLen = slashState.query.length + 1; // "/query"
+  const before = v.slice(0, anchor);
+  const after = v.slice(anchor + tokenLen);
   ta.value = before + after;
-  const caret = slashState.at - removeLen + 1;
-  ta.setSelectionRange(caret, caret);
+  ta.setSelectionRange(anchor, anchor);
   ta.dispatchEvent(new Event('input', { bubbles: true }));
   closeSlash();
   ta.focus();
-  if (c.kind === 'codeblock' || c.kind === 'divider' || c.kind === 'timestamp') {
+  if (c.kind.startsWith('tpl')) {
+    // v0.10 — templates insert at the caret like any other block
+    const v2 = ta.value;
+    const s2 = ta.selectionStart;
+    const chunk = NOTE_TEMPLATES[c.kind]() + '\n';
+    ta.value = v2.slice(0, s2) + chunk + v2.slice(s2);
+    ta.setSelectionRange(s2 + chunk.length, s2 + chunk.length);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    toast('Template added — make it yours', { icon: 'pencil' });
+  } else if (c.kind === 'codeblock' || c.kind === 'divider' || c.kind === 'timestamp') {
     // insert at caret instead of line-prefix
     const v2 = ta.value;
     const s2 = ta.selectionStart;
@@ -3304,8 +3476,8 @@ function wireSlash(ta) {
     if (!slashState.open) return;
     const pos = ta.selectionStart;
     const v = ta.value;
-    const start = slashState.at - slashState.query.length; // position of "/"
-    if (pos < start || v[start] !== '/') {
+    const start = slashState.at; // v0.10 FIX: fixed anchor — index of "/"
+    if (pos <= start || v[start] !== '/') {
       closeSlash();
       return;
     }
@@ -3555,7 +3727,8 @@ function openMentionPicker(ta) {
 function applyMention(idx, ta, customTitle) {
   const matches = mentionMatches();
   const pick = customTitle || (matches[idx] ? (matches[idx].title.trim() || 'Untitled note') : null);
-  const start = mentionState.at - mentionState.query.length; // position of "@"
+  // v0.10 FIX: mentionState.at is the fixed index of "@" (same anchor fix as the slash menu)
+  const start = mentionState.at;
   const end = mentionState.at + mentionState.query.length + 1;
   const v = ta.value;
   const linked = `[[${pick || mentionState.query || 'Untitled note'}]]`;
@@ -3572,8 +3745,8 @@ function wireMention(ta) {
     if (!mentionState.open) return;
     const pos = ta.selectionStart;
     const v = ta.value;
-    const start = mentionState.at - mentionState.query.length; // "@"
-    if (pos < start || v[start] !== '@') {
+    const start = mentionState.at; // v0.10 FIX: fixed anchor — index of "@"
+    if (pos <= start || v[start] !== '@') {
       closeMention();
       return;
     }
@@ -3838,7 +4011,11 @@ async function boardDrop(status, insertBeforeTid) {
     );
     refreshStatsOnly();
     renderSidebar();
-    if (oldStatus !== status && status === 2) toast('Card done — nice!', { icon: 'checkSq' });
+    if (oldStatus !== status && status === 2) {
+      toast('Card done — nice!', { icon: 'checkSq' });
+      const card = $(`#bvc-cards-2 [data-tid="${t.id}"]`);
+      if (card) confettiAtEl(card);
+    }
   } catch (err) {
     toast('Could not move card: ' + err.message);
   }
@@ -4288,59 +4465,110 @@ function openAiMenu() {
 }
 
 // ==================================================================
-// v0.7 — AI CHAT (streaming, history saved locally)
+// v0.7 — AI CHAT · redesigned in v0.10 (messenger-style bubbles,
+// timestamps, smart scroll, code copy buttons, personal greeting)
 // ==================================================================
+
+function chatScrollStick(box, force = false) {
+  // follow the stream only while the user is already near the bottom —
+  // if they scrolled up to re-read, don't yank the scroll out of their hand
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 130;
+  if (nearBottom || force) box.scrollTop = box.scrollHeight;
+}
+
+function fmtChatTime(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
 
 function updateChatStatus() {
   const el = $('#cv-status');
-  if (!el) return;
+  const prov = $('#cv-prov');
   const p = activeAiProvider();
+  if (prov) {
+    if (p && p.ready) {
+      prov.classList.remove('hidden');
+      prov.innerHTML = `${ico('sparkle')} <b>${esc(p.meta ? p.meta.name : 'AI')}</b><span class="cv-prov-model">${esc(p.model)}</span>`;
+    } else {
+      prov.classList.add('hidden');
+    }
+  }
+  if (!el) return;
   if (!p || !p.ready) {
     el.innerHTML = `<span class="cv-pill warn">${ico('sparkle')} AI not set up yet — <button class="linklike" id="cv-goset">connect your key in Settings</button></span>`;
   } else {
-    el.innerHTML = `<span class="cv-pill ok">${ico('checkSq')} ${esc(p.meta ? p.meta.name : 'AI')} · <span class="cv-model">${esc(p.model)}</span></span><span class="cv-pill dim">keys stay on this PC</span>`;
+    el.innerHTML = `<span class="cv-pill dim">keys stay on this PC · everything is local</span>`;
   }
   const go = el.querySelector('#cv-goset');
   if (go) go.addEventListener('click', () => openSettings('ai'));
 }
 
 const CHAT_SUGGESTIONS = [
-  'Brainstorm 10 ideas for my next project',
-  'Plan my day in 3 priority blocks',
-  'Explain a hard topic simply',
-  'Write a short email for me'
+  { icon: '💡', text: 'Brainstorm 10 ideas for my next project' },
+  { icon: '🗓', text: 'Plan my day in 3 priority blocks' },
+  { icon: '🧠', text: 'Explain a hard topic simply' },
+  { icon: '✉️', text: 'Write a short email for me' },
+  { icon: '📝', text: 'Summarize the note I have open' },
+  { icon: '🎯', text: 'Turn my notes into action items' }
 ];
+
+function userAvatarHtml() {
+  const letter = (state.userName || 'You').trim().charAt(0).toUpperCase() || 'Y';
+  return `<span class="cv-user-ava">${esc(letter)}</span>`;
+}
 
 function chatBubbleHtml(m) {
   const isUser = m.role === 'user';
   const body = isUser
     ? esc(m.content).replace(/\n/g, '<br/>')
     : renderMarkdown(m.content);
+  const time = fmtChatTime(m.createdAt);
   return `
     <div class="cv-msg${isUser ? ' user' : ' bot'}" data-mid="${esc(m.id || '')}">
-      <div class="cv-avatar">${isUser ? '🧑' : frogSvg}</div>
-      <div class="cv-bubble">
-        <div class="cv-content">${body}</div>
+      <div class="cv-avatar">${isUser ? userAvatarHtml() : frogSvg}</div>
+      <div class="cv-msg-main">
+        <div class="cv-bubble"><div class="cv-content">${body}</div></div>
         ${!isUser && m.id ? `
         <div class="cv-msg-actions">
           <button class="cv-act" data-act="copy" title="Copy">${ico('copy')} Copy</button>
           <button class="cv-act" data-act="note" title="Append to the current note">${ico('pencil')} → Note</button>
         </div>` : ''}
+        <div class="cv-meta"><b>${isUser ? esc(state.userName || 'You') : 'Nook AI'}</b><span>${time}</span></div>
       </div>
     </div>`;
+}
+
+// v0.10 — every ```code block``` in chat gets a one-click Copy button
+function wireChatCodeCopy(scope) {
+  (scope || $('#cv-messages')).querySelectorAll('.cv-content pre').forEach((pre) => {
+    if (pre.querySelector('.pre-copy')) return;
+    const btn = document.createElement('button');
+    btn.className = 'pre-copy';
+    btn.type = 'button';
+    btn.innerHTML = `${ico('copy')} Copy`;
+    btn.addEventListener('click', () => {
+      const code = pre.querySelector('code');
+      navigator.clipboard.writeText(code ? code.textContent : pre.textContent)
+        .then(() => { btn.classList.add('ok'); btn.innerHTML = `${ico('check')} Copied`; setTimeout(() => { btn.classList.remove('ok'); btn.innerHTML = `${ico('copy')} Copy`; }, 1400); })
+        .catch(() => toast('Could not copy'));
+    });
+    pre.appendChild(btn);
+  });
 }
 
 function renderChatMessages() {
   const box = $('#cv-messages');
   if (!box) return;
   if (!state.chatMsgs.length) {
+    const who = state.userName ? `, <b class="cv-greet-name">${esc(state.userName)}</b>` : '';
     box.innerHTML = `
       <div class="cv-empty">
-        ${frogSvg}
-        <div><b>Ask me anything</b></div>
-        <div>Draft ideas, summarize your notes, plan your day.<br/>Chats are saved on this PC only.</div>
+        <div class="cv-empty-frog">${frogSvg}</div>
+        <h2>Salam${who}!</h2>
+        <p>I live right here in Nook — draft ideas, summarize your notes,<br/>plan your day. Chats are saved on this PC only.</p>
         <div class="cv-suggest">
-          ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s)}">${esc(s)}</button>`).join('')}
+          ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s.text)}"><span class="cv-sug-ico">${s.icon}</span><span>${esc(s.text)}</span></button>`).join('')}
         </div>
       </div>`;
     box.querySelectorAll('.cv-sug').forEach((b) => {
@@ -4355,7 +4583,8 @@ function renderChatMessages() {
   }
   box.innerHTML = state.chatMsgs.map(chatBubbleHtml).join('');
   wireChatMsgActions();
-  box.scrollTop = box.scrollHeight;
+  wireChatCodeCopy(box);
+  chatScrollStick(box, true);
 }
 
 function wireChatMsgActions() {
@@ -4485,9 +4714,12 @@ async function sendChat() {
   box.insertAdjacentHTML('beforeend', `
     <div class="cv-msg bot streaming" id="cv-streaming">
       <div class="cv-avatar">${frogSvg}</div>
-      <div class="cv-bubble"><div class="cv-content"><span class="cv-typing"><i></i><i></i><i></i></span></div></div>
+      <div class="cv-msg-main">
+        <div class="cv-bubble"><div class="cv-content"><span class="cv-typing"><i></i><i></i><i></i></span></div></div>
+        <div class="cv-meta"><b>Nook AI</b><span>thinking…</span></div>
+      </div>
     </div>`);
-  box.scrollTop = box.scrollHeight;
+  chatScrollStick(box, true);
   updateChatComposer();
 
   if (!IS_TAURI) {
@@ -4498,6 +4730,7 @@ async function sendChat() {
       state.aiStreamText += (state.aiStreamText ? ' ' : '') + w;
       const el = $('#cv-streaming .cv-content');
       if (el) el.innerHTML = renderMarkdown(state.aiStreamText) + '<span class="cv-cursor"></span>';
+      chatScrollStick($('#cv-messages'));
     }
     finishChatStream();
     return;
@@ -4539,8 +4772,7 @@ function handleAiEvent(p) {
     const el = $('#cv-streaming .cv-content');
     if (el) {
       el.innerHTML = renderMarkdown(state.aiStreamText) + '<span class="cv-cursor"></span>';
-      const box = $('#cv-messages');
-      box.scrollTop = box.scrollHeight;
+      chatScrollStick($('#cv-messages'));
     }
     return;
   }
@@ -4563,6 +4795,10 @@ async function finishChatStream() {
   state.aiStreamText = '';
   renderChatMessages();
   updateChatComposer();
+  if (text) {
+    // browser-preview mock streams word by word — keep the follow-scroll alive
+    chatScrollStick($('#cv-messages'), true);
+  }
 }
 
 async function stopChatStream() {
@@ -4918,8 +5154,8 @@ function openQuickSwitcher() {
 
 function openGuide() {
   const rows = [
-    ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> jump to any note · everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it.'],
-    ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, images and more. Filter by typing.'],
+    ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> jump to any note · everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it. <b>Ctrl+Shift+F</b> is Zen mode — everything hides but your words.'],
+    ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, images and more. Filter by typing. At the bottom you\'ll find <b>Templates</b> — daily journal, meeting notes and weekly review, one click each.'],
     ['Images in notes', 'Paste an image straight into the editor (<b>Ctrl+V</b>), drag an image file onto the page, or use the 🖼️ button / <b>/image</b>. Images live inside your local database, render in preview, and click to zoom.'],
     ['Mention notes', 'Type <b>@</b> anywhere in a note to link another note — it becomes a [[wiki-link]]. Click one in preview to jump there. Below the editor you\'ll see <b>Linked from</b> — which notes point here.'],
     ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order, click a card to edit details in Tasks. Each column has its own + button. Card order sticks after restart.'],
@@ -4932,6 +5168,7 @@ function openGuide() {
     ['AI chat & your own keys', 'Sidebar → <b>AI Chat</b>. Bring your own API key — OpenRouter, <b>Z.ai (GLM)</b>, OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any custom endpoint (Settings → Nook AI). Paste your key and it saves instantly; models appear to click. The 📎 button gives the AI your current note as context. Keys stay on this PC.'],
     ['Note tools with AI', 'The ✨ button can <b>continue writing</b> where you stopped, summarize the open note, extract action items straight into Tasks, or suggest a title — through the same provider you configured.'],
     ['Markdown extras', 'Preview supports tables (<code>| a | b |</code> over <code>|---|---|</code>), <code>==highlight==</code>, <code>~~strikethrough~~</code>, checklists, code blocks and [[wiki-links]].'],
+    ['Export', 'The ⬆️ button in the toolbar exports the open note as <b>Markdown</b> or as a <b>pretty web page</b> — images embedded, opens in any browser, ready to share.'],
     ['Themes', 'Settings → Look — <b>24 looks</b>, dark and light, grouped. Plus zoom, editor size/font/width/line-spacing, note density, default folder, opening view, autosave, spellcheck, trash auto-cleanup and start-with-Windows.'],
     ['Backup', 'Settings → Backup — export everything to a file and import it anywhere. Your images come along; API keys never do.'],
     ['Shortcuts', 'Press <b>Ctrl+/</b> anytime for the full list.']
@@ -4955,6 +5192,116 @@ function openGuide() {
   });
 }
 
+// ------------------------------------------------------------------
+// v0.10 — ONBOARDING: dreamy cloud sky, your name, your theme
+// ------------------------------------------------------------------
+
+let obStep = 0;
+
+function obShow() {
+  const ob = $('#onboarding');
+  if (!ob) return;
+  ob.classList.remove('hidden');
+  document.body.classList.add('ob-lock');
+  const grid = $('#ob-themes');
+  grid.innerHTML = THEMES.map((t) => `
+    <button class="ob-theme${state.settings.theme === t.id ? ' on' : ''}" data-t="${t.id}" title="${t.name}">
+      <span class="ob-theme-dots"><i style="background:${t.dots[0]}"></i><i style="background:${t.dots[1]}"></i></span>
+      <span>${t.name}</span>
+    </button>`).join('');
+  grid.querySelectorAll('.ob-theme').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.settings.theme = b.dataset.t;
+      setSetting('theme', b.dataset.t);
+      applySettings();
+      grid.querySelectorAll('.ob-theme').forEach((x) => x.classList.toggle('on', x === b));
+    });
+  });
+  if (state.userName) $('#ob-name').value = state.userName;
+  obGoto(0);
+}
+
+function obGoto(i) {
+  obStep = i;
+  const ob = $('#onboarding');
+  ob.querySelectorAll('.ob-step').forEach((s) => s.classList.toggle('on', Number(s.dataset.step) === i));
+  ob.querySelectorAll('.ob-progress i').forEach((d, j) => d.classList.toggle('on', j <= i));
+  $('#ob-skip').classList.toggle('hidden', i === 3);
+  if (i === 1) setTimeout(() => $('#ob-name').focus(), 260);
+  if (i === 3) {
+    $('#ob-done-title').textContent = state.userName ? `You're all set, ${state.userName}!` : "You're all set!";
+  }
+}
+
+async function obDismiss({ celebrate = false } = {}) {
+  const nameVal = ($('#ob-name').value || '').trim();
+  if (nameVal && nameVal !== state.userName) {
+    state.userName = nameVal;
+    await setSetting('userName', nameVal);
+  }
+  await setSetting('onboarded', '1');
+  const ob = $('#onboarding');
+  ob.classList.add('bye');
+  if (celebrate) {
+    confettiBurst(window.innerWidth / 2, window.innerHeight / 2.4, 36);
+    setTimeout(() => confettiBurst(window.innerWidth / 2.6, window.innerHeight / 2.1, 22), 160);
+    setTimeout(() => confettiBurst(window.innerWidth / 1.6, window.innerHeight / 2.1, 22), 300);
+  }
+  setTimeout(() => {
+    ob.classList.add('hidden');
+    ob.classList.remove('bye');
+    document.body.classList.remove('ob-lock');
+  }, celebrate ? 620 : 420);
+  applyGreeting();
+  if (celebrate) {
+    toast(state.userName ? `Salam, ${state.userName} — welcome to Nook!` : 'Welcome to Nook!', { icon: 'sparkle', ms: 4500 });
+  }
+}
+
+function wireOnboarding() {
+  const ob = $('#onboarding');
+  if (!ob) return;
+  ob.querySelectorAll('.ob-frog').forEach((f) => { f.innerHTML = frogSvg; });
+  $('#ob-next0').addEventListener('click', () => obGoto(1));
+
+  const nameInput = $('#ob-name');
+  const next1 = $('#ob-next1');
+  nameInput.addEventListener('input', () => { next1.disabled = !nameInput.value.trim(); });
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && nameInput.value.trim()) { e.preventDefault(); next1.click(); }
+  });
+  next1.addEventListener('click', async () => {
+    state.userName = nameInput.value.trim();
+    await setSetting('userName', state.userName);
+    obGoto(2);
+  });
+
+  $('#ob-next2').addEventListener('click', () => obGoto(3));
+  $('#ob-finish').addEventListener('click', () => obDismiss({ celebrate: true }));
+  $('#ob-skip').addEventListener('click', () => obDismiss({ celebrate: false }));
+}
+
+async function maybeOnboarding() {
+  const done = await call('get_setting', { key: 'onboarded' });
+  if (done) return;
+  obShow();
+}
+
+// ------------------------------------------------------------------ greeting row (v0.10) ----
+
+function applyGreeting() {
+  const sb = document.querySelector('.sb-bottom');
+  if (!sb) return;
+  let g = $('#sb-greet');
+  if (!state.userName) { if (g) g.remove(); return; }
+  if (!g) {
+    g = document.createElement('div');
+    g.id = 'sb-greet';
+    sb.prepend(g);
+  }
+  g.innerHTML = `<div class="greet-hi">${greetingWord()},</div><div class="greet-name">${esc(state.userName)} <span class="greet-wave">👋</span></div>`;
+}
+
 // ------------------------------------------------------------------ boot ----
 
 const WELCOME_CONTENT = `# Welcome to Nook 🐸
@@ -4963,17 +5310,20 @@ Your cozy little corner for notes and tasks — **100% offline**, everything sta
 
 ## Quick tips
 - Type **/** on an empty line — Notion-style commands appear
+- Type **/** again for ready **templates** — daily journal, meeting notes, weekly review
 - Type **@** anywhere — link another note with [[wiki-links]]
 - **Paste or drop images** straight into a note
 - Open many notes at once — each gets a **tab** (drag to reorder)
 - **Right-click anywhere** — notes, folders, tabs, tasks, even empty space
 - **Ctrl+K** jumps to any note in a heartbeat
+- **Ctrl+Shift+F** = Zen mode — nothing but your words
 - **Drag** a note onto a folder to file it
-- Tasks have due dates, priorities, subtasks and **reminders**
+- Tasks have due dates, priorities, subtasks and **reminders** — tick one for confetti 🎉
 - **Board** — a Notion-style kanban; drag cards across columns
 - **Recordings** — record meetings straight to this PC
 - **AI Chat** — add your own key (OpenRouter, Z.ai, OpenAI, Groq, Gemini…) in Settings
-- 20 themes in Settings. Press **Ctrl+/** for all shortcuts.
+- **Export** any note as Markdown or as a pretty web page
+- 24 themes in Settings. Press **Ctrl+/** for all shortcuts.
 
 Cozy up and start writing. ☕`;
 
@@ -4992,6 +5342,7 @@ async function boot() {
   wireShortcuts();
   wireReminderListener();
   wireChatView();
+  wireOnboarding();
 
   // settings first so the theme applies before first paint of content
   await loadSettings();
@@ -5004,6 +5355,7 @@ async function boot() {
   renderTasks();
   renderTabs();
   renderStatusStats();
+  applyGreeting();
   setSaveState('saved', 'Ready');
   state.bootDone = true;
 
@@ -5019,6 +5371,9 @@ async function boot() {
   if (state.notes.length && state.view.type === 'all') {
     selectNote(state.notes[0].id);
   }
+
+  // v0.10 — first run: the dreamy cloud get-started takes the stage
+  maybeOnboarding();
 }
 
 boot().catch((err) => {

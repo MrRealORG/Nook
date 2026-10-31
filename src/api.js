@@ -419,6 +419,8 @@ function mockCall(cmd, args) {
       return Promise.resolve('C:\\Users\\demo\\AppData\\Roaming\\Nook');
     case 'export_note':
       return Promise.resolve('C:\\Users\\demo\\Documents\\note.md');
+    case 'export_note_html':
+      return Promise.resolve('C:\\Users\\demo\\Documents\\note.html');
     case 'open_url':
       if (typeof window !== 'undefined') window.open(a.url, '_blank');
       return Promise.resolve();
