@@ -672,7 +672,7 @@ mod tests {
         assert!(px.chunks(4).all(|p| p[3] == 255));
         // blank extractions are failures (so the next method is tried)
         assert!(bgra_icon_png(n, n, &vec![0u8; (n * n * 4) as usize], None, false).is_none());
-        assert!(bgra_icon_png(n, n, &vec![0u8; 8], None, false).is_none(), "size mismatch");
+        assert!(bgra_icon_png(n, n, &[0u8; 8], None, false).is_none(), "size mismatch");
         let fully_masked: Vec<bool> = vec![false; (n * n) as usize];
         assert!(bgra_icon_png(n, n, &no_alpha, Some(&fully_masked), false).is_none());
     }

@@ -9,7 +9,7 @@ import { TILE_FEATURE, featuresFromPrefs } from "@/lib/features";
  * once a minute and only while visible (plus instantly on change events), and nothing but the
  * header renders while the window is hidden. It does not load the main app's store.
  */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createElement, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { invoke, isTauri } from "@/lib/platform";
 import { drawPet, makePalette, SH, SW, type Mood, type Species } from "@/lib/sprite";
@@ -18,11 +18,12 @@ import type { AiResult, Pet } from "@/lib/types";
 import { uid } from "@/lib/util";
 import { PILL_SIZE, readWidgetCfg, writeWidgetCfg, type TileId, type WidgetCfg } from "@/widget/config";
 import { brandLogoFor } from "@/lib/appLogos";
+import { brandSrc, type BrandTone } from "@/lib/brandSrc";
 
 /** 1.3: no real icon yet → the built-in brand mark (inline SVG), else a letter */
 function BrandOrLetter({ app }: { app: string }) {
   const Logo = brandLogoFor(app);
-  return Logo ? <span className="wg-brand" data-testid="widget-app-brand" style={{ display: "inline-grid", width: 16, height: 16 }}><Logo size={16} /></span> : <i className="wg-letter">{app[0]}</i>;
+  return Logo ? <span className="wg-brand" data-testid="widget-app-brand" style={{ display: "inline-grid", width: 16, height: 16 }}>{createElement(Logo, { size: 16 })}</span> : <i className="wg-letter">{app[0]}</i>;
 }
 
 const MicButton = lazy(() => import("@/components/MicButton").then((m) => ({ default: m.MicButton })));
@@ -113,12 +114,14 @@ export function Widget() {
     }
   }, []);
 
-  // look (theme + ui style) follows the main window live
+  // look (theme + ui style) follows the main window live — the brand icon too
+  const [tone, setTone] = useState<BrandTone>(() => (THEMES[readLook().theme]?.dark === false ? "light" : "dark"));
   useEffect(() => {
     const apply = () => {
       const l = readLook();
       document.documentElement.dataset.theme = l.theme;
       document.documentElement.dataset.ui = l.ui;
+      setTone(THEMES[l.theme]?.dark === false ? "light" : "dark");
     };
     apply();
     const onStorage = (e: StorageEvent) => {
@@ -371,7 +374,7 @@ export function Widget() {
   return (
     <div className="wg" data-testid="widget" data-compact="false" style={shellStyle}>
       <header className="wg-header" data-tauri-drag-region>
-        <img src="/art/logo.webp" alt="" width={16} height={16} className="pixelated rounded-[4px]" data-tauri-drag-region />
+        <img src={brandSrc(tone)} alt="" width={16} height={16} className="rounded-[4px]" data-tone={tone} data-testid="widget-brand" data-tauri-drag-region />
         <span className="wg-title" data-tauri-drag-region>{flash || pet?.name || "Nook"}</span>
         <button className="wg-ib" data-on={onTop} title={onTop ? "Unpin (sit on the desktop)" : "Keep on top"} aria-label="Keep widget on top" onClick={() => void togglePin()}><Icon name="map-pin" size={13} /></button>
         <button className="wg-ib" title="Collapse to a pill" aria-label="Collapse widget" data-testid="widget-collapse" onClick={() => void setCompact(true)}><Icon name="minus" size={14} /></button>

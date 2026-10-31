@@ -329,6 +329,28 @@ test.describe.serial("Nook 1.3", () => {
     expect(errors).toEqual([]);
   });
 
+  test("app icon: brand mark, favicon and About follow the theme (dark ↔ light), small web copies only", async ({ page }) => {
+    await boot(page, { tourDone: true, onboarded: true, theme: "dark", uiStyle: "pixel", v13: true });
+    const brand = page.getByTestId("brand-icon");
+    await expect(brand).toHaveAttribute("data-tone", "dark");
+    await expect(brand).toHaveAttribute("src", /\/brand\/nook-dark-128\.webp$/);
+    expect(await page.evaluate(() => document.querySelector('link[rel="icon"]')?.getAttribute("href"))).toBe("/brand/favicon-dark-32.png");
+    await st(page, `(s) => s.setTheme("light")`);
+    await expect(brand).toHaveAttribute("data-tone", "light");
+    await expect.poll(() => page.evaluate(() => document.querySelector('link[rel="icon"]')?.getAttribute("href"))).toBe("/brand/favicon-light-32.png");
+    await st(page, `(s) => { s.setView("settings"); s.set({ settingsSection: "about" }); }`);
+    await expect(page.getByTestId("about-icon")).toHaveAttribute("src", /nook-light-256\.webp$/);
+    await expect(page.getByTestId("about-version")).toHaveText(/1\.3\.0/);
+    // the images decode and stay small
+    for (const f of ["nook-dark-128.webp", "nook-light-256.webp", "favicon-dark-32.png"]) {
+      const r = await page.request.get(`/brand/${f}`);
+      expect(r.ok()).toBe(true);
+      expect((await r.body()).length).toBeLessThan(20_000);
+    }
+    expect(await page.getByTestId("about-icon").evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBe(256);
+    expect(errors).toEqual([]);
+  });
+
   test("onboarding leaves nothing running: no rAF and no animations once closed", async ({ page }) => {
     await boot(page, null);
     await expect(page.getByTestId("onboarding")).toBeVisible();

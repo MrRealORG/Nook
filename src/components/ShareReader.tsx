@@ -1,4 +1,5 @@
 
+import { BrandIcon } from "@/lib/brand";
 import { everyActive } from "@/lib/power";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
@@ -132,7 +133,7 @@ export default function ShareReader({ shareId, onExit }: { shareId: string; onEx
     <div className="fixed inset-0 z-[300] overflow-y-auto bg-[var(--bg)]" role="dialog" aria-label="Shared note reader">
       {/* slim top bar */}
       <header className="sticky top-0 z-10 flex h-12 items-center gap-2.5 border-b border-[var(--line)] bg-[var(--panel)]/90 px-4 backdrop-blur-md">
-        <img src="/art/logo.webp" alt="" width={22} height={22} className="pixelated rounded-[6px]" />
+        <BrandIcon size={24} />
         <span className="pixel-font text-[14px] font-semibold tracking-wide">Nook</span>
         <span className="label mt-0.5">· shared note</span>
         <span className="flex-1" />

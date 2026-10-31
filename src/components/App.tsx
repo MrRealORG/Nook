@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { installSystemTheme } from "@/lib/systemTheme";
+import { useBrandFavicon } from "@/lib/brand";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DesktopPet } from "@/components/DesktopPet";
 import { DockRail, FloatRail, Rail } from "@/components/Rail";
@@ -163,6 +164,7 @@ export function App({ initial }: { initial: InitialData }) {
     useStore.getState().hydrate(initial);
     hydrated.current = true;
   }
+  useBrandFavicon();
   // the focus timer is the only thing that needs a 1 s tick — run it only while a timer runs
   const timerRunning = useStore((s) => s.timer.running);
   useEffect(() => {

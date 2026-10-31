@@ -1,4 +1,6 @@
 
+import { BrandIcon } from "@/lib/brand";
+import { version as APP_VERSION } from "../../package.json";
 import { PerformanceSection } from "@/components/settings/PerformanceSection";
 import { everyActive } from "@/lib/power";
 import { useEffect, useRef, useState } from "react";
@@ -29,7 +31,7 @@ import { getFollow, onFollowChange, rememberThemeChoice, setFollow, systemIsDark
 import { BackupSettings, ImportSettings, TimelensSettings } from "@/components/settings/TimelensSettings";
 import { useDesktopInfo } from "@/lib/desktop";
 
-type Section = "performance" | "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import";
+type Section = "performance" | "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import" | "about";
 
 const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "account", label: "Profile & account", icon: "user" },
@@ -50,6 +52,7 @@ const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "import", label: "Import", icon: "upload" },
   { id: "data", label: "Data & logs", icon: "database" },
   { id: "keys", label: "Shortcuts", icon: "keyboard" },
+  { id: "about", label: "About Nook", icon: "heart" },
 ];
 
 const FONTS: { id: FontId; name: string; css: string; note: string }[] = [
@@ -1530,6 +1533,14 @@ export function SettingsView() {
         )}
 
         {/* ---------------- shortcuts ---------------- */}
+        {section === "about" && (
+          <div className="paper flex flex-col items-center gap-3 p-8 text-center" data-testid="settings-about">
+            <BrandIcon size={112} testId="about-icon" />
+            <div className="pixel-font text-[26px] font-semibold">Nook</div>
+            <div className="text-[13px] text-dim" data-testid="about-version">Version {APP_VERSION}</div>
+            <p className="max-w-[420px] text-[13px] leading-relaxed text-faint">A cozy, pixel-soft second brain — notes, tasks, focus, a tiny pet and an AI that lives on your machine. Built with Tauri and Rust.</p>
+          </div>
+        )}
         {section === "keys" && (
           <div className="paper p-5">
             <div className="label mb-3">Keyboard shortcuts</div>

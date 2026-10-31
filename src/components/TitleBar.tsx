@@ -1,4 +1,5 @@
 
+import { BrandIcon } from "@/lib/brand";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
@@ -162,7 +163,7 @@ export function TitleBar() {
       </div>
 
       <button className="flex items-center gap-2" onClick={() => { st().set({ activeId: null }); st().setView("notes"); }} title="Home">
-        <img src="/art/logo.webp" alt="" width={28} height={28} className="pixelated rounded-[8px]" />
+        <BrandIcon size={28} className="rounded-[7px]" testId="brand-icon" />
         <span className="pixel-font text-[19px] font-semibold tracking-wide">Nook</span>
       </button>
       <div className="pixel-font hidden items-center gap-1.5 text-[14px] text-faint md:flex">

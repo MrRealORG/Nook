@@ -5,6 +5,7 @@
  * Keyboard: ← / → (or Enter) to move, Esc to skip. The scene's loop only exists while this
  * component is mounted.
  */
+import { BrandIcon } from "@/lib/brand";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "@/onboarding.css";
 import { Icon } from "@/components/Icon";
@@ -115,6 +116,7 @@ export default function Onboarding() {
       <div className="ob-card" ref={cardRef} data-wide={step === "features" || step === "ai" || step === "theme"} data-step={step} key={step}>
         {step === "welcome" && (
           <div className="ob-welcome">
+            <BrandIcon size={104} className="ob-appicon" testId="ob-appicon" />
             <div className="ob-logo" aria-hidden>
               <span>N</span><span>o</span><span>o</span><span>k</span>
             </div>

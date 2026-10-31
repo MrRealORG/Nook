@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f7f8fa" />
-    <link rel="icon" href="/logo.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-dark-32.png" data-brand />
     <title>Nook</title>
     <script>
       try { var p = JSON.parse(localStorage.getItem("nook:prefs") || "{}"); var d = document.documentElement; var fresh = !p.theme && !p.uiStyle; var dk = matchMedia("(prefers-color-scheme: dark)").matches; var old = !p.v12 && (!p.uiStyle || p.uiStyle === "nook") && (!p.theme || p.theme === "graphite"); d.dataset.theme = fresh ? (dk ? "dark" : "light") : old ? "dark" : p.theme; d.dataset.ui = fresh || old ? "clean" : (p.uiStyle || "clean"); var pw = JSON.parse(localStorage.getItem("nook:power") || "{}"); d.dataset.power = pw.lowPower === false ? "full" : "low"; if (p.grain === false) document.documentElement.dataset.grain = "off"; } catch (e) {}

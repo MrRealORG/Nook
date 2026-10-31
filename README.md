@@ -2,6 +2,20 @@
 
 A pixel-art AI notes super app for Windows 10/11. It has notes, graph, canvas, tasks, focus, arcade (13 games), a desktop pet, market, team room, AI agent, an MCP server and a desktop widget. It's built with Tauri v2 and a Rust backend, so there's no bundled Chromium and no Node server at runtime. It uses Windows' built-in WebView2.
 
+## What's new in 1.3
+
+- **New app icon.** A glassy squircle with a soft 3D white kitten peeking over a cloud. The dark version is the exe, taskbar, installer and tray icon. Inside the app, the light or dark version follows your theme for the favicon, the title-bar brand mark, the onboarding welcome, Settings ▸ About Nook and the desktop widget. Only small 128/256 px web copies ship in the bundle; the 1024 px masters live in `branding/`.
+- **Pixel is the default again**, in **Pixel light** and **Pixel dark** (following Windows' light/dark mode on a fresh install). If 1.2 moved you to Clean automatically you're moved back; if you picked Clean yourself, it's kept. The **icon style** (colour Pixel sprites or crisp Clean line icons) is now a separate choice from the theme, with a 22-sprite pixel icon set.
+- **First-run onboarding.** Seven quick steps on a pixel sky with drifting clouds, with Mochi walking in to talk you through it: welcome · theme + icon style · layout · AI setup · features · your pet · all set. Keyboard friendly (← → Enter, Esc to skip) and re-runnable from Settings. Every animation stops the moment it closes.
+- **AI setup cards** for **Google Gemini** (free key), **GLM / Zhipu** (free glm-4-flash, bigmodel.cn or the international z.ai endpoint) and **Ollama** (local, models auto-detected), plus OpenRouter / OpenAI / Groq / LM Studio / any OpenAI-compatible URL. List models and **test the connection** before saving; keys stay in your OS keychain. Or skip it and use the offline brain.
+- **Feature switches.** Sixteen features (Tasks, Journal, AI chat, Graph, Canvas, Focus, Timelens, Activity, Rules, Reminders, Pet, Arcade, Marketplace, Team room, Widget, Backups) can be turned off in onboarding or Settings ▸ Features. A switched-off feature disappears from the sidebar and stops its background work.
+- **Obsidian layout.** Ribbon · file tree · tabbed editor · right sidebar with backlinks, outline and a local graph. Switch in onboarding, Settings ▸ Appearance or the command palette.
+- **Redesigned folder tree.** Nested folders, colours (real swatches in the menu), emoji icons, pinned favourites, counts, inline rename (F2), drag-and-drop for notes and folders, and sorting.
+- **Quick switcher (Ctrl+O).** Fuzzy-jump to any note; press Enter on no match to create it.
+- **Windows app icons, fixed.** Real icons are pulled from each .exe using five extraction methods (inside a COM scope, with blank-icon detection). Placeholder demo icons no longer block real ones, missing icons are retried every 6 h, there's a **Refresh icons** button in Timelens ▸ Apps, and built-in brand icons fill in until the real one arrives (in the widget too).
+- **Fixes.** With "follow system theme" on, a reload no longer resets your saved layout, theme and icon style. Picking a theme that doesn't match the OS mode now keeps it instead of being switched back.
+- **Still light on CPU.** Idle views draw 0 animation frames, and the main thread averages about 0.2 % at idle (headless profile, `scripts/idle-cpu.mjs`).
+
 ## What's new in 1.2
 
 - **Light on CPU by default.** Nook is built to sit quietly in the background:
