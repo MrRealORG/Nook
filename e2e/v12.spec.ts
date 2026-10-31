@@ -20,6 +20,8 @@ async function boot(page: Page, prefs: Record<string, unknown> | null = { tourDo
   page.on("console", (m) => {
     if (m.type() === "error" && !/Failed to load resource|WebSocket|ERR_CONNECTION/.test(m.text())) errors.push(m.text());
   });
+  // 1.3.1: a fresh profile also means the vault's onboarding flag is unset
+  if (!prefs) await fetch("http://127.0.0.1:3210/api/ui-state", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ onboarded: false }) });
   await page.addInitScript((p) => {
     (window as unknown as { __NOOK_E2E__: boolean }).__NOOK_E2E__ = true;
     if (p && !sessionStorage.getItem("seeded")) {

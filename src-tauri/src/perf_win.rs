@@ -1,4 +1,4 @@
-//! Win32 side of `perf.rs` (Job Object CPU hard cap, priority, EcoQoS, child adoption).
+//! Win32 side of `perf.rs` (Job Object background CPU cap, priority, EcoQoS, child adoption).
 //! Its own file so the standalone `wincheck` crate type-checks it verbatim for
 //! x86_64-pc-windows-msvc.
 
@@ -34,16 +34,16 @@ unsafe fn set_rate(job: HANDLE, rate: Option<u32>) -> bool {
     ) != 0
 }
 
-/// Create an anonymous job with a hard CPU-rate cap and put this process in it. Must run before
-/// any child process exists so every child (WebView2) inherits membership.
-pub fn create_capped_job(rate: u32) -> Result<(), String> {
+/// Create an anonymous job (optionally with a hard CPU-rate cap) and put this process in it. Run
+/// before any child process exists so every child (WebView2) inherits membership.
+pub fn create_job(rate: Option<u32>) -> Result<(), String> {
     // SAFETY: anonymous job, default security; the handle is kept open for the process lifetime.
     unsafe {
         let j = CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if j.is_null() {
             return Err(format!("CreateJobObjectW failed ({})", std::io::Error::last_os_error()));
         }
-        if !set_rate(j, Some(rate)) {
+        if rate.is_some() && !set_rate(j, rate) {
             let e = std::io::Error::last_os_error();
             CloseHandle(j);
             return Err(format!("CPU rate control unavailable ({e})"));
@@ -59,16 +59,13 @@ pub fn create_capped_job(rate: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Change (or lift, with None) the cap of the existing job. Ok(false) when no job exists.
-pub fn update_rate(rate: Option<u32>) -> Result<bool, String> {
+/// Change (or lift, with None) the rate of the job. `want_job` creates the job when the user
+/// enabled the cap after startup (existing children are adopted by `adopt` on the next pass).
+/// Returns whether a rate is in effect.
+pub fn update_rate(rate: Option<u32>, want_job: bool) -> Result<bool, String> {
     let j = job();
     if j.is_null() {
-        // started with the cap off: a job can still be created now, but children that already
-        // exist are adopted by `adopt` on the next pass
-        return match rate {
-            Some(r) => create_capped_job(r).map(|_| true),
-            None => Ok(false),
-        };
+        return if want_job { create_job(rate).map(|_| rate.is_some()) } else { Ok(false) };
     }
     // SAFETY: `j` is our live job handle.
     if unsafe { set_rate(j, rate) } {

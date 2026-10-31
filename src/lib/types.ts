@@ -109,7 +109,7 @@ export type Listing = {
   history?: ListingPricePoint[];
 };
 
-export type InitialData = { notes: Note[]; canvases: Canvas[]; pet: Pet; folders: Folder[]; listings: Listing[] };
+export type InitialData = { notes: Note[]; canvases: Canvas[]; pet: Pet; folders: Folder[]; listings: Listing[]; ui?: { onboarded?: boolean } };
 /** import/export envelope for pet blueprints + their folders */
 export type PetPack = {
   format: "nook-pets";

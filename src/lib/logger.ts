@@ -35,12 +35,67 @@ function emit() {
   }
 }
 
+// 1.3.1: verbose (debug-level) logging is opt-in
+const VERBOSE_KEY = "nook:verboseLogs";
+let verbose = (() => {
+  try {
+    return localStorage.getItem(VERBOSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+export function isVerbose() {
+  return verbose;
+}
+export function setVerbose(on: boolean) {
+  verbose = on;
+  try {
+    localStorage.setItem(VERBOSE_KEY, on ? "1" : "0");
+  } catch {}
+  mirrorInvoke("logs_set_verbose", { on });
+}
+
+/** desktop: every UI log line is also appended to %APPDATA%/Nook/logs/nook.log (batched) */
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+let outbox: { level: string; msg: string; source: string }[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+function mirrorInvoke(cmd: string, args: Record<string, unknown>) {
+  if (!isTauri) return;
+  void import("@tauri-apps/api/core").then((c) => c.invoke(cmd, args)).catch(() => {});
+}
+function mirror(e: LogEntry) {
+  if (!isTauri) return;
+  outbox.push({ level: e.level, msg: e.msg, source: `ui${e.where ? `:${e.where}` : ""}` });
+  if (outbox.length > 200) outbox = outbox.slice(-200);
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    const batch = outbox;
+    outbox = [];
+    void import("@tauri-apps/api/core")
+      .then(async (c) => {
+        for (const b of batch) await c.invoke("log_write", b);
+      })
+      .catch(() => {});
+  }, e.level === "error" ? 0 : 1000);
+}
+
 export function push(level: LogLevel, msg: string, where?: string) {
-  const e: LogEntry = { id: seq++, t: Date.now(), level, msg: String(msg).slice(0, 500), where };
+  if (level === "debug" && !verbose) return null as unknown as LogEntry;
+  const e: LogEntry = { id: seq++, t: Date.now(), level, msg: String(msg).slice(0, 2000), where };
   entries = [...entries.slice(-(MAX - 1)), e];
-  if (level === "error") errorCount++;
+  if (level === "error") {
+    errorCount++;
+    // remembered across a crash/reload: the next launch offers a bug report
+    if (where === "boundary") {
+      try {
+        localStorage.setItem("nook:lastCrash", JSON.stringify({ t: e.t, msg: e.msg.slice(0, 600) }));
+      } catch {}
+    }
+  }
   persist();
   emit();
+  mirror(e);
   return e;
 }
 
@@ -69,7 +124,7 @@ export function logEvent(msg: string, level: LogLevel = "info", where?: string) 
 export function logsAsText(n = 40): string {
   return entries
     .slice(-n)
-    .map((e) => `[${new Date(e.t).toLocaleTimeString()}] ${e.level.toUpperCase()}${e.where ? ` (${e.where})` : ""}: ${e.msg}`)
+    .map((e) => `[${new Date(e.t).toISOString()}] ${e.level.toUpperCase()}${e.where ? ` (${e.where})` : ""}: ${e.msg}`)
     .join("\n");
 }
 
@@ -98,7 +153,7 @@ export function installLogger() {
 
   window.addEventListener("error", (ev) => {
     const msg = ev.error instanceof Error ? `${ev.error.message}\n${String(ev.error.stack ?? "").split("\n")[1] ?? ""}` : ev.message;
-    push("error", msg, ev.filename?.split("/").pop());
+    push("error", `${msg}${ev.filename ? ` (${ev.filename.split("/").pop()}:${ev.lineno})` : ""}`, "window");
   });
   window.addEventListener("unhandledrejection", (ev) => {
     const r = (ev as PromiseRejectionEvent).reason;

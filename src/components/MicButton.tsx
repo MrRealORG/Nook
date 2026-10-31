@@ -1,7 +1,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
-import { transcribeBlob, ASR_MODELS, currentModelId } from "@/lib/asr";
+import { transcribeBlob, ASR_MODELS, currentModelId, micErrorMessage, retryASR } from "@/lib/asr";
 import { logEvent } from "@/lib/logger";
 import { useStore } from "@/lib/store";
 import { sfx } from "@/lib/sfx";
@@ -41,12 +41,21 @@ export function MicButton({ onText, onRegister, compact = false }: { onText: (te
 
   const start = async () => {
     if (rec || busy) return;
+    // a failed model download: the mic click is the retry
+    if (st().asr.status === "error") {
+      st().toast("Retrying the voice model download…", "download");
+      void retryASR().then(() => st().toast("Voice model ready — click the mic to record", "mic")).catch((e) => st().toast(String((e as Error).message ?? e).slice(0, 120), "alert"));
+      return;
+    }
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
+      if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("no mediaDevices"), { name: "NotFoundError" });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    } catch (e) {
       sfx("error");
-      st().toast("Microphone permission denied — allow it in your browser", "mic");
+      const msg = micErrorMessage(e);
+      st().toast(msg, "mic");
+      logEvent(`mic failed: ${(e as Error)?.name ?? ""} ${(e as Error)?.message ?? ""}`, "warn", "voice");
       return;
     }
     chunks.current = [];
@@ -123,11 +132,15 @@ export function MicButton({ onText, onRegister, compact = false }: { onText: (te
       className={`icon-btn !h-8 !w-8 mic-btn ${rec ? "recording" : ""}`}
       title={rec ? "Stop & transcribe" : busy ? "Transcribing…" : `Voice input (${hint}) — click to record`}
       aria-label={rec ? "Stop recording and transcribe" : "Start voice input"}
+      data-testid="mic-btn"
+      data-state={rec ? "recording" : busy ? "busy" : asr.status}
       onClick={() => (rec ? recRef.current?.stop() : busy ? undefined : void start())}
       disabled={busy}
     >
       {busy ? (
         <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      ) : asr.status === "loading" ? (
+        <span className="text-[9px] font-bold tabular-nums">{asr.progress}%</span>
       ) : (
         <Icon name="mic" size={15} />
       )}

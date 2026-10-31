@@ -11,7 +11,10 @@ import type { View } from "@/lib/store";
 import { sfx } from "@/lib/sfx";
 import { PetView } from "@/components/PetView";
 import { IconMaker } from "@/components/IconMaker";
-import { ASR_MODELS, clearASRCache, loadASR, isModelCached } from "@/lib/asr";
+import { LogsViewer } from "@/components/LogsViewer";
+import { ProfileEditor } from "@/components/ProfileEditor";
+import { AboutActions } from "@/components/settings/AboutActions";
+import { ASR_MODELS, clearASRCache, loadASR, isModelCached, retryASR } from "@/lib/asr";
 import { logEvent } from "@/lib/logger";
 import { levelOf } from "@/lib/pet";
 import { RAIL_DEFAULT_ICONS, RAIL_DEFAULT_ORDER, RAIL_ICON_CHOICES } from "@/lib/store";
@@ -31,10 +34,10 @@ import { getFollow, onFollowChange, rememberThemeChoice, setFollow, systemIsDark
 import { BackupSettings, ImportSettings, TimelensSettings } from "@/components/settings/TimelensSettings";
 import { useDesktopInfo } from "@/lib/desktop";
 
-type Section = "performance" | "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import" | "about";
+type Section = "logs" | "performance" | "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import" | "about";
 
 const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
-  { id: "account", label: "Profile & account", icon: "user" },
+  { id: "account", label: "Profile", icon: "user" },
   { id: "look", label: "Appearance & wallpapers", icon: "sun" },
   { id: "packs", label: "Icon & font packs", icon: "palette" },
   { id: "sidebar", label: "Sidebar & dock", icon: "layout" },
@@ -51,6 +54,7 @@ const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "backup", label: "Backup", icon: "shield" },
   { id: "import", label: "Import", icon: "upload" },
   { id: "data", label: "Data & logs", icon: "database" },
+  { id: "logs", label: "Logs", icon: "bug" },
   { id: "keys", label: "Shortcuts", icon: "keyboard" },
   { id: "about", label: "About Nook", icon: "heart" },
 ];
@@ -845,7 +849,6 @@ export function SettingsView() {
   const asr = useStore((s) => s.asr);
   const deepLink = useStore((s) => s.settingsSection);
   const [section, setSectionState] = useState<Section>("account");
-  const [displayName, setDisplayName] = useState(profile.displayName);
   const [email, setEmail] = useState(profile.email);
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
@@ -861,7 +864,6 @@ export function SettingsView() {
     };
   }, []);
   const fileRef = useRef<HTMLInputElement>(null);
-  const avatarRef = useRef<HTMLInputElement>(null);
   const st = useStore.getState;
 
   // honor deep links (notification-center footer, mic errors → voice section)
@@ -887,29 +889,6 @@ export function SettingsView() {
 
   const lvl = levelOf(pet.xp).level;
 
-  /** resize an image file to a square dataURL (max 144px) so avatars stay tiny */
-  const pickAvatar = (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      st().toast("Pick an image file (png/jpg/webp)", "close");
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement("canvas");
-      const S = 144;
-      c.width = S;
-      c.height = S;
-      const ctx = c.getContext("2d")!;
-      const side = Math.min(img.width, img.height);
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, S, S);
-      st().patchProfile({ avatar: c.toDataURL("image/png") });
-      st().toast("Avatar updated — looking sharp!", "image");
-      sfxSafePop();
-    };
-    img.src = URL.createObjectURL(file);
-  };
-  const sfxSafePop = () => import("@/lib/sfx").then((m) => m.sfx("pop")).catch(() => {});
 
   const savePassword = async () => {
     if (pw.length < 4) {
@@ -1005,46 +984,11 @@ export function SettingsView() {
         {/* ---------------- account ---------------- */}
         {section === "account" && (
           <div className="space-y-4">
-            <div className="paper p-5">
-              <div className="label mb-3">Your profile</div>
-              <div className="flex flex-wrap items-center gap-4">
-                {/* avatar */}
-                <button
-                  className="group relative grid h-[72px] w-[72px] flex-none place-items-center overflow-hidden rounded-2xl border border-line bg-panel2 transition-all hover:border-[color:var(--accent)]/60"
-                  onClick={() => avatarRef.current?.click()}
-                  title="Upload a profile logo/avatar"
-                  aria-label="Upload avatar"
-                >
-                  {profile.avatar ? (
-                    <img src={profile.avatar} alt="Your avatar" className="h-full w-full object-cover" />
-                  ) : (
-                    <span className="grid place-items-center gap-1 text-faint"><Icon name="image" size={20} /><span className="tiny-font text-[8.5px]">UPLOAD</span></span>
-                  )}
-                  <span className="absolute inset-0 hidden place-items-center bg-black/55 text-white group-hover:grid"><Icon name="upload" size={16} /></span>
-                </button>
-                <input ref={avatarRef} type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && pickAvatar(e.target.files[0])} />
-                {profile.avatar && (
-                  <button className="btn btn-sm" style={{ color: "#e0684f" }} onClick={() => st().patchProfile({ avatar: "" })}>
-                    <Icon name="trash" size={12} /> remove
-                  </button>
-                )}
-                <div className="min-w-[200px] flex-1 space-y-2">
-                  <label className="block">
-                    <span className="tiny-font mb-1 block text-[9.5px] text-faint">DISPLAY NAME</span>
-                    <input
-                      className="input"
-                      placeholder="your name…"
-                      maxLength={24}
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      onBlur={() => st().patchProfile({ displayName: displayName.trim() })}
-                      aria-label="Display name"
-                    />
-                  </label>
-                  <div className="text-[11.5px] text-faint">Companion: {pet.name} · Level {lvl} · {pet.coins} coins · {notes.length} notes · {tasks.length} tasks</div>
-                </div>
-              </div>
+            <div className="paper p-5" data-testid="settings-profile">
+              <div className="label mb-3">Profile picture, name &amp; banner</div>
+              <ProfileEditor />
             </div>
+            <div className="px-1 text-[11.5px] text-faint">Companion: {pet.name} · Level {lvl} · {pet.coins} coins · {notes.length} notes · {tasks.length} tasks</div>
 
             <div className="paper p-5">
               <div className="label mb-3">Local account</div>
@@ -1163,6 +1107,14 @@ export function SettingsView() {
                   <Icon name={asr.status === "ready" ? "check" : "mic"} size={11} />
                   {asr.status === "ready" ? "model loaded — ready to dictate" : asr.status === "error" ? "last download failed" : "not downloaded yet"}
                 </div>
+                {asr.status === "error" && (
+                  <>
+                    <button className="btn btn-sm" data-testid="asr-retry" onClick={() => void retryASR().then(() => st().toast("Voice model ready", "mic")).catch(() => {})}>
+                      <Icon name="refresh" size={12} /> Retry
+                    </button>
+                    {asr.error && <div className="w-full text-[11px] text-faint">{asr.error}</div>}
+                  </>
+                )}
                 {voiceCached && (
                   <button
                     className="btn btn-sm"
@@ -1539,8 +1491,10 @@ export function SettingsView() {
             <div className="pixel-font text-[26px] font-semibold">Nook</div>
             <div className="text-[13px] text-dim" data-testid="about-version">Version {APP_VERSION}</div>
             <p className="max-w-[420px] text-[13px] leading-relaxed text-faint">A cozy, pixel-soft second brain — notes, tasks, focus, a tiny pet and an AI that lives on your machine. Built with Tauri and Rust.</p>
+            <AboutActions />
           </div>
         )}
+        {section === "logs" && <LogsViewer />}
         {section === "keys" && (
           <div className="paper p-5">
             <div className="label mb-3">Keyboard shortcuts</div>

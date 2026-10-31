@@ -12,7 +12,8 @@
         "minHeight": 600,
         "center": true,
         "decorations": false,
-        "transparent": true,
+        "transparent": false,
+        "backgroundColor": "#0d0e10",
         "shadow": true,
         "visible": false,
         "dragDropEnabled": false

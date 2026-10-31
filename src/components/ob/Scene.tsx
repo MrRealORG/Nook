@@ -100,27 +100,41 @@ function hills(w: number, h: number, dark: boolean, layer: number): HTMLCanvasEl
   return c;
 }
 
-export function Scene({ dark, burst }: { dark: boolean; burst: number }) {
+/** 1.3.1: frame-time watchdog. If frames take > 50 ms (a starved WebView2 renderer / GPU), the
+ *  scene drops to "reduced effects": one static frame, no drifting clouds, only short bursts. */
+export const SLOW_FRAME_MS = 50;
+
+export function Scene({ dark, burst, pop = 0, onReduced }: { dark: boolean; burst: number; pop?: number; onReduced?: () => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const burstRef = useRef(burst);
+  const popRef = useRef(pop);
   const loopRef = useRef<{ kick: () => void } | null>(null);
+  const onReducedRef = useRef(onReduced);
+  onReducedRef.current = onReduced;
   useEffect(() => {
     burstRef.current = burst;
     // a burst must wake a loop that settled (reduced motion draws one frame and stops)
     loopRef.current?.kick();
   }, [burst]);
+  useEffect(() => {
+    popRef.current = pop;
+    loopRef.current?.kick();
+  }, [pop]);
 
   useEffect(() => {
     const cv = ref.current;
     if (!cv) return;
     const ctx = cv.getContext("2d")!;
-    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let reduced = (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) || localStorage.getItem("nook:obFx") === "reduced" || (window as unknown as { __nookReducedFx?: boolean }).__nookReducedFx === true;
+    if (reduced) onReducedRef.current?.();
+    let slow = 0, frames = 0, prevNow = 0;
     const low = isLowPower();
     let W = 0, H = 0;
     let sky: HTMLCanvasElement, hill0: HTMLCanvasElement, hill1: HTMLCanvasElement;
     let clouds: Cloud[] = [];
     const bits: Bit[] = [];
     let seenBurst = burstRef.current;
+    let seenPop = popRef.current;
     let mouse = 0, px = 0;
     const setup = () => {
       W = Math.ceil(window.innerWidth / SCALE);
@@ -148,9 +162,14 @@ export function Scene({ dark, burst }: { dark: boolean; burst: number }) {
     window.addEventListener("resize", onResize);
     let last = performance.now();
     const draw = (now: number) => {
+      const t0 = performance.now();
       const dt = Math.min(80, now - last) / 16.7;
       last = now;
       px += (mouse - px) * 0.06;
+      // full clear every frame (no stale pixels can survive under translucent sprites)
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, W, H);
       ctx.drawImage(sky, 0, 0);
       for (const c of clouds) {
         if (c.layer < 2) {
@@ -191,6 +210,16 @@ export function Scene({ dark, burst }: { dark: boolean; burst: number }) {
           bits.push({ x: W / 2, y: H * 0.45, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 2.2, c: cols[i % cols.length], life: 90 + Math.random() * 50 });
         }
       }
+      // small burst by the Next button on every step change
+      if (popRef.current !== seenPop) {
+        seenPop = popRef.current;
+        const cols = ["#ffd44f", "#ff8fae", "#a58cff", "#5fd29b"];
+        const ox = Math.round(W / 2 + Math.min(W * 0.42, 860 / SCALE / 2) - 14), oy = H - Math.round(48 / SCALE);
+        for (let i = 0; i < (low ? 10 : 18); i++) {
+          const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2, v = 0.8 + Math.random() * 1.6;
+          bits.push({ x: ox, y: oy, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 0.6, c: cols[i % cols.length], life: 34 + Math.random() * 18 });
+        }
+      }
       for (let i = bits.length - 1; i >= 0; i--) {
         const b = bits[i];
         b.vy += 0.07 * dt;
@@ -205,9 +234,24 @@ export function Scene({ dark, burst }: { dark: boolean; burst: number }) {
         ctx.fillStyle = b.c;
         ctx.fillRect(Math.round(b.x), Math.round(b.y), 2, (Math.floor(b.life / 6) % 2) + 1);
       }
+      // watchdog: the work of a frame, or the gap since the previous one (a starved timer), > 50 ms
+      const work = performance.now() - t0;
+      const gap = prevNow ? now - prevNow : 0;
+      prevNow = now;
+      if (!reduced && ++frames > 3 && (work > SLOW_FRAME_MS || gap > period + SLOW_FRAME_MS)) {
+        if (++slow >= 5) {
+          reduced = true;
+          try {
+            localStorage.setItem("nook:obFx", "reduced");
+          } catch {}
+          onReducedRef.current?.();
+        }
+      } else if (slow > 0 && work < SLOW_FRAME_MS / 2) slow--;
       return !reduced || bits.length > 0;
     };
-    const loop = frameLoop(draw, reduced ? 4 : low ? 20 : 30, cv);
+    const fps = reduced ? 4 : low ? 20 : 30;
+    const period = 1000 / fps;
+    const loop = frameLoop(draw, fps, cv);
     loopRef.current = loop;
     return () => {
       loopRef.current = null;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nook",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "identifier": "com.realhackers.nook",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -50,7 +50,7 @@
     "publisher": "Team RealHackers",
     "copyright": "© 2026 Team RealHackers",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
@@ -62,6 +62,11 @@
     }
   },
   "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU0RkFEQzM5Q0Q0MkZCN0EKUldSNiswTE5PZHo2Vkd2cVF0UEg0aGU4eUpkcXZOWEZyUFByOVJHbG54b0V5OVVmUDB1akZiMy8K",
+      "endpoints": ["https://github.com/MrRealORG/Nook/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    },
     "deep-link": {
       "desktop": { "schemes": ["nook"] }
     }

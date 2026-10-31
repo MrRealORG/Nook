@@ -30,7 +30,8 @@ pub struct DesktopSettings {
     /// "off" | "mica" | "acrylic"
     pub glass: String,
     pub auto_update: bool,
-    /// hard CPU cap for the whole Nook process tree (Job Object), % of the machine, 5–50
+    /// background-only CPU cap for the Nook process tree (Job Object), % of the machine, 5–50.
+    /// Opt-in since 1.3.1 and only applied while no window is on screen.
     pub cpu_cap: u8,
     pub cpu_cap_on: bool,
     /// keep the desktop widget above other windows (otherwise it sits on the desktop)
@@ -50,7 +51,7 @@ impl Default for DesktopSettings {
             glass: "off".into(),
             auto_update: false,
             cpu_cap: crate::perf::DEFAULT_CAP_PCT,
-            cpu_cap_on: true,
+            cpu_cap_on: false,
             widget_on_top: false,
         }
     }
@@ -473,35 +474,81 @@ pub fn pending_links() -> &'static std::sync::Mutex<Vec<String>> {
 
 // ------------------------------------------------------------------ updater
 
-/// Public key baked in at build time (`NOOK_UPDATER_PUBKEY`). Without it the updater stays
-/// disabled — unsigned builds can never self-update.
-pub fn updater_pubkey() -> Option<String> {
-    option_env!("NOOK_UPDATER_PUBKEY").map(str::trim).filter(|k| !k.is_empty()).map(String::from)
+/// The updater is configured in tauri.conf.json (`plugins.updater`: minisign public key +
+/// the GitHub Releases `latest.json` endpoint). Builds without a key never self-update.
+pub fn updater_configured(app: &AppHandle) -> bool {
+    app.config().plugins.0.get("updater").and_then(|u| u.get("pubkey")).and_then(|k| k.as_str()).map(|k| !k.trim().is_empty()).unwrap_or(false)
 }
 
-pub const UPDATE_ENDPOINT: &str = "https://github.com/MrRealORG/Nook/releases/latest/download/latest.json";
+
+/// Map an updater error to "nothing to do" for the expected cases (offline, no release yet,
+/// no latest.json): those are logged and reported as `available: false` + `quietError`.
+pub fn classify_update_error(e: &str) -> &'static str {
+    let l = e.to_lowercase();
+    if l.contains("404") || l.contains("not found") || l.contains("could not fetch a valid release json") {
+        "no-release"
+    } else if l.contains("dns") || l.contains("connect") || l.contains("timed out") || l.contains("network") || l.contains("error sending request") {
+        "offline"
+    } else {
+        "error"
+    }
+}
 
 pub async fn check_update(app: &AppHandle) -> Result<Value, String> {
-    if updater_pubkey().is_none() {
+    if !updater_configured(app) {
         return Ok(json!({ "configured": false }));
     }
     use tauri_plugin_updater::UpdaterExt;
-    let url = tauri::Url::parse(UPDATE_ENDPOINT).map_err(|e| e.to_string())?;
-    let up = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?.build().map_err(|e| e.to_string())?;
-    match up.check().await.map_err(|e| e.to_string())? {
-        Some(u) => Ok(json!({ "configured": true, "available": true, "version": u.version, "notes": u.body, "date": u.date.map(|d| d.to_string()) })),
-        None => Ok(json!({ "configured": true, "available": false })),
+    let current = app.package_info().version.to_string();
+    let up = app.updater().map_err(|e| e.to_string())?;
+    match up.check().await {
+        Ok(Some(u)) => Ok(json!({ "configured": true, "available": true, "current": current, "version": u.version, "notes": u.body, "date": u.date.map(|d| d.to_string()) })),
+        Ok(None) => Ok(json!({ "configured": true, "available": false, "current": current })),
+        Err(e) => {
+            let e = e.to_string();
+            let kind = classify_update_error(&e);
+            log::info!("update check: {kind} ({e})");
+            Ok(json!({ "configured": true, "available": false, "current": current, "quietError": kind, "error": e }))
+        }
     }
 }
 
-pub async fn install_update(app: &AppHandle) -> Result<(), String> {
-    if updater_pubkey().is_none() {
+/// Download (progress pushed through `on_event`) + install, then relaunch.
+pub async fn install_update(app: &AppHandle, on_event: tauri::ipc::Channel<Value>) -> Result<(), String> {
+    if !updater_configured(app) {
         return Err("updates are not configured for this build".into());
     }
     use tauri_plugin_updater::UpdaterExt;
-    let url = tauri::Url::parse(UPDATE_ENDPOINT).map_err(|e| e.to_string())?;
-    let up = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?.build().map_err(|e| e.to_string())?;
+    let up = app.updater().map_err(|e| e.to_string())?;
     let Some(u) = up.check().await.map_err(|e| e.to_string())? else { return Ok(()) };
-    u.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    log::info!("installing update {}", u.version);
+    let mut got: u64 = 0;
+    let ch = on_event.clone();
+    u.download_and_install(
+        move |chunk, total| {
+            got += chunk as u64;
+            let _ = ch.send(json!({ "type": "progress", "downloaded": got, "total": total }));
+        },
+        || log::info!("update downloaded"),
+    )
+    .await
+    .map_err(|e| {
+        log::error!("update install failed: {e}");
+        e.to_string()
+    })?;
+    let _ = on_event.send(json!({ "type": "installed" }));
     app.restart();
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::classify_update_error;
+
+    #[test]
+    fn expected_update_failures_are_quiet() {
+        assert_eq!(classify_update_error("Could not fetch a valid release JSON from the remote"), "no-release");
+        assert_eq!(classify_update_error("http status 404 Not Found"), "no-release");
+        assert_eq!(classify_update_error("error sending request for url: dns error"), "offline");
+        assert_eq!(classify_update_error("signature verification failed"), "error");
+    }
 }

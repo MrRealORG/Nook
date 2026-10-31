@@ -49,6 +49,8 @@ export function Dashboard() {
   const tasks = useStore((s) => s.tasks);
   const streak = useStore((s) => s.streak);
   const dailyGift = useStore((s) => s.dailyGift);
+  const banner = useStore((s) => s.profile.banner);
+  const myName = useStore((s) => s.profile.displayName.trim());
   const st = useStore.getState;
 
   const stats = useMemo(() => {
@@ -81,10 +83,11 @@ export function Dashboard() {
   return (
     <div className="scroll h-full">
       <div className="mx-auto max-w-[720px] px-2 pb-12 pt-6 sm:px-6">
+        {banner && <div className="dash-banner" style={{ backgroundImage: `url(${banner})` }} data-testid="dash-banner" />}
         {/* greeting */}
         <header style={{ animation: "rise .5s var(--ease-soft) both" }}>
           <div className="label">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</div>
-          <h1 className="pixel-font mt-1 text-[30px] leading-tight sm:text-[34px]">{greetByHour()}.</h1>
+          <h1 className="pixel-font mt-1 text-[30px] leading-tight sm:text-[34px]">{greetByHour()}{myName ? `, ${myName}` : ""}.</h1>
           <p className="mt-1.5 text-[13.5px] text-dim">
             {notes.length} notes · {stats.words.toLocaleString()} words · {openTasks > 0 ? <><b className="text-ink">{openTasks}</b> open task{openTasks > 1 ? "s" : ""}</> : "all tasks clear"} {moodFor(pet) === "sad" ? <span className="text-accent">· {pet.name} misses you</span> : null}
           </p>

@@ -102,7 +102,7 @@ export function DesktopSection() {
                 <Icon name="refresh" size={12} /> Check now
               </button>
               {info.update?.available && (
-                <button className="btn btn-sm" onClick={() => void invoke("install_update").catch((e) => useStore.getState().toast(String(e), "close"))}>
+                <button className="btn btn-sm" onClick={() => void import("@/lib/updater").then((m) => { m.useUpdater.setState({ cardOpen: true, phase: "available" }); return m.installUpdate(); })}>
                   <Icon name="download" size={12} /> Install {info.update.version}
                 </button>
               )}

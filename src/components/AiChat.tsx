@@ -1,5 +1,6 @@
 
 import { useEffect, useRef, useState } from "react";
+import { MeAvatar } from "@/components/MeAvatar";
 import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
 import { Markdown } from "@/components/Markdown";
@@ -79,8 +80,9 @@ function Msg({ m }: { m: AiMsg }) {
 
   if (m.role === "user")
     return (
-      <div className="flex justify-end" style={{ animation: "rise .3s var(--ease-soft)" }}>
+      <div className="flex items-end justify-end gap-2" style={{ animation: "rise .3s var(--ease-soft)" }}>
         <div className="pixel-font max-w-[88%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2 text-[14px] text-accent-ink">{m.text}</div>
+        <MeAvatar size={26} />
       </div>
     );
 

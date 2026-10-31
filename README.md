@@ -2,6 +2,14 @@
 
 A pixel-art AI notes super app for Windows 10/11. It has notes, graph, canvas, tasks, focus, arcade (13 games), a desktop pet, market, team room, AI agent, an MCP server and a desktop widget. It's built with Tauri v2 and a Rust backend, so there's no bundled Chromium and no Node server at runtime. It uses Windows' built-in WebView2.
 
+## What's new in 1.3.1
+
+A bug-fix release for Windows: no more stuck/stuttering onboarding (the CPU cap no longer
+throttles the WebView2 renderer/GPU in the foreground — it's opt-in and background-only now),
+no app flash before the onboarding, no transparent-window artifacts, error boundaries and crash
+logs (`%APPDATA%\Nook\logs`), working on-device Whisper voice input, a profile step, Settings ▸
+Logs, "Report a bug" and signed auto-updates. Full list in [CHANGELOG.md](CHANGELOG.md).
+
 ## What's new in 1.3
 
 - **New app icon.** A glassy squircle with a soft 3D white kitten peeking over a cloud. The dark version is the exe, taskbar, installer and tray icon. Inside the app, the light or dark version follows your theme for the favicon, the title-bar brand mark, the onboarding welcome, Settings ▸ About Nook and the desktop widget. Only small 128/256 px web copies ship in the bundle; the 1024 px masters live in `branding/`.
@@ -56,12 +64,12 @@ Timelens records which app and window is in the foreground (Windows: `GetForegro
    git remote add origin https://github.com/MrRealORG/Nook.git
    git push -u origin master --force   # replaces the old Next.js code
    ```
-2. **Actions → Build & Release** runs on every push. Open the finished run and download the **Nook-Windows-installers** artifact. It contains `Nook_1.2.0_x64-setup.exe` (NSIS) and an `.msi`.
+2. **Actions → Build & Release** runs on every push. Open the finished run and download the **Nook-Windows-installers** artifact. It contains `Nook_1.3.1_x64-setup.exe` (NSIS) and an `.msi`.
 3. For a public Release with the installer attached, tag a version:
    ```bash
-   git tag v1.2.0 && git push origin v1.2.0
+   git tag v1.3.1 && git push origin v1.3.1
    ```
-   The workflow builds and publishes **Releases → Nook v1.2.0 → Nook_1.2.0_x64-setup.exe**.
+   The workflow builds and publishes **Releases → Nook v1.3.1 → Nook_1.3.1_x64-setup.exe**.
 
 The installer installs per-user, needs no admin, and pulls WebView2 automatically if it's missing.
 
@@ -104,12 +112,19 @@ This works even when the app is closed, because it opens the database directly.
 - **Hotkeys**: `Ctrl+Alt+N` quick capture, `Ctrl+Alt+H` show/hide Nook.
 - Tray icon, single instance, `nook://` links, start with Windows (opt-in), Mica/acrylic window, native notifications, drag-and-drop attachments, native export dialogs.
 
-## Auto-update (optional)
+## Auto-update
 
-Off by default. To turn it on:
-1. Generate a key with `npx tauri signer generate`.
-2. Add the repo secrets `NOOK_UPDATER_PUBKEY` (the public key), `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-3. Set `"createUpdaterArtifacts": true` in `src-tauri/tauri.conf.json`.
+Nook checks `https://github.com/MrRealORG/Nook/releases/latest/download/latest.json` (30 s after
+start, at most every 6 h; Settings ▸ About ▸ Check for updates). The minisign **public** key is
+in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) and `createUpdaterArtifacts` is on.
+
+To publish updates, add these **repository secrets** (Settings ▸ Secrets and variables ▸ Actions):
+- `TAURI_SIGNING_PRIVATE_KEY` — the contents of the private key file (never commit it).
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — its password (empty if it has none).
+
+Then tag a release (`git tag v1.3.1 && git push origin v1.3.1`): the workflow signs the
+installers and uploads them with `latest.json`. Untagged builds skip the updater artifacts, so
+they don't need the key.
 
 ## Layout
 

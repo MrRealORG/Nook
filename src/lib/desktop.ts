@@ -204,22 +204,11 @@ export async function initDesktop(): Promise<void> {
     void nativeNotify("Nook", fresh.text);
   });
 
-  if (useDesktopInfo.getState().settings.autoUpdate) void checkForUpdate(true);
+  // 1.3.1: the automatic update check is scheduled by the app (lib/updater.ts) — 30 s after
+  // first paint, at most every 6 h, never during onboarding
 }
 
 export async function checkForUpdate(quiet = false): Promise<void> {
-  if (!isTauri) return;
-  const { useStore } = await import("@/lib/store");
-  try {
-    const r = await invoke<{ configured: boolean; available?: boolean; version?: string; notes?: string }>("check_update");
-    if (!r.configured) {
-      if (!quiet) useStore.getState().toast("Auto-update isn't configured for this build", "alert");
-      return;
-    }
-    useDesktopInfo.setState({ update: { available: !!r.available, version: r.version, notes: r.notes } });
-    if (r.available) useStore.getState().toast(`Nook ${r.version} is available — Settings → Desktop to install`, "download");
-    else if (!quiet) useStore.getState().toast("You're on the latest Nook", "check");
-  } catch (e) {
-    if (!quiet) useStore.getState().toast(`Update check failed: ${e}`, "alert");
-  }
+  const m = await import("@/lib/updater");
+  await m.checkForUpdates(quiet);
 }

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { localOnboarded } from "@/lib/boot";
 import type { IconName } from "@/components/icons";
 import { flyCoins } from "@/lib/coinFly";
 import { abilityOf, decayed, levelOf, stageOf } from "@/lib/pet";
@@ -64,7 +65,7 @@ export type Notice = { id: number; text: string; icon: IconName; kind: "sale" | 
 /** consecutive days where EVERY daily quest (incl. bonus) was claimed */
 export type PerfectStreak = { last: string; count: number; best: number };
 /** the human behind the pet — avatar/name/email/password stay browser-local */
-export type Profile = { displayName: string; email: string; avatar: string; passHash: string }; // avatar = dataURL, passHash = sha-256 hex
+export type Profile = { displayName: string; email: string; avatar: string; passHash: string; banner?: string }; // avatar = dataURL, passHash = sha-256 hex
 export type FontId = "sans" | "pixel" | "serif" | "mono" | "round" | "silk" | (string & {});
 /** whole-app background wallpaper (Settings → Appearance) */
 export type Wallpaper = { id: string; img?: string; dim: number; blur: number };
@@ -640,7 +641,7 @@ export const useStore = create<S>()((set, get) => {
     bugOpen: false,
     bugTab: "report",
     settingsSection: null,
-    voiceModel: "moonshine-tiny",
+    voiceModel: "whisper-tiny",
     asr: { status: "idle", progress: 0, model: null, error: null },
     taskJump: null,
     petFolders: [],
@@ -701,7 +702,7 @@ export const useStore = create<S>()((set, get) => {
           iconStyle: p.iconStyle === "clean" ? "clean" : "pixel",
           layout: p.layout === "obsidian" ? "obsidian" : "nook",
           features: normFeatures(p.features),
-          onboarded: p.onboarded ?? !!p.tourDone,
+          onboarded: localOnboarded() || get().onboarded || (p.onboarded ?? !!p.tourDone),
           cleanMode: p.cleanMode ?? false,
           roam: p.roam ?? true,
           follow: p.follow ?? false,
@@ -742,7 +743,7 @@ export const useStore = create<S>()((set, get) => {
           tourDone: p.tourDone ?? false,
           dnd: p.dnd ?? false,
           notifKinds: p.notifKinds && typeof p.notifKinds === "object" ? { ...get().notifKinds, ...(p.notifKinds as NotifKinds) } : get().notifKinds,
-          voiceModel: (p.voiceModel && ["moonshine-tiny", "moonshine-base", "whisper-tiny", "whisper-small"].includes(p.voiceModel) ? p.voiceModel : "moonshine-tiny") as AsrModelId,
+          voiceModel: (p.voiceModel && ["moonshine-tiny", "moonshine-base", "whisper-tiny", "whisper-base", "whisper-small"].includes(p.voiceModel) ? p.voiceModel : "whisper-tiny") as AsrModelId,
           railIcons: p.railIcons && typeof p.railIcons === "object" ? (p.railIcons as Partial<Record<View, IconName>>) : {},
           railOrder: Array.isArray(p.railOrder) ? (p.railOrder as View[]).filter((v) => RAIL_DEFAULT_ORDER.includes(v)) : [],
           railHidden: Array.isArray(p.railHidden) ? (p.railHidden as View[]) : [],

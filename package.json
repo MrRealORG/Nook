@@ -1,7 +1,7 @@
 {
   "name": "nook",
   "private": true,
-  "version": "1.3.0",
+  "version": "1.3.1",
   "type": "module",
   "description": "Nook — pixel-art AI notes super app (Tauri v2 desktop build)",
   "scripts": {
@@ -15,6 +15,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-autostart": "2.7.0",
     "@tauri-apps/plugin-deep-link": "2.6.3",

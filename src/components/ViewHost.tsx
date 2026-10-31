@@ -6,6 +6,7 @@ import { Editor } from "@/components/Editor";
 import { NoteTabs } from "@/components/NoteTabs";
 import { useStore } from "@/lib/store";
 import { viewEnabled } from "@/lib/features";
+import { CrashProbe, ErrorBoundary } from "@/components/ErrorBoundary";
 
 export const Loading = () => (
   <div className="grid h-full place-items-center">
@@ -46,6 +47,8 @@ export function ViewHost({ tabs = true }: { tabs?: boolean }) {
   const view = viewEnabled(features, view0) ? view0 : "notes";
   return (
     <section key={view} data-view={view} className="view-enter relative min-w-0 flex-1 overflow-hidden">
+      <ErrorBoundary name={`The ${view} view`} actions={view !== "notes" ? [{ label: "Go to notes", run: () => useStore.getState().setView("notes"), testId: "err-notes" }] : []}>
+      <CrashProbe name={view} />
       {view === "notes" && (
         <div className="flex h-full min-h-0 flex-col">
           {tabs && <NoteTabs />}
@@ -66,6 +69,7 @@ export function ViewHost({ tabs = true }: { tabs?: boolean }) {
       {view === "calendar" && <CalendarView />}
       {view === "timelens" && <TimelensView />}
       {view === "chat" && <ChatView />}
+      </ErrorBoundary>
     </section>
   );
 }

@@ -16,6 +16,8 @@ async function boot(page: Page, prefs: Record<string, unknown> | null = { tourDo
   page.on("console", (m) => {
     if (m.type() === "error" && !/Failed to load resource|WebSocket|ERR_CONNECTION/.test(m.text())) errors.push(m.text());
   });
+  // 1.3.1: a fresh profile also means the vault's onboarding flag is unset
+  if (!prefs) await fetch("http://127.0.0.1:3210/api/ui-state", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ onboarded: false }) });
   await page.addInitScript((p) => {
     (window as unknown as { __NOOK_E2E__: boolean }).__NOOK_E2E__ = true;
     if (!sessionStorage.getItem("seeded")) {
@@ -36,7 +38,7 @@ test.describe.serial("Nook 1.3", () => {
     await fetch(`${API}/api/timelens/seed`, { method: "POST" });
   });
 
-  test("onboarding: first launch walks all 7 steps; theme, icon style and layout apply live; a feature switched off leaves the sidebar", async ({ page }) => {
+  test("onboarding: first launch walks all 8 steps; theme, icon style and layout apply live; a feature switched off leaves the sidebar", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await boot(page, null);
     const ob = page.getByTestId("onboarding");
@@ -44,6 +46,9 @@ test.describe.serial("Nook 1.3", () => {
     await expect(ob).toHaveAttribute("data-step", "welcome");
     await expect(page.getByTestId("ob-back")).toBeDisabled();
     await page.getByTestId("ob-start").click();
+    // 1.3.1: the profile step comes first (covered in v131.spec)
+    await expect(ob).toHaveAttribute("data-step", "profile");
+    await page.getByTestId("ob-next").click();
 
     // theme + icon style
     await expect(ob).toHaveAttribute("data-step", "theme");
@@ -65,8 +70,8 @@ test.describe.serial("Nook 1.3", () => {
     expect(await html(page, "data-icons")).toBe("pixel");
     // Back works, Next moves on
     await page.getByTestId("ob-back").click();
-    await expect(ob).toHaveAttribute("data-step", "welcome");
-    await page.keyboard.press("ArrowRight");
+    await expect(ob).toHaveAttribute("data-step", "profile");
+    await page.getByTestId("ob-next").click();
     await expect(ob).toHaveAttribute("data-step", "theme");
     await page.getByTestId("ob-next").click();
 

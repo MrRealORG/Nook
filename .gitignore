@@ -10,3 +10,7 @@ playwright-report/
 .env.*
 *.log
 .DS_Store
+secrets/
+*.key
+*.key.pub
+public/ort/

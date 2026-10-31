@@ -234,6 +234,16 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
             let _ = crate::db::setting_put(&c, "features", &Value::Object(clean.clone()).to_string());
             R::json(Value::Object(clean))
         }
+        // 1.3.1 UI state mirrored server-side (onboarding-done survives a wiped WebView2 profile)
+        ("GET", ["ui-state"]) => R::json(ui_state(&c)),
+        ("PUT", ["ui-state"]) => {
+            let mut cur = ui_state(&c);
+            if let (Some(o), Some(onb)) = (cur.as_object_mut(), b.get("onboarded").and_then(Value::as_bool)) {
+                o.insert("onboarded".into(), Value::Bool(onb));
+            }
+            let _ = crate::db::setting_put(&c, "ui-state", &cur.to_string());
+            R::json(cur)
+        }
         ("POST", ["folders"]) => folders_create(&c, &b),
         ("PATCH", ["folders", id]) => folders_patch(&c, id, &b),
         ("DELETE", ["folders", id]) => {
@@ -573,6 +583,11 @@ fn listings_list(c: &Connection) -> Value {
     )
 }
 
+fn ui_state(c: &Connection) -> Value {
+    let v = crate::db::setting_get(c, "ui-state").and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or(json!({}));
+    json!({ "onboarded": v.get("onboarded").and_then(Value::as_bool).unwrap_or(false) })
+}
+
 fn bootstrap(c: &Connection) -> Value {
     let folders: Vec<Value> = match folders_list(c) {
         Value::Array(a) => a
@@ -582,6 +597,7 @@ fn bootstrap(c: &Connection) -> Value {
         _ => vec![],
     };
     json!({
+        "ui": ui_state(c),
         "notes": all_notes(c),
         "canvases": canvases_list(c),
         "pet": pet_get(c).unwrap_or_else(default_pet),

@@ -32,7 +32,12 @@ import { everyActive, installPower } from "@/lib/power";
 import { Loading, ViewHost } from "@/components/ViewHost";
 const SearchDialog = lazy(() => import("@/components/SearchDialog"));
 // 1.3 — all lazy: none of this code loads until it is used
-const Onboarding = lazy(() => import("@/components/Onboarding"));
+const OnboardingLazy = lazy(() => import("@/components/Onboarding"));
+import { preloaded, markOnboarded } from "@/lib/boot";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { BugReportDialog, offerCrashReport } from "@/components/BugReport";
+import { UpdateCard } from "@/components/UpdateCard";
+import { scheduleAutoCheck } from "@/lib/updater";
 const QuickSwitcher = lazy(() => import("@/components/QuickSwitcher"));
 const ObsidianLayout = lazy(() => import("@/components/ObsidianLayout"));
 const NoteDialogs = lazy(() => import("@/components/NoteDialogs"));
@@ -190,6 +195,7 @@ export function App({ initial }: { initial: InitialData }) {
   const wallpaper = useStore((s) => s.wallpaper);
   const layout = useStore((s) => s.layout);
   const onboardingOpen = useStore((s) => s.onboardingOpen);
+  const onboardedFlag = useStore((s) => s.onboarded);
   const switcherOpen = useStore((s) => s.switcherOpen);
   useAppTimeTracker();
   usePetNag();
@@ -220,8 +226,27 @@ export function App({ initial }: { initial: InitialData }) {
     installPower();
     // pet stat decay is time-based (decayed() uses timestamps), so a slow, visible-only tick is exact
     const stopPet = everyActive(() => useStore.getState().tickPet(), 60_000);
-    // live bazaar: bot sales anywhere in the app (coins + badge), listings kept fresh
-    if (useStore.getState().features.market !== false) startMarketWatcher();
+    // 1.3.1: background services start after the first paint — and not at all while the
+    // first-run onboarding is up (it gets the whole CPU budget)
+    let stopDeferred = false;
+    const startBackground = () => {
+      if (stopDeferred) return;
+      // live bazaar: bot sales anywhere in the app (coins + badge), listings kept fresh
+      if (useStore.getState().features.market !== false) startMarketWatcher();
+      void st.loadTasks();
+      void st.loadCustomGames();
+      // offer a bug report if the previous run crashed; the update check (30 s, ≤ every 6 h)
+      setTimeout(() => void offerCrashReport().catch(() => {}), 3000);
+      scheduleAutoCheck(() => useStore.getState().onboardingOpen);
+    };
+    let bgTimer: ReturnType<typeof setTimeout> | null = null;
+    const whenOnboarded = () => {
+      if (useStore.getState().onboardingOpen) return;
+      unsubOb();
+      bgTimer = setTimeout(startBackground, 1200);
+    };
+    const unsubOb = useStore.subscribe(whenOnboarded);
+    whenOnboarded();
     // 1.3: switched-off features stop their background work (Timelens sampler, widget, …)
     if (Object.values(useStore.getState().features).includes(false)) void import("@/lib/featureEffects").then((m) => m.applyFeaturesAtBoot(useStore.getState().features));
     // remember click points so coin rewards can fly from where the user clicked
@@ -229,9 +254,6 @@ export function App({ initial }: { initial: InitialData }) {
     // global error/warn/rejection capture → the Logs & Bugs center
     installLogger();
     logEvent("nook booted", "info", "app");
-    // tasks hydrate + first-visit pet tour
-    void st.loadTasks();
-    void st.loadCustomGames();
     // keep the rulebook in sync with the server (the AI harness and other browsers write there too)
     const stopRules = everyActive(() => {
       void fetch("/api/rules")
@@ -255,6 +277,7 @@ export function App({ initial }: { initial: InitialData }) {
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", vis);
     const hi = setTimeout(() => {
+      if (useStore.getState().onboardingOpen) return;
       const p = useStore.getState().pet;
       useStore.getState().say(p.food < 30 ? "I'm hungry… visit the Den?" : `${p.name} is here. Let's write something!`);
     }, 1400);
@@ -323,6 +346,9 @@ export function App({ initial }: { initial: InitialData }) {
     };
     window.addEventListener("keydown", onKey);
     return () => {
+      stopDeferred = true;
+      unsubOb();
+      if (bgTimer) clearTimeout(bgTimer);
       stopPet();
       stopRules();
       clearTimeout(hi);
@@ -343,6 +369,18 @@ export function App({ initial }: { initial: InitialData }) {
     const stop = startMusic();
     return stop;
   }, [music, muted]);
+
+  const OnboardingC = preloaded.Onboarding ?? OnboardingLazy;
+  const onboardingNode = onboardingOpen && (
+    <ErrorBoundary name="Onboarding" actions={[{ label: "Skip onboarding", testId: "err-skip-onboarding", run: () => { markOnboarded(); useStore.getState().set({ onboarded: true, tourDone: true, onboardingOpen: false }); } }]}>
+      <Suspense fallback={<div className="ob-root-fallback" />}>
+        <OnboardingC />
+      </Suspense>
+    </ErrorBoundary>
+  );
+  // 1.3.1: first run → only the onboarding is mounted (the app shell renders once it closes),
+  // so the very first paint is the onboarding and startup does no app-shell work.
+  if (onboardingOpen && !onboardedFlag) return <>{onboardingNode}<BugReportDialog /><Toasts /></>;
 
   return (
     <div className="fixed inset-0 flex flex-col gap-2 p-2 pb-0" data-clean={cleanMode}>
@@ -396,12 +434,10 @@ export function App({ initial }: { initial: InitialData }) {
           <QuickSwitcher />
         </Suspense>
       )}
-      {onboardingOpen && (
-        <Suspense fallback={null}>
-          <Onboarding />
-        </Suspense>
-      )}
+      {onboardingNode}
       <ContextMenuHost />
+      <BugReportDialog />
+      <UpdateCard />
       {shareId && (
         <div className="fixed inset-0 z-[300]" style={{ background: "var(--bg)" }}>
           <ShareReader

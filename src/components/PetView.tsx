@@ -6,7 +6,7 @@ import { useStore } from "@/lib/store";
 import { THEMES } from "@/lib/themes";
 
 /** Per-species tint: [rampOverride, accentOverride] — null = use theme colours. */
-const SPECIES_PALETTES: Partial<Record<Species, { ramp?: string[]; accent: string }>> = {
+export const SPECIES_PALETTES: Partial<Record<Species, { ramp?: string[]; accent: string }>> = {
   cat: { accent: "#9db7d0" },
   bunny: { ramp: ["#12100e", "#4a4038", "#8a7a6c", "#cbbfb2", "#f6f0e7"], accent: "#d8a8b8" },
   blob: { ramp: ["#0c1110", "#2e4a42", "#5f8577", "#9dc0ae", "#e8f5ec"], accent: "#8fd6c0" },

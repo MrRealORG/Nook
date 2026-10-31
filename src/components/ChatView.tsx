@@ -5,6 +5,7 @@
  * tool calls render as readable cards.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MeAvatar } from "@/components/MeAvatar";
 import { Icon } from "@/components/Icon";
 import type { IconName } from "@/components/icons";
 import { Markdown } from "@/components/Markdown";
@@ -372,7 +373,10 @@ export default function ChatView() {
           {msgs.map((m, i) => (
             <div key={m.id} className={`chat-row ${m.role}`} data-testid={`msg-${m.role}`}>
               {m.role === "user" ? (
-                <div className="chat-bubble user selectable">{m.text}</div>
+                <>
+                  <div className="chat-bubble user selectable">{m.text}</div>
+                  <MeAvatar size={30} />
+                </>
               ) : (
                 <div className={`chat-bubble assistant ${m.error ? "error" : ""}`}>
                   <MessageBody text={m.text} titles={titles} onLink={openLink} />

@@ -17,8 +17,27 @@ type Preset = { id: string; name: string; baseUrl: string; model: string; needsK
 type Cfg = { provider: string; baseUrl: string; model: string; hasKey: boolean; usable: boolean; presets: Preset[] };
 type CardId = "gemini" | "glm" | "ollama" | "other";
 
-const post = async <T,>(url: string, body: unknown, method = "POST"): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+/** 1.3.1: every request is bounded (AbortController) so a hung backend / Ollama / provider can
+ *  never leave the onboarding or Settings stuck on a spinner. */
+async function timedFetch(url: string, init: RequestInit = {}, ms = 4000): Promise<Response> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    // race as well as abort: the desktop API shim routes /api/* through IPC, which ignores signals
+    return await Promise.race([
+      fetch(url, { ...init, signal: ac.signal }),
+      new Promise<never>((_, rej) => ac.signal.addEventListener("abort", () => rej(new Error("aborted")))),
+    ]);
+  } catch (e) {
+    if (ac.signal.aborted) throw new Error(`timed out after ${Math.round(ms / 1000)} s`);
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const post = async <T,>(url: string, body: unknown, method = "POST", ms = 4000): Promise<T> => {
+  const r = await timedFetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, ms);
   return (await r.json()) as T;
 };
 
@@ -47,7 +66,7 @@ export function AiSetup({ compact, onSaved }: { compact?: boolean; onSaved?: (pr
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
-    void fetch("/api/ai-config")
+    void timedFetch("/api/ai-config")
       .then((r) => r.json())
       .then((j: Cfg) => {
         setCfg(j);
@@ -93,8 +112,8 @@ export function AiSetup({ compact, onSaved }: { compact?: boolean; onSaved?: (pr
         setMsg(provider === "ollama" ? { ok: true, text: `Found ${r.models.length} installed model${r.models.length === 1 ? "" : "s"}` } : null);
       } else if (r.ok) setMsg({ ok: false, text: provider === "ollama" ? "Ollama is running but has no models yet — pull one below." : "No models listed." });
       else setMsg({ ok: false, text: r.error ?? "Could not list models" });
-    } catch {
-      setMsg({ ok: false, text: "Could not reach Nook's backend" });
+    } catch (e) {
+      setMsg({ ok: false, text: provider === "ollama" ? `Ollama didn't answer (${(e as Error).message ?? e}) — is it running?` : `Could not list models (${(e as Error).message ?? e})` });
     }
     setBusy("");
   }
@@ -103,11 +122,12 @@ export function AiSetup({ compact, onSaved }: { compact?: boolean; onSaved?: (pr
     setBusy("test");
     setMsg(null);
     try {
-      const r = await post<{ ok: boolean; reply?: string; ms?: number; error?: string }>("/api/ai-test", draft());
+      const r = await post<{ ok: boolean; reply?: string; ms?: number; error?: string }>("/api/ai-test", draft(), "POST", 20000);
       setMsg(r.ok ? { ok: true, text: `Connected — “${r.reply}” in ${r.ms} ms` } : { ok: false, text: r.error ?? "failed" });
       sfx(r.ok ? "win" : "error");
-    } catch {
-      setMsg({ ok: false, text: "Test failed" });
+    } catch (e) {
+      setMsg({ ok: false, text: `Test failed: ${(e as Error).message ?? e}` });
+      sfx("error");
     }
     setBusy("");
   }
@@ -116,7 +136,7 @@ export function AiSetup({ compact, onSaved }: { compact?: boolean; onSaved?: (pr
     setBusy("save");
     try {
       const body = provider === "local" ? { provider: "local" } : draft();
-      const r = await fetch("/api/ai-config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const r = await timedFetch("/api/ai-config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, 6000);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? "Could not save");
       setCfg(j as Cfg);
