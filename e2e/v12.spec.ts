@@ -39,34 +39,36 @@ test.describe.serial("Nook 1.2", () => {
     await fetch(`${API}/api/timelens/pause`, json("POST", { paused: false }));
   });
 
-  test("theme: new installs get Clean, follow the OS; old default migrates; custom picks are kept", async ({ browser }) => {
-    // fresh install, light OS
+  test("theme: new installs get Pixel (1.3 default), follow the OS; old defaults migrate; custom picks are kept", async ({ browser }) => {
+    // fresh install, light OS → Pixel light
     let ctx = await browser.newContext({ colorScheme: "light" });
     let page = await ctx.newPage();
     await boot(page, null);
-    expect(await html(page, "data-ui")).toBe("clean");
+    expect(await html(page, "data-ui")).toBe("pixel");
     expect(await html(page, "data-theme")).toBe("light");
     expect(await html(page, "data-power")).toBe("low");
-    const font = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
-    expect(font).toContain("Segoe UI Variable");
-    // crisp (lucide) icons in the Clean style
-    await expect(page.locator("svg.lucide").first()).toBeVisible();
+    expect(await html(page, "data-icons")).toBe("pixel");
+    // colour pixel sprites are the default icon style
+    await expect(page.locator(".nav-px").first()).toBeVisible();
     await ctx.close();
-    // fresh install, dark OS
+    // fresh install, dark OS → Pixel dark
     ctx = await browser.newContext({ colorScheme: "dark" });
     page = await ctx.newPage();
     await boot(page, null);
+    expect(await html(page, "data-ui")).toBe("pixel");
     expect(await html(page, "data-theme")).toBe("dark");
     await ctx.close();
-    // 1.1 user on the old default (classic + graphite) → Clean dark
+    // 1.1 user on the old default (classic + graphite) → 1.2 Clean dark → 1.3 Pixel dark
     ctx = await browser.newContext();
     page = await ctx.newPage();
     await boot(page, { tourDone: true, theme: "graphite", uiStyle: "nook" });
-    expect(await html(page, "data-ui")).toBe("clean");
+    expect(await html(page, "data-ui")).toBe("pixel");
     expect(await html(page, "data-theme")).toBe("dark");
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("nook:prefs") ?? "{}").v12)).toBe(true);
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("nook:prefs") ?? "{}"));
+    expect(saved.v12).toBe(true);
+    expect(saved.v13).toBe(true);
     await ctx.close();
-    // a customised 1.1 look is respected; pixel themes still exist
+    // a customised 1.1 look is respected; Clean is one click away and keeps crisp icons
     ctx = await browser.newContext();
     page = await ctx.newPage();
     await boot(page, { tourDone: true, theme: "moss", uiStyle: "pixel" });
@@ -185,9 +187,11 @@ test.describe.serial("Nook 1.2", () => {
     await expect.poll(async () => (await api<any>("/api/timelens/summary")).apps.some((a: any) => a.app === "Spotify")).toBe(false);
     await expect(page.locator('[data-testid=tl-app-row][data-app="Spotify"]')).toHaveCount(0);
     await fetch(`${API}/api/timelens/apps/Spotify`, json("PATCH", { excluded: false }));
-    // real icons are served by the backend too (demo vault icons are generated PNGs)
+    // 1.3: the backend serves only real extracted icons — the demo seed no longer stores
+    // generated placeholder PNGs (they used to block the real ones); the UI falls back to brand marks
     const icons = await api<Record<string, string>>("/api/timelens/icons");
-    expect(icons["VS Code"]).toMatch(/^data:image\/png;base64,/);
+    expect(typeof icons).toBe("object");
+    expect(icons["VS Code"]).toBeUndefined();
     expect(errors).toEqual([]);
   });
 
@@ -207,7 +211,8 @@ test.describe.serial("Nook 1.2", () => {
     await expect(page.getByLabel("Quick capture")).toBeVisible();
     await expect(page.getByTestId("widget-timelens")).toBeVisible();
     await expect(page.getByTestId("widget-top-apps")).toBeVisible();
-    expect(await page.getByTestId("widget-app-icon").count()).toBeGreaterThan(0);
+    // real icons when extracted, else 1.3's built-in brand marks
+    expect((await page.getByTestId("widget-app-icon").count()) + (await page.getByTestId("widget-app-brand").count())).toBeGreaterThan(0);
     // pill
     await page.getByTestId("widget-collapse").click();
     await expect(w).toHaveAttribute("data-compact", "true");

@@ -17,6 +17,13 @@ import { THEMES, THEME_IDS, type ThemeId } from "@/lib/themes";
 import type { AiResult, Pet } from "@/lib/types";
 import { uid } from "@/lib/util";
 import { PILL_SIZE, readWidgetCfg, writeWidgetCfg, type TileId, type WidgetCfg } from "@/widget/config";
+import { brandLogoFor } from "@/lib/appLogos";
+
+/** 1.3: no real icon yet → the built-in brand mark (inline SVG), else a letter */
+function BrandOrLetter({ app }: { app: string }) {
+  const Logo = brandLogoFor(app);
+  return Logo ? <span className="wg-brand" data-testid="widget-app-brand" style={{ display: "inline-grid", width: 16, height: 16 }}><Logo size={16} /></span> : <i className="wg-letter">{app[0]}</i>;
+}
 
 const MicButton = lazy(() => import("@/components/MicButton").then((m) => ({ default: m.MicButton })));
 
@@ -311,7 +318,7 @@ export function Widget() {
               <div className="wg-apps" data-testid="widget-top-apps">
                 {tl.apps.slice(0, 4).map((a) => (
                   <span key={a.app} className="wg-app" title={`${a.app} · ${fmt(a.secs)}`}>
-                    {icons[a.app] ? <img src={icons[a.app]} alt="" width={16} height={16} data-testid="widget-app-icon" /> : <i className="wg-letter">{a.app[0]}</i>}
+                    {icons[a.app] ? <img src={icons[a.app]} alt="" width={16} height={16} data-testid="widget-app-icon" /> : <BrandOrLetter app={a.app} />}
                     <span>{fmt(a.secs)}</span>
                   </span>
                 ))}

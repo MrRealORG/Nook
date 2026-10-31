@@ -163,7 +163,6 @@ export function App({ initial }: { initial: InitialData }) {
     useStore.getState().hydrate(initial);
     hydrated.current = true;
   }
-  useEffect(() => installSystemTheme(), []);
   // the focus timer is the only thing that needs a 1 s tick — run it only while a timer runs
   const timerRunning = useStore((s) => s.timer.running);
   useEffect(() => {
@@ -208,6 +207,9 @@ export function App({ initial }: { initial: InitialData }) {
   useEffect(() => {
     const st = useStore.getState();
     st.loadPrefs();
+    // follow-the-OS theme only after prefs are loaded: applying it first wrote the default state
+    // over the saved prefs (layout, theme, icon style… reset on every reload for followers)
+    installSystemTheme();
     // dev-only debug/E2E handle
     if (import.meta.env.DEV || (window as unknown as { __NOOK_E2E__?: boolean }).__NOOK_E2E__) (window as unknown as Record<string, unknown>).__nook = useStore;
     document.documentElement.dataset.theme = useStore.getState().theme;

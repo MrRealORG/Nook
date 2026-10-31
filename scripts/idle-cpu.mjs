@@ -122,6 +122,11 @@ for (const v of VIEWS) {
   await page.waitForTimeout(2500); // let entry animations + lazy chunks finish
   rows.push(await measure(page, v));
 }
+// 1.3: the Obsidian layout at idle
+await page.evaluate(() => { const s = window.__nook.getState(); s.setLayout("obsidian"); s.setView("notes"); });
+await page.waitForTimeout(2500);
+rows.push(await measure(page, "notes (obsidian)"));
+await page.evaluate(() => window.__nook.getState().setLayout("nook"));
 // hidden window (minimised / closed-to-tray): fake visibility = hidden
 await page.evaluate(() => window.__nook.getState().setView("notes"));
 await page.waitForTimeout(1500);
@@ -133,6 +138,22 @@ await page.evaluate(() => {
 await page.waitForTimeout(1500);
 rows.push(await measure(page, "notes (hidden)"));
 
+// 1.3: first launch — the onboarding sky runs, then must leave nothing behind once closed
+{
+  const octx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  await octx.addInitScript(INSTRUMENT);
+  const op = await octx.newPage();
+  await op.goto(BASE + "/");
+  await op.waitForFunction(() => !!window.__nook, null, { timeout: 30000 });
+  await op.waitForSelector("[data-testid=onboarding]");
+  await op.waitForTimeout(2500);
+  rows.push(await measure(op, "onboarding (open)"));
+  await op.keyboard.press("Escape");
+  await op.waitForTimeout(2500);
+  rows.push(await measure(op, "after onboarding"));
+  await octx.close();
+}
+
 const w = await ctx.newPage();
 await w.setViewportSize({ width: 320, height: 400 });
 await w.goto(BASE + "/widget.html");
@@ -141,10 +162,14 @@ rows.push(await measure(w, "widget"));
 await browser.close();
 
 console.table(rows);
-const worst = rows.reduce((a, r) => (r.cpuPct > a.cpuPct ? r : a), rows[0]);
-const avg = rows.reduce((a, r) => a + r.cpuPct, 0) / rows.length;
-const avgProc = rows.reduce((a, r) => a + r.procPct, 0) / rows.length;
-const worstProc = rows.reduce((a, r) => (r.procPct > a.procPct ? r : a), rows[0]);
+// the open onboarding is an active, animated screen — reported, but not part of the idle numbers
+const idle = rows.filter((r) => r.view !== "onboarding (open)");
+const worst = idle.reduce((a, r) => (r.cpuPct > a.cpuPct ? r : a), idle[0]);
+const avg = idle.reduce((a, r) => a + r.cpuPct, 0) / idle.length;
+const avgProc = idle.reduce((a, r) => a + r.procPct, 0) / idle.length;
+const worstProc = idle.reduce((a, r) => (r.procPct > a.procPct ? r : a), idle[0]);
+const rafIdle = idle.reduce((a, r) => a + r.rafPerSec, 0);
+console.log(`idle rAF/s summed over idle views: ${rafIdle}`);
 console.log(`idle main-thread CPU: avg ${avg.toFixed(2)}%  worst ${worst.cpuPct}% (${worst.view})  window ${SECS}s/view`);
 console.log(`idle whole-browser CPU (one core): avg ${avgProc.toFixed(2)}%  worst ${worstProc.procPct}% (${worstProc.view})  [${navigatorCores} cores]`);
 if (OUT) writeFileSync(OUT, JSON.stringify({ secs: SECS, rows, avg, worst, avgProc, worstProc }, null, 2));

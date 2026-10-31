@@ -889,6 +889,17 @@ export const useStore = create<S>()((set, get) => {
       }
       document.documentElement.dataset.theme = theme;
       get().set({ theme });
+      // "follow system" is on: a pick that matches the OS mode fills that mode's slot; a pick
+      // against it (a dark theme while the OS is light, or vice versa) means "keep this one",
+      // so following stops — otherwise the next reload would silently undo the choice.
+      try {
+        const raw = JSON.parse(localStorage.getItem("nook:themeFollow") ?? "{}");
+        if (raw.on && THEMES[theme]) {
+          const osDark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
+          const next = THEMES[theme].dark === osDark ? { ...raw, [osDark ? "dark" : "light"]: theme } : { ...raw, on: false };
+          localStorage.setItem("nook:themeFollow", JSON.stringify(next));
+        }
+      } catch {}
       sfx("pop");
     },
 
