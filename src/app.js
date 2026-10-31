@@ -4676,8 +4676,12 @@ function renderChatMessages() {
     const who = state.userName ? `, <b class="cv-greet-name">${esc(state.userName)}</b>` : '';
     box.innerHTML = `
       <div class="cv-empty">
-        <div class="cv-empty-frog">${frogSvg}</div>
-        <h2>Salam${who}!</h2>
+        <div class="cv-hero">
+          <span class="cv-hero-ring r1"></span>
+          <span class="cv-hero-ring r2"></span>
+          <div class="cv-hero-orb">${frogSvg}</div>
+        </div>
+        <h2>Salam${who}.</h2>
         <p>I live right here in Nook — draft ideas, summarize your notes,<br/>plan your day. Chats are saved on this PC only.</p>
         <div class="cv-suggest">
           ${CHAT_SUGGESTIONS.map((s) => `<button class="cv-sug" data-s="${esc(s.text)}"><span class="cv-sug-ico">${ico(s.icon)}</span><span>${esc(s.text)}</span></button>`).join('')}
