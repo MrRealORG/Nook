@@ -44,7 +44,7 @@
 
 /* ---------- AI provider cards ---------- */
 .ai-setup { display: flex; flex-direction: column; gap: 10px; }
-.ai-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.ai-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; }
 .ai-card {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; text-align: left;
   border: 2px solid var(--line); background: var(--panel-solid); color: var(--ink); transition: transform 0.1s, border-color 0.12s;

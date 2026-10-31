@@ -241,7 +241,7 @@ export function NoteList({ embedded }: { embedded?: boolean } = {}) {
     { icon: "folder-plus", label: "New folder", run: () => newFolderIn(f.id) },
     { sep: true },
     { icon: "pencil", label: "Rename", shortcut: "F2", run: () => setRenaming(f.id) },
-    { icon: "palette", label: "Colour", sub: FOLDER_COLORS.map(({ c, n }) => ({ label: `${f.color === c ? "● " : "○ "}${n}`, run: () => st().updateFolder(f.id, { color: c, icon: isEmoji(f.icon) ? "folder" : f.icon }) })) },
+    { icon: "palette", label: "Colour", sub: FOLDER_COLORS.map(({ c, n }) => ({ label: f.color === c ? `${n}  ✓` : n, lead: <span aria-hidden style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: c, boxShadow: f.color === c ? "0 0 0 2px var(--panel-solid), 0 0 0 3.5px currentColor" : "inset 0 0 0 1px rgba(0,0,0,.2)" }} />, run: () => st().updateFolder(f.id, { color: c, icon: isEmoji(f.icon) ? "folder" : f.icon }) })) },
     { icon: "sparkle", label: "Emoji icon", sub: [...EMOJI.map<CtxItem>((em) => ({ label: `${em}  ${f.icon === em ? "✓" : ""}`, run: () => st().updateFolder(f.id, { icon: em }) })), { sep: true }, { icon: "folder", label: "Pixel folder (no emoji)", run: () => st().updateFolder(f.id, { icon: "folder" }) }] },
     { icon: "bookmark", label: f.pinned ? "Unpin" : "Pin to favourites", run: () => st().updateFolder(f.id, { pinned: !f.pinned }) },
     { icon: "arrow-up", label: "Move to top level", disabled: !f.parentId, run: () => st().updateFolder(f.id, { parentId: null }) },

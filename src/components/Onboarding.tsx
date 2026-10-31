@@ -98,7 +98,7 @@ export default function Onboarding() {
   });
 
   return (
-    <div className="ob-root" role="dialog" aria-modal="true" aria-label="Welcome to Nook" data-testid="onboarding" data-step={step} data-dark={dark}>
+    <div className="ob-root" role="dialog" aria-modal="true" aria-label="Welcome to Nook" data-testid="onboarding" data-step={step} data-dark={dark} data-wide={step === "features" || step === "ai" || step === "theme"}>
       <Scene dark={dark} burst={burst} />
 
       {/* Mochi walks in from the left, waves, and talks */}
@@ -112,13 +112,13 @@ export default function Onboarding() {
         <PetView species={pet.species} tint={pet.look} hat={pet.hat} mood={!arrived ? "walk" : step === "done" ? "spin" : step === "welcome" || step === "pet" ? "happy" : "idle"} scale={4} fps={8} animate />
       </div>
 
-      <div className="ob-card" ref={cardRef} data-wide={step === "features" || step === "ai" || step === "theme"} key={step}>
+      <div className="ob-card" ref={cardRef} data-wide={step === "features" || step === "ai" || step === "theme"} data-step={step} key={step}>
         {step === "welcome" && (
           <div className="ob-welcome">
             <div className="ob-logo" aria-hidden>
               <span>N</span><span>o</span><span>o</span><span>k</span>
             </div>
-            <h1 className="ob-h1">Your cozy, pixel-soft second brain</h1>
+            <h1 className="ob-h1">Your cozy, <span className="whitespace-nowrap">pixel-soft</span> second brain</h1>
             <p className="ob-p">Notes, tasks, focus, a tiny pet and an AI that lives on your machine. Let's set it up in under a minute.</p>
             <button className="ob-cta" onClick={next} data-autofocus data-testid="ob-start">
               Get Started <Icon name="arrow-right" size={16} />

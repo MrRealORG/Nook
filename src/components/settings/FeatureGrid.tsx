@@ -11,8 +11,8 @@ const SPRITE: Partial<Record<string, string>> = {
   activity: "activity", rules: "rules", reminders: "bell", pet: "den", arcade: "arcade", market: "market", team: "team", widget: "sparkle", backups: "folder",
 };
 const GROUPS: { id: FeatureDef["group"]; label: string }[] = [
-  { id: "core", label: "Notes & thinking" },
-  { id: "time", label: "Time & focus" },
+  { id: "core", label: "Notes + thinking" },
+  { id: "time", label: "Time + focus" },
   { id: "fun", label: "Fun" },
   { id: "system", label: "System" },
 ];
