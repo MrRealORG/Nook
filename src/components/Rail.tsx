@@ -397,11 +397,12 @@ export function Rail() {
     const sib = siblings(v);
     const target = sib[sib.indexOf(v) + dir];
     if (!target) return;
-    for (let guard = 0; guard < 20; guard++) {
-      st().moveRailItem(v, dir);
-      const o = railOrderOf(st().railOrder);
-      if ((dir < 0 && o.indexOf(v) < o.indexOf(target)) || (dir > 0 && o.indexOf(v) > o.indexOf(target))) break;
-    }
+    // one atomic reorder: lift the item out of the global order and drop it on the other side of
+    // its neighbour in this section (views from other sections in between keep their places)
+    const o = railOrderOf(st().railOrder).filter((x) => x !== v);
+    o.splice(o.indexOf(target) + (dir > 0 ? 1 : 0), 0, v);
+    st().set({ railOrder: o });
+    sfxP();
   };
   const menu = (v: View): CtxItem[] => [
     { icon: "external-link", label: `Open ${META[v].label}`, run: () => st().setView(v) },

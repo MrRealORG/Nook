@@ -328,6 +328,13 @@ export function GraphView() {
     let running = false;
     const loop = (t: number) => {
       running = false;
+      if (!motionAllowed() && !world.dragging) {
+        // low-power: settle the layout in a few batched frames instead of ~8 s of 60 fps animation,
+        // and snap the camera instead of easing it (an idle graph must cost zero frames)
+        const t0 = performance.now();
+        while (world.alpha > 0.014 && performance.now() - t0 < 12) simStep(world);
+        world.yaw = world.yawT; world.pitch = world.pitchT; world.pf = world.pfT;
+      }
       frame(world, ctx, t);
       // 1.2: the idle orbit is decorative — off in low-power mode; nothing runs while hidden
       const moving = world.alpha > 0.014 || Math.abs(world.yaw - world.yawT) > 0.002 || Math.abs(world.pitch - world.pitchT) > 0.002 || Math.abs(world.pf - world.pfT) > 0.004 || (world.opts.orbit && world.three && !world.dragging && motionAllowed()) || world.dragging;

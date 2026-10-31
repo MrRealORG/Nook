@@ -886,6 +886,16 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
         spans.push(Span { app: app.to_string(), title: title.to_string(), start, end: end.min(now), afk: *app == "AFK" });
     }
     let n = spans.len();
+    // idempotent: seeding again (tests, the "load demo" button) replaces the earlier demo rows
+    // instead of stacking a second, differently-scaled copy on top of them. Only the exact demo
+    // (app, title) pairs are touched, so real tracked time in the same window is kept.
+    let y = local_day_start(day - 3_600_000);
+    let mut demo_rows: Vec<(String, String)> = plan.iter().map(|(a, t, _, _)| (a.to_string(), t.to_string())).collect();
+    demo_rows.push(("VS Code".into(), "yesterday — nook".into()));
+    demo_rows.push(("Focus".into(), "Pomodoro".into()));
+    for (app, title) in &demo_rows {
+        let _ = c.execute(r#"DELETE FROM "TimeSpan" WHERE "app"=?1 AND "title"=?2 AND "start">=?3 AND "start"<?4"#, params![app, title, y, day + 86_400_000]);
+    }
     write_spans(c, &spans)?;
     // demo app registry with generated icons (stand-ins for the real exe icons on Windows)
     let demo: &[(&str, &str, [u8; 3])] = &[
@@ -907,7 +917,6 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
     let _ = c.execute(r#"INSERT OR IGNORE INTO "TimelensApp" ("app","firstSeen","lastSeen") VALUES ('Nook',?1,?1)"#, params![now]);
     // a focus session + a productive yesterday for the streak
     let _ = add_focus(c, at(9 * 60), at(9 * 60 + 25), "Pomodoro");
-    let y = local_day_start(day - 3_600_000);
     write_spans(c, &[Span { app: "VS Code".into(), title: "yesterday — nook".into(), start: y + 10 * 3_600_000, end: y + 13 * 3_600_000, afk: false }])?;
     Ok(n)
 }
@@ -1525,6 +1534,23 @@ mod tests {
         assert_eq!(streak_from(&[d(true), d(true), d(false)]), 2);
         assert_eq!(streak_from(&[d(true), d(true), d(true)]), 3);
         assert_eq!(streak_from(&[d(true), d(false), d(false)]), 0);
+    }
+
+    #[test]
+    fn seed_demo_is_idempotent_and_keeps_real_time() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn();
+        let now = local_day_start(crate::db::now_ms()) + 20 * 3_600_000; // 20:00 local
+        write_spans(&c, &[Span { app: "Word".into(), title: "real work".into(), start: now - 7_200_000, end: now - 3_600_000, afk: false }]).unwrap();
+        let count = |c: &Connection| c.query_row(r#"SELECT COUNT(*) FROM "TimeSpan""#, [], |r| r.get::<_, i64>(0)).unwrap();
+        seed_demo(&c, now).unwrap();
+        let once = count(&c);
+        // a second seed a little later (different scale/shift) must not stack overlapping copies
+        seed_demo(&c, now + 600_000).unwrap();
+        seed_demo(&c, now + 900_000).unwrap();
+        assert_eq!(count(&c), once);
+        let real: i64 = c.query_row(r#"SELECT COUNT(*) FROM "TimeSpan" WHERE "app"='Word'"#, [], |r| r.get(0)).unwrap();
+        assert_eq!(real, 1);
     }
 
     #[test]
