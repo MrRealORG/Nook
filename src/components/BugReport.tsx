@@ -1,6 +1,6 @@
 /**
  * 1.3.1 "Report a bug" — from Settings ▸ About, the error-boundary screen and the command palette
- * (and offered automatically on the launch after a crash).
+ * (and offered as a small dismissible toast on the launch after a crash — never auto-opened).
  *
  * Send = open a prefilled GitHub issue (title + body in the URL, trimmed to fit). The full report
  * (with logs) can also be saved as .txt or copied, so it can be attached by hand. API keys and
@@ -14,12 +14,14 @@ import { logsAsText, push } from "@/lib/logger";
 import { useStore } from "@/lib/store";
 import { version as APP_VERSION } from "../../package.json";
 
-type ReportState = { open: boolean; draft: string; crash: string | null; openWith: (draft?: string, crash?: string | null) => void; close: () => void };
+type ReportState = { open: boolean; draft: string; crash: string | null; offer: string | null; openWith: (draft?: string, crash?: string | null) => void; close: () => void };
 export const useBugReport = create<ReportState>((set) => ({
   open: false,
   draft: "",
   crash: null,
-  openWith: (draft = "", crash = null) => set({ open: true, draft, crash }),
+  /** last-run crash waiting in a small dismissible toast (never a blocking modal) */
+  offer: null,
+  openWith: (draft = "", crash = null) => set({ open: true, draft, crash, offer: null }),
   close: () => set({ open: false }),
 }));
 export const openBugReport = (draft?: string, crash?: string | null) => useBugReport.getState().openWith(draft, crash);
@@ -65,7 +67,26 @@ function saveText(name: string, text: string) {
   void import("@/lib/platform").then((m) => m.saveFile(name, text, "text/plain")).catch(() => {});
 }
 
+/** small, non-blocking "Nook hit a problem last time" toast with Report / dismiss */
+function CrashOffer() {
+  const offer = useBugReport((s) => s.offer);
+  const onboarding = useStore((s) => s.onboardingOpen);
+  if (!offer || onboarding) return null;
+  return (
+    <div className="panel panel-solid fixed bottom-5 right-5 z-[96] flex max-w-[380px] items-center gap-2.5 rounded-[14px] px-3.5 py-2.5 text-[13px]" role="status" data-testid="crash-offer">
+      <Icon name="bug" size={16} className="text-accent" />
+      <span className="flex-1">Nook ran into a problem last time.</span>
+      <button className="btn btn-sm btn-primary" onClick={() => openBugReport("", offer)} data-testid="crash-offer-report">Report</button>
+      <button className="icon-btn" onClick={() => useBugReport.setState({ offer: null })} aria-label="Dismiss" data-testid="crash-offer-dismiss"><Icon name="close" size={12} /></button>
+    </div>
+  );
+}
+
 export function BugReportDialog() {
+  return <><CrashOffer /><BugReportModal /></>;
+}
+
+function BugReportModal() {
   const { open, draft, crash, close } = useBugReport();
   const [what, setWhat] = useState("");
   const [steps, setSteps] = useState("");
@@ -185,5 +206,6 @@ export async function offerCrashReport() {
   if (!crash) return;
   const st = useStore.getState();
   st.notify?.("Nook ran into a problem last time — want to send a bug report?", "bug", "info");
-  openBugReport("", crash);
+  // never a blocking modal, and never during onboarding (CrashOffer hides itself until it's done)
+  useBugReport.setState({ offer: crash });
 }

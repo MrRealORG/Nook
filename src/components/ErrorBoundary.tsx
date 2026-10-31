@@ -1,7 +1,8 @@
 /**
  * 1.3.1 — error boundary around the onboarding and every view. A render crash shows a small
  * recovery card (try again / go to notes / skip onboarding / report a bug) instead of a blank
- * window, and the error is logged (and so lands in %APPDATA%/Nook/logs on desktop).
+ * window, and the error is logged. The bug report is only opened from the card's button (never
+ * auto-opened: a modal on top would cover "Try again" / "Skip onboarding"), (and so lands in %APPDATA%/Nook/logs on desktop).
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { push } from "@/lib/logger";
@@ -43,7 +44,7 @@ export class ErrorBoundary extends Component<Props, State> {
             {(this.props.actions ?? []).map((a) => (
               <button key={a.label} className="btn" data-testid={a.testId} onClick={() => { (window as unknown as { __nookCrash?: string }).__nookCrash = undefined; a.run(); this.setState((s) => ({ err: null, key: s.key + 1 })); }}>{a.label}</button>
             ))}
-            <button className="btn" onClick={report} data-testid="err-report">Report a bug</button>
+            <button className="btn" onClick={report} data-testid="err-report">Report this bug</button>
           </div>
         </div>
       </div>

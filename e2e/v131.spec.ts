@@ -157,6 +157,7 @@ test.describe.serial("Nook 1.3.1", () => {
       (window as any).__nook.getState().set({ onboardingOpen: true });
     });
     await expect(page.getByTestId("error-boundary")).toBeVisible();
+    await expect(page.getByTestId("bug-report")).toHaveCount(0); // never auto-opened over the card
     await page.getByTestId("err-skip-onboarding").click();
     await expect(page.getByTestId("error-boundary")).toHaveCount(0);
     await expect(page.getByTestId("onboarding")).toHaveCount(0);
@@ -419,7 +420,12 @@ test.describe.serial("Nook 1.3.1", () => {
     // the boundary error is remembered → next launch offers the report (after the 3 s defer)
     await page.reload();
     await ready(page);
-    await expect(page.getByTestId("bug-report")).toBeVisible({ timeout: 10_000 });
+    // a small dismissible toast, not a blocking modal
+    await expect(page.getByTestId("crash-offer")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("bug-report")).toHaveCount(0);
+    await page.getByTestId("crash-offer-report").click();
+    await expect(page.getByTestId("bug-report")).toBeVisible();
+    await expect(page.getByTestId("crash-offer")).toHaveCount(0);
   });
 
   test("updater (mocked check): card with notes, Later / Skip this version / Update now with progress; never during onboarding; 6 h throttle", async ({ page }) => {
