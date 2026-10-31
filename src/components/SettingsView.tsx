@@ -21,6 +21,9 @@ import { FONT_PACKS, ICON_PACKS, deletePack, exportPackZip, importPackZip, saveP
 import { WALLPAPERS, wallpaperCss } from "@/lib/wallpapers";
 import { getMcpToken, setMcpToken } from "@/lib/mcpTokens";
 import { AiProviderCard } from "@/components/settings/AiProviderCard";
+import { AiSetup } from "@/components/settings/AiSetup";
+import { FeatureGrid } from "@/components/settings/FeatureGrid";
+import { IconStylePicker, LayoutPicker, ThemePresets } from "@/components/settings/LookPickers";
 import { DesktopSection } from "@/components/settings/DesktopSection";
 import { getFollow, onFollowChange, rememberThemeChoice, setFollow, systemIsDark } from "@/lib/systemTheme";
 import { BackupSettings, ImportSettings, TimelensSettings } from "@/components/settings/TimelensSettings";
@@ -570,6 +573,11 @@ function FeaturesSection() {
   const hiddenCount = railHidden.length;
   return (
     <div className="space-y-4">
+      <div className="paper p-5" data-testid="settings-features">
+        <div className="label mb-1">Features</div>
+        <div className="mb-3 text-[12px] text-dim">A feature that's off is hidden everywhere — sidebar, commands, widget — and does no background work (the Timelens sampler sleeps, the market stops polling).</div>
+        <FeatureGrid />
+      </div>
       <div className="paper p-5">
         <div className="label mb-3">Companion</div>
         <Toggle
@@ -1216,6 +1224,20 @@ export function SettingsView() {
         {/* ---------------- appearance ---------------- */}
         {section === "look" && (
           <div className="space-y-4">
+            <div className="paper p-5" data-testid="settings-look-13">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <span className="label">Theme</span>
+                <button className="btn btn-sm ml-auto" onClick={() => useStore.setState({ onboardingOpen: true })} data-testid="rerun-onboarding">
+                  <Icon name="sparkles" size={12} /> Run the welcome again
+                </button>
+              </div>
+              <div className="mb-3 text-[11.5px] text-faint">Pixel is the default — light and dark. Applied instantly.</div>
+              <ThemePresets />
+              <div className="label mb-2 mt-5">Icon style</div>
+              <IconStylePicker />
+              <div className="label mb-2 mt-5">Layout</div>
+              <LayoutPicker />
+            </div>
             <div className="paper p-5">
               <div className="mb-1 flex flex-wrap items-center gap-2">
                 <span className="label">UI style — the whole look</span>
@@ -1427,6 +1449,11 @@ export function SettingsView() {
 
         {section === "ai" && (
           <div className="space-y-4">
+            <div className="paper p-5" data-testid="settings-ai-setup">
+              <div className="label mb-1">AI setup</div>
+              <div className="mb-3 text-[12px] text-dim">Pick a provider, paste a key (or use Ollama locally), choose a model and test the connection. Keys live in your OS keychain.</div>
+              <AiSetup />
+            </div>
             <AiProviderCard />
             <div className="paper p-5">
               <div className="label mb-2">The harness</div>

@@ -5,6 +5,7 @@ import type { IconName } from "@/components/icons";
 import { pickImportFile } from "@/lib/io";
 import { FOODS } from "@/lib/pet";
 import { feedPet, fetchForgotten, napPet, patPet, trickPet } from "@/lib/petActions";
+import type { FeatureId } from "@/lib/features";
 import { useStore } from "@/lib/store";
 import { TEMPLATES } from "@/lib/templates";
 import { THEME_IDS, THEMES } from "@/lib/themes";
@@ -23,10 +24,20 @@ function fuzzy(q: string, t: string): number {
   return i === q.length ? 1.5 : 0;
 }
 
+/** which feature a command belongs to — commands of switched-off features are not offered */
+const CMD_FEATURE: [RegExp, FeatureId][] = [
+  [/^(v-graph)$/, "graph"], [/^(v-canvas|canvas-new)$/, "canvas"], [/^(v-tasks|task-add)$/, "tasks"],
+  [/^(v-den|trick-random|pet-|feed-|roam|daily-gift)/, "pet"], [/^(v-focus|focus-go)$/, "focus"], [/^(v-arcade|arcade-stats)$/, "arcade"],
+  [/^v-team$/, "team"], [/^(v-market|my-booth)$/, "market"], [/^(v-activity|csv)$/, "activity"], [/^(v-rules|shield-toggle)$/, "rules"],
+  [/^(ai|plan-day|status-report)$/, "chat"],
+];
+const cmdFeature = (id: string) => CMD_FEATURE.find(([re]) => re.test(id))?.[1];
+
 function Palette() {
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
   const notes = useStore((s) => s.notes);
+  const features = useStore((s) => s.features);
   const list = useRef<HTMLDivElement>(null);
   const st = useStore.getState;
   const close = () => useStore.setState({ palette: false });
@@ -85,7 +96,7 @@ function Palette() {
       c("side", "Toggle sidebar", "layout", () => st().set({ sidebar: !st().sidebar }), "Ctrl B"),
       c("notelist", "Toggle notes list", "note", () => st().set({ notesList: !st().notesList })),
       c("style-nook", "UI style: Nook classic", "sparkle", () => st().setUiStyle("nook")),
-      c("style-pixel", "UI style: Pixelated Soft", "shapes", () => st().setUiStyle("pixel")),
+      c("style-pixel", "UI style: Pixel", "shapes", () => st().setUiStyle("pixel")),
       c("style-obsidian", "UI style: Obsidian", "book", () => st().setUiStyle("obsidian")),
       c("obs-light", "Obsidian: toggle light / dark mode", "moon", () => st().setObsLight(!st().obsLight)),
       c("daily", "Open today's daily note", "calendar", () => st().openDailyNote()),
@@ -101,9 +112,20 @@ function Palette() {
       ...THEME_IDS.map((t) => c(`theme-${t}`, `Theme: ${THEMES[t].name}`, THEMES[t].dark ? "moon" : "sun", () => st().setTheme(t))),
       c("roam", "Toggle desktop pet", "dog", () => st().set({ roam: !st().roam })),
       c("help", "Open the Nook handbook (all shortcuts)", "keyboard", () => useStore.setState({ help: true }), "?"),
-    ];
-     
-  }, []);
+      // 1.3
+      c("switcher", "Quick switcher — jump to a note", "search", () => useStore.setState({ switcherOpen: true, palette: false }), "Ctrl O"),
+      c("layout-obsidian", "Layout: Obsidian style (file tree · tabs · right sidebar)", "layout", () => st().setLayout("obsidian")),
+      c("layout-nook", "Layout: Nook style (rail + panes)", "layout", () => st().setLayout("nook")),
+      c("icons-pixel", "Icon style: Pixel", "shapes", () => st().setIconStyle("pixel")),
+      c("icons-clean", "Icon style: Clean", "sparkle", () => st().setIconStyle("clean")),
+      c("style-clean", "UI style: Clean", "sparkle", () => st().setUiStyle("clean")),
+      c("onboarding", "Run the welcome onboarding again", "sparkles", () => useStore.setState({ onboardingOpen: true, palette: false })),
+      c("features", "Turn features on / off", "checkbox-on", () => { st().set({ settingsSection: "features" }); go("settings")(); }),
+    ].filter((x) => {
+      const f = cmdFeature(x.id);
+      return !f || features[f] !== false;
+    });
+  }, [features]);
 
   const results = useMemo(() => {
     const raw = q.trim().toLowerCase();

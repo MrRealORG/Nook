@@ -5,6 +5,9 @@ import type { IconName } from "@/components/icons";
 import { PetView } from "@/components/PetView";
 import { onCtx, type CtxItem } from "@/components/ContextMenu";
 import { levelOf } from "@/lib/pet";
+import { PixelIcon, hasPixelSprite } from "@/components/PixelIcon";
+import { useIconFamily } from "@/lib/iconStyle";
+import { viewEnabled } from "@/lib/features";
 import { RAIL_DEFAULT_ICONS, RAIL_DEFAULT_ORDER, railOrderOf, RAIL_ICON_CHOICES, useStore, type View } from "@/lib/store";
 
 export const META: Record<View, { label: string; key: string }> = {
@@ -24,6 +27,16 @@ export const META: Record<View, { label: string; key: string }> = {
   timelens: { label: "Timelens", key: "L" },
   chat: { label: "AI chat", key: "I" },
 };
+
+/** sidebar / ribbon glyph: the colour pixel sprite in the Pixel icon style (unless the user picked
+ *  a custom icon for that item), the regular icon otherwise */
+export function NavIcon({ view, sprite, icon, size = 18 }: { view?: View; sprite?: string; icon: IconName; size?: number }) {
+  const family = useIconFamily();
+  const custom = useStore((s) => (view && s.railIcons[view] !== RAIL_DEFAULT_ICONS[view] ? s.railIcons[view] : undefined));
+  const name = sprite ?? view;
+  if (family === "pixel" && !custom && name && hasPixelSprite(name)) return <PixelIcon name={name} size={size <= 18 ? 16 : 24} className="nav-px" />;
+  return <Icon name={custom ?? icon} size={size} />;
+}
 
 export function ShieldChip() {
   const shieldOn = useStore((s) => s.rules.shieldOn);
@@ -115,7 +128,8 @@ export function RailButtons({ horizontal }: { horizontal?: boolean }) {
   const openTasks = useStore((s) => s.tasks.filter((t) => !t.done).length);
   const [picking, setPicking] = useState<View | null>(null);
 
-  const order = railOrderOf(railOrder);
+  const features = useStore((s) => s.features);
+  const order = railOrderOf(railOrder).filter((v) => viewEnabled(features, v));
   const visible = order.filter((v) => !railHidden.includes(v));
 
   /** every sidebar tab has its own right-click menu */
@@ -148,7 +162,7 @@ export function RailButtons({ horizontal }: { horizontal?: boolean }) {
         onContextMenu={onCtx(() => railMenu(v), { icon: RAIL_DEFAULT_ICONS[v], title: META[v].label })}
         aria-label={META[v].label + (extraBadge ? ` — ${extraBadge} new` : "")}
       >
-        <Icon name={icon} size={22} />
+        <NavIcon view={v} icon={icon} size={22} />
         {!!extraBadge && extraBadge > 0 && !railEdit && (
           <span key={extraBadge} className="rail-badge" style={{ animation: "pop .3s var(--ease-soft) both" }}>
             {extraBadge > 9 ? "9+" : extraBadge}
@@ -385,8 +399,9 @@ export function Rail() {
           onBlur: () => setTip(null),
         }
       : {};
+  const features = useStore((s) => s.features);
   const order = railOrderOf(railOrder);
-  const shown = (v: View) => railEdit || !railHidden.includes(v);
+  const shown = (v: View) => viewEnabled(features, v) && (railEdit || !railHidden.includes(v));
   const badge = (v: View) => (v === "market" ? marketUnread : v === "tasks" ? openTasks : 0);
   const st = useStore.getState;
 
@@ -431,7 +446,7 @@ export function Rail() {
         aria-current={view === v ? "page" : undefined}
         {...tipFor(META[v].label, `Alt ${META[v].key}`)}
       >
-        <Icon name={custom ?? RAIL_DEFAULT_ICONS[v]} size={18} />
+        <NavIcon view={v} icon={custom ?? RAIL_DEFAULT_ICONS[v]} size={18} />
         <span className="nav-label">{META[v].label}</span>
         {n > 0 && !railEdit && <span className="nav-badge">{n > 99 ? "99+" : n}</span>}
         {v === "rules" && shieldOn && <span className="nav-dot" title="Shield is up" />}
@@ -443,7 +458,7 @@ export function Rail() {
     <nav className="nav" data-testid="sidebar" data-collapsed={collapsed} data-side={railPos} data-rail-edit={railEdit} aria-label="Sidebar">
       <div className="nav-head">
         <button className="nav-item nav-search" onClick={() => useStore.setState({ palette: true })} aria-label="Search and commands" {...tipFor("Search & commands", "Ctrl K")}>
-          <Icon name="search" size={16} />
+          <NavIcon sprite="search" icon="search" size={16} />
           <span className="nav-label">Search</span>
           <span className="nav-kbd">Ctrl K</span>
         </button>
@@ -465,12 +480,12 @@ export function Rail() {
       </div>
       <div className="nav-foot">
         <button className="nav-item" data-on={noticeOpen} onClick={() => useStore.setState((s) => ({ noticeOpen: !s.noticeOpen }))} aria-label={`Notifications${freshNotices > 0 ? ` — ${freshNotices} new` : ""}`} {...tipFor("Notifications")}>
-          <Icon name="bell" size={18} />
+          <NavIcon sprite="bell" icon="bell" size={18} />
           <span className="nav-label">Notifications</span>
           {freshNotices > 0 && <span className="nav-badge">{freshNotices > 9 ? "9+" : freshNotices}</span>}
         </button>
         <button className="nav-item" onClick={() => useStore.setState({ notesDrawer: true })} aria-label="All notes drawer" {...tipFor("All notes", "Ctrl ⇧ N")}>
-          <Icon name="library" size={18} />
+          <NavIcon sprite="library" icon="library" size={18} />
           <span className="nav-label">All notes</span>
         </button>
         {shown("settings") && item("settings")}

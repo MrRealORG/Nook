@@ -1,16 +1,13 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ComponentType } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { installSystemTheme } from "@/lib/systemTheme";
 import { CommandPalette } from "@/components/CommandPalette";
-import { Dashboard } from "@/components/Dashboard";
 import { DesktopPet } from "@/components/DesktopPet";
 import { DockRail, FloatRail, Rail } from "@/components/Rail";
-import { Editor } from "@/components/Editor";
 import { GuidedTour } from "@/components/GuidedTour";
 import { HelpOverlay } from "@/components/HelpOverlay";
 import { LogsBugs } from "@/components/LogsBugs";
 import { NotesDrawer } from "@/components/NotesDrawer";
 import { NoteList } from "@/components/NoteList";
-import { NoteTabs } from "@/components/NoteTabs";
 import { ContextMenuHost } from "@/components/ContextMenu";
 import ShareReader from "@/components/ShareReader";
 import { NotificationCenter } from "@/components/NotificationCenter";
@@ -31,38 +28,12 @@ import type { InitialData } from "@/lib/types";
 import { useUi11 } from "@/lib/ui11";
 import { everyActive, installPower } from "@/lib/power";
 
-const Loading = () => (
-  <div className="grid h-full place-items-center">
-    <div className="pixel-font text-dim shimmer rounded-xl px-5 py-3">loading…</div>
-  </div>
-);
-/** code-split heavy views: each loads on first visit, with the same pixel "loading…" placeholder */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function lazyView(load: () => Promise<{ default: ComponentType<any> }>) {
-  const L = lazy(load);
-  const View = () => (
-    <Suspense fallback={<Loading />}>
-      <L />
-    </Suspense>
-  );
-  return View;
-}
-const GraphView = lazyView(() => import("@/components/GraphView").then((m) => ({ default: m.GraphView })));
-const CanvasView = lazyView(() => import("@/components/CanvasView").then((m) => ({ default: m.CanvasView })));
-const PetDen = lazyView(() => import("@/components/PetDen").then((m) => ({ default: m.PetDen })));
-const FocusView = lazyView(() => import("@/components/FocusView").then((m) => ({ default: m.FocusView })));
-const ArcadeView = lazyView(() => import("@/components/ArcadeView").then((m) => ({ default: m.ArcadeView })));
-const TeamView = lazyView(() => import("@/components/TeamView").then((m) => ({ default: m.TeamView })));
-const MarketView = lazyView(() => import("@/components/MarketView").then((m) => ({ default: m.MarketView })));
-const TasksView = lazyView(() => import("@/components/TasksView").then((m) => ({ default: m.TasksView })));
-const ActivityView = lazyView(() => import("@/components/ActivityView").then((m) => ({ default: m.ActivityView })));
-const RulesView = lazyView(() => import("@/components/RulesView").then((m) => ({ default: m.RulesView })));
-const SettingsView = lazyView(() => import("@/components/SettingsView").then((m) => ({ default: m.SettingsView })));
-// 1.1 views — lazy so the startup bundle stays small
-const CalendarView = lazyView(() => import("@/components/CalendarView"));
-const TimelensView = lazyView(() => import("@/components/TimelensView"));
-const ChatView = lazyView(() => import("@/components/ChatView"));
+import { Loading, ViewHost } from "@/components/ViewHost";
 const SearchDialog = lazy(() => import("@/components/SearchDialog"));
+// 1.3 — all lazy: none of this code loads until it is used
+const Onboarding = lazy(() => import("@/components/Onboarding"));
+const QuickSwitcher = lazy(() => import("@/components/QuickSwitcher"));
+const ObsidianLayout = lazy(() => import("@/components/ObsidianLayout"));
 const NoteDialogs = lazy(() => import("@/components/NoteDialogs"));
 
 const VIEWS = ["notes", "graph", "canvas", "tasks", "den", "focus", "arcade", "team", "market", "activity"] as const;
@@ -107,7 +78,7 @@ function usePetNag() {
     // 1.2: every 90 s and only while the window is visible (was 45 s, always)
     return everyActive(() => {
       const s = useStore.getState();
-      if (!s.petNag || s.dnd || document.hidden) return;
+      if (!s.petNag || !s.petEnabled || s.features.pet === false || s.dnd || document.hidden) return;
       const now = Date.now();
       if (now - lastNagAt < 6 * 60_000) return;
       const roll = Math.random();
@@ -137,7 +108,10 @@ function usePetNag() {
 /** TimeLens-style in-app usage tracker: accumulates seconds per view while the tab is visible & the user active */
 function useAppTimeTracker() {
   const view = useStore((s) => s.view);
+  // 1.3: no tick at all when both features that read it are switched off
+  const needed = useStore((s) => s.features.activity !== false || s.features.rules !== false);
   useEffect(() => {
+    if (!needed) return;
     let lastInput = Date.now();
     const onMove = () => (activity.lastInput = lastInput = Date.now());
     const onKey = () => (activity.lastInput = lastInput = Date.now());
@@ -150,7 +124,7 @@ function useAppTimeTracker() {
       const s = useStore.getState();
       const app = s.currentApp ? s.currentApp.toLowerCase() : `nook:${s.view}`;
       // ---- rule engine: blocked apps + limits (shield must be up) ----
-      if (s.currentApp && s.rules.shieldOn) {
+      if (s.currentApp && s.rules.shieldOn && s.features.rules !== false) {
         const v = s.checkAppRules(s.currentApp);
         const now = Date.now();
         if (v.blocked) {
@@ -173,14 +147,14 @@ function useAppTimeTracker() {
           s.say("Quiet hours! Something productive, maybe?");
         }
       }
-      s.trackApp(app, TICK);
+      if (s.features.activity !== false) s.trackApp(app, TICK);
     }, TICK * 1000);
     return () => {
       stop();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("keydown", onKey);
     };
-  }, []);
+  }, [needed]);
 }
 
 export function App({ initial }: { initial: InitialData }) {
@@ -207,13 +181,15 @@ export function App({ initial }: { initial: InitialData }) {
   const notesList = useStore((s) => s.notesList);
   const rightOpen = useStore((s) => s.rightOpen);
   const cleanMode = useStore((s) => s.cleanMode);
-  const activeId = useStore((s) => s.activeId);
   const muted = useStore((s) => s.muted);
   const volume = useStore((s) => s.volume);
   const music = useStore((s) => s.music);
   const railPos = useStore((s) => s.railPos);
   const petEnabled = useStore((s) => s.petEnabled);
   const wallpaper = useStore((s) => s.wallpaper);
+  const layout = useStore((s) => s.layout);
+  const onboardingOpen = useStore((s) => s.onboardingOpen);
+  const switcherOpen = useStore((s) => s.switcherOpen);
   useAppTimeTracker();
   usePetNag();
 
@@ -241,7 +217,9 @@ export function App({ initial }: { initial: InitialData }) {
     // pet stat decay is time-based (decayed() uses timestamps), so a slow, visible-only tick is exact
     const stopPet = everyActive(() => useStore.getState().tickPet(), 60_000);
     // live bazaar: bot sales anywhere in the app (coins + badge), listings kept fresh
-    startMarketWatcher();
+    if (useStore.getState().features.market !== false) startMarketWatcher();
+    // 1.3: switched-off features stop their background work (Timelens sampler, widget, …)
+    if (Object.values(useStore.getState().features).includes(false)) void import("@/lib/featureEffects").then((m) => m.applyFeaturesAtBoot(useStore.getState().features));
     // remember click points so coin rewards can fly from where the user clicked
     initCoinFly();
     // global error/warn/rejection capture → the Logs & Bugs center
@@ -262,8 +240,11 @@ export function App({ initial }: { initial: InitialData }) {
         })
         .catch(() => {});
     }, 120_000);
+    // first launch: the animated onboarding (it replaces the old guided tour)
+    if (!useStore.getState().onboarded) useStore.setState({ onboardingOpen: true });
     const tour = setTimeout(() => {
-      if (!useStore.getState().tourDone) useStore.getState().startTour();
+      const s0 = useStore.getState();
+      if (!s0.tourDone && s0.onboarded && !s0.onboardingOpen) s0.startTour();
     }, 1600);
     const flush = () => flushAll();
     const vis = () => document.hidden && flush();
@@ -285,6 +266,9 @@ export function App({ initial }: { initial: InitialData }) {
       if (mod && k === "k") {
         e.preventDefault();
         useStore.setState({ palette: !s.palette });
+      } else if (mod && k === "o" && !e.shiftKey) {
+        e.preventDefault();
+        useStore.setState({ switcherOpen: !s.switcherOpen, palette: false });
       } else if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag !== "INPUT" && tag !== "TEXTAREA" && !(e.target as HTMLElement)?.isContentEditable) {
@@ -366,38 +350,21 @@ export function App({ initial }: { initial: InitialData }) {
       )}
       <div className="relative z-[1] flex min-h-0 flex-1 flex-col gap-2">
       <TitleBar />
+      {layout === "obsidian" && !zen && !cleanMode ? (
+        <Suspense fallback={<Loading />}>
+          <ObsidianLayout />
+        </Suspense>
+      ) : (
       <div className="flex min-h-0 flex-1 gap-2">
         {!zen && !cleanMode && railPos === "left" && sidebar && <Rail />}
         <main className="flex min-w-0 flex-1 gap-2">
           {view === "notes" && notesList && sidebar && !zen && !cleanMode && <NoteList />}
-          <section key={view} data-view={view} className="view-enter relative min-w-0 flex-1 overflow-hidden">
-            {view === "notes" && (
-              <div className="flex h-full min-h-0 flex-col">
-                <NoteTabs />
-                <div className="min-h-0 flex-1">
-                  {activeId ? <Editor key={activeId} id={activeId} /> : <Dashboard />}
-                </div>
-              </div>
-            )}
-            {view === "graph" && <GraphView />}
-            {view === "canvas" && <CanvasView />}
-            {view === "den" && <PetDen />}
-            {view === "focus" && <FocusView />}
-            {view === "arcade" && <ArcadeView />}
-            {view === "team" && <TeamView />}
-            {view === "market" && <MarketView />}
-            {view === "tasks" && <TasksView />}
-            {view === "activity" && <ActivityView />}
-            {view === "rules" && <RulesView />}
-            {view === "settings" && <SettingsView />}
-            {view === "calendar" && <CalendarView />}
-            {view === "timelens" && <TimelensView />}
-            {view === "chat" && <ChatView />}
-          </section>
+          <ViewHost />
           {view === "notes" && rightOpen && !zen && !cleanMode && <RightPanel />}
         </main>
         {!zen && !cleanMode && railPos === "right" && sidebar && <Rail />}
       </div>
+      )}
       <StatusBar />
       {!zen && !cleanMode && railPos === "dock" && sidebar && <DockRail />}
       </div>
@@ -420,6 +387,16 @@ export function App({ initial }: { initial: InitialData }) {
         </Suspense>
       )}
       <HelpOverlay />
+      {switcherOpen && (
+        <Suspense fallback={null}>
+          <QuickSwitcher />
+        </Suspense>
+      )}
+      {onboardingOpen && (
+        <Suspense fallback={null}>
+          <Onboarding />
+        </Suspense>
+      )}
       <ContextMenuHost />
       {shareId && (
         <div className="fixed inset-0 z-[300]" style={{ background: "var(--bg)" }}>

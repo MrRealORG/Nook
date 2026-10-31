@@ -387,6 +387,19 @@ function AppsTab({ day, onChange }: { day: number; onChange: () => void }) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<Sort>("time");
   const [showExcluded, setShowExcluded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  /** 1.3: re-extract every app's real icon (Windows) — bypasses the icon cache */
+  const refreshIcons = async () => {
+    setRefreshing(true);
+    try {
+      const r = await j<{ ok: boolean; apps: number; extracted: number; failed: number }>("/api/timelens/icons/refresh", { method: "POST" });
+      loadIcons(true);
+      st().toast(r.apps ? `Icons refreshed — ${r.extracted} of ${r.apps} apps${r.failed ? ` (${r.failed} use a built-in icon)` : ""}` : "No app executables to read icons from yet", "reload");
+    } catch {
+      st().toast("Couldn't refresh icons", "alert");
+    }
+    setRefreshing(false);
+  };
   const load = useCallback(async () => {
     const from = range === "day" ? day : addDays(dayStart(), range === "week" ? -6 : -29);
     const to = range === "day" ? Math.min(addDays(day, 1), Date.now() + 1) : Date.now() + 1;
@@ -427,6 +440,9 @@ function AppsTab({ day, onChange }: { day: number; onChange: () => void }) {
           <option value="category">Category</option>
           <option value="recent">Recently used</option>
         </select>
+        <button className="btn btn-sm" onClick={() => void refreshIcons()} disabled={refreshing} data-testid="tl-refresh-icons" title="Re-read every app's real icon from its .exe">
+          <Icon name="reload" size={13} /> {refreshing ? "Refreshing…" : "Refresh icons"}
+        </button>
         <button className="btn btn-sm" data-on={showExcluded} onClick={() => setShowExcluded(!showExcluded)} disabled={!excludedCount && !showExcluded}>
           <Icon name="eye" size={13} /> {showExcluded ? "Back to apps" : `Excluded (${excludedCount})`}
         </button>

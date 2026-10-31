@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "@/globals.css";
 import "@/desktop.css";
 import "@/clean.css";
+import "@/pixel.css";
 import { installApiShim } from "@/lib/apiShim";
 import { installDesktopGlue } from "@/lib/platform";
 import { installPower } from "@/lib/power";

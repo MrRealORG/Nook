@@ -227,6 +227,13 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
         }
         // ---------------- folders
         ("GET", ["folders"]) => R::json(folders_list(&c)),
+        // 1.3 feature switches mirrored for the background loops (reminders, backups, timelens)
+        ("GET", ["features"]) => R::json(crate::db::setting_get(&c, "features").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}))),
+        ("PUT", ["features"]) => {
+            let clean: Map<String, Value> = b.iter().filter(|(_, v)| v.is_boolean()).map(|(k, v)| (take(k, 32), v.clone())).collect();
+            let _ = crate::db::setting_put(&c, "features", &Value::Object(clean.clone()).to_string());
+            R::json(Value::Object(clean))
+        }
         ("POST", ["folders"]) => folders_create(&c, &b),
         ("PATCH", ["folders", id]) => folders_patch(&c, id, &b),
         ("DELETE", ["folders", id]) => {

@@ -30,7 +30,7 @@ export const UI_STYLES: Record<UiStyleId, UiStyle> = {
   clean: {
     id: "clean",
     name: "Clean",
-    blurb: "Modern and calm — system type, crisp icons, soft surfaces. The 1.2 default.",
+    blurb: "Modern and calm — system type, crisp icons, soft surfaces.",
     dark: false,
     ramp: ["#f7f8fa", "#e6e9ef", "#b8bfcc", "#5468e8", "#171a21"],
     accent: "#5468e8",
@@ -45,11 +45,11 @@ export const UI_STYLES: Record<UiStyleId, UiStyle> = {
   },
   pixel: {
     id: "pixel",
-    name: "Pixel Soft",
-    blurb: "Pastel pixel toy box — chunky borders, stepped shadows, squishy pastels.",
-    dark: false,
-    ramp: ["#f4effb", "#e4d9f3", "#c7b2e8", "#9a7ad6", "#453a5c"],
-    accent: "#9a7ad6",
+    name: "Pixel",
+    blurb: "The 1.3 default — chunky pixel chrome, colour sprites, pixel type. Light + dark.",
+    dark: true,
+    ramp: ["#13111b", "#1c1928", "#2d2842", "#a58cff", "#ece8fa"],
+    accent: "#a58cff",
   },
   obsidian: {
     id: "obsidian",

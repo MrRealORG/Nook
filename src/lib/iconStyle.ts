@@ -1,12 +1,17 @@
-/** Which glyph family <Icon> draws: "crisp" (lucide) for the Clean/Obsidian styles, "pixel" otherwise. */
+/**
+ * Which glyph family <Icon> draws (1.3: chosen by the user, independent of the colour theme):
+ *   "pixel" — the pixel-art set (default), "crisp" — the Clean lucide set.
+ */
 import { useSyncExternalStore } from "react";
 
+export type IconStyle = "pixel" | "clean";
 export type IconFamily = "crisp" | "pixel";
 const subs = new Set<() => void>();
-let family: IconFamily = typeof document !== "undefined" && /^(clean|obsidian)$/.test(document.documentElement.dataset.ui ?? "clean") ? "crisp" : "pixel";
+let family: IconFamily = typeof document !== "undefined" && document.documentElement.dataset.icons === "clean" ? "crisp" : "pixel";
 
-export function setIconFamilyForUi(ui: string) {
-  const next: IconFamily = ui === "clean" || ui === "obsidian" ? "crisp" : "pixel";
+export function setIconStyle(style: IconStyle) {
+  if (typeof document !== "undefined") document.documentElement.dataset.icons = style;
+  const next: IconFamily = style === "clean" ? "crisp" : "pixel";
   if (next === family) return;
   family = next;
   subs.forEach((f) => f());

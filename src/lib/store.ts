@@ -5,7 +5,8 @@ import { abilityOf, decayed, levelOf, stageOf } from "@/lib/pet";
 import { QUESTS, bonusQuestOf, freshQuests, todayKey, yesterdayKey, type QuestsState } from "@/lib/quests";
 import { sfx } from "@/lib/sfx";
 import type { Mood } from "@/lib/sprite";
-import { setIconFamilyForUi } from "@/lib/iconStyle";
+import { setIconStyle as applyIconStyle, type IconStyle } from "@/lib/iconStyle";
+import { ALL_ON, featureOfView, normFeatures, viewEnabled, type FeatureId, type Features } from "@/lib/features";
 import { LEGACY_DEFAULT_THEME, THEMES, isPremiumTheme, type ThemeId } from "@/lib/themes";
 import { installLogger, logEvent } from "@/lib/logger";
 import { isUiStyle, type UiStyleId } from "@/lib/uiStyles";
@@ -281,6 +282,18 @@ interface S {
   railFloat: { x: number; y: number };
   /** master feature switches — turn the pet or any tab on/off (Settings → Features) */
   petEnabled: boolean;
+  // ---------- 1.3 ----------
+  /** icon set, independent of the colour theme */
+  iconStyle: IconStyle;
+  /** app layout: Nook (rail + panes) or Obsidian (ribbon · file tree · tabs · right sidebar) */
+  layout: "nook" | "obsidian";
+  /** feature switches (onboarding + Settings ▸ Features); off = hidden + no background work */
+  features: Features;
+  /** first-run onboarding finished (or skipped) */
+  onboarded: boolean;
+  onboardingOpen: boolean;
+  /** quick switcher (Ctrl+O) */
+  switcherOpen: boolean;
   /** whole-app wallpaper */
   wallpaper: Wallpaper;
   /** custom nook-games created/imported in the arcade */
@@ -289,6 +302,11 @@ interface S {
   packStudio: null | "import" | "icons" | "fonts";
 
   setRailPos: (p: RailPos) => void;
+  setIconStyle: (s: IconStyle) => void;
+  setLayout: (l: "nook" | "obsidian") => void;
+  setFeature: (id: FeatureId, on: boolean) => void;
+  isOn: (id: FeatureId) => boolean;
+  updateFolder: (id: string, patch: Partial<Pick<Folder, "name" | "color" | "icon" | "pinned" | "parentId" | "position">>) => void;
   setRailFloat: (x: number, y: number) => void;
   setPetEnabled: (on: boolean) => void;
   setWallpaper: (w: Partial<Wallpaper>) => void;
@@ -303,7 +321,7 @@ interface S {
   setView: (v: View) => void;
   set: (p: Partial<S>) => void;
   setTheme: (t: ThemeId) => void;
-  setUiStyle: (s: UiStyleId) => void;
+  setUiStyle: (s: UiStyleId, quiet?: boolean) => void;
   setObsLight: (b: boolean) => void;
   toggleClean: () => void;
   // note tabs (Obsidian-style editor tabs)
@@ -326,7 +344,7 @@ interface S {
   openNote: (id: string) => void;
   openByTitle: (title: string) => void;
 
-  createFolder: (name?: string) => void;
+  createFolder: (name?: string, parentId?: string | null) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
   setActiveFolder: (id: string | null) => void;
@@ -489,11 +507,37 @@ export function migrateTo12(p: Record<string, any>): Record<string, any> {
   return out;
 }
 
+/**
+ * 1.3 look migration (runs once): Pixel is the default again. Users that 1.2 moved to Clean
+ * automatically go to Pixel (keeping their light/dark choice); anyone who picked Clean
+ * themselves (recorded from 1.3 on in `nook:uiPicked`, and visible in 1.2's persisted log as
+ * "ui style → clean") keeps it. The icon style follows: Clean pickers keep the lucide icons.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function migrateTo13(p: Record<string, any>, fresh = false): Record<string, any> {
+  if (p.v13) return p;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out: Record<string, any> = { ...p, v13: true };
+  let picked = false;
+  try {
+    picked = localStorage.getItem("nook:uiPicked") === "clean" || (localStorage.getItem("nook:logs") ?? "").includes("ui style → clean");
+  } catch {}
+  if (fresh || (p.uiStyle === "clean" && !picked) || p.uiStyle === undefined) {
+    out.uiStyle = "pixel";
+    // fresh installs keep 1.2's OS-following light/dark pick (→ Pixel light / Pixel dark)
+    if (!fresh && out.theme !== "light" && out.theme !== "dark") out.theme = THEMES[out.theme as ThemeId]?.dark === false ? "light" : "dark";
+  }
+  if (out.iconStyle !== "clean" && out.iconStyle !== "pixel") out.iconStyle = out.uiStyle === "clean" ? "clean" : "pixel";
+  try {
+    localStorage.setItem("nook:prefs", JSON.stringify(out));
+  } catch {}
+  return out;
+}
+
 function applyUiChrome(style: UiStyleId, obsLight: boolean, scale: number) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.dataset.ui = style;
-  setIconFamilyForUi(style);
   if (style === "obsidian") root.dataset.obsMode = obsLight ? "light" : "dark";
   else delete root.dataset.obsMode;
   root.style.setProperty("--app-scale", String(scale));
@@ -525,8 +569,8 @@ export const useStore = create<S>()((set, get) => {
     activeId: null,
     activeCanvas: null,
     activeFolder: null,
-    theme: "light",
-    uiStyle: "clean",
+    theme: "dark",
+    uiStyle: "pixel",
     cleanMode: false,
     openTabs: [],
     tabPins: [],
@@ -611,6 +655,12 @@ export const useStore = create<S>()((set, get) => {
     railPos: "left",
     railFloat: { x: 84, y: 120 },
     petEnabled: true,
+    iconStyle: "pixel",
+    layout: "nook",
+    features: { ...ALL_ON },
+    onboarded: false,
+    onboardingOpen: false,
+    switcherOpen: false,
     wallpaper: { id: "none", dim: 0.55, blur: 2 },
     customGames: [],
     packStudio: null,
@@ -628,7 +678,8 @@ export const useStore = create<S>()((set, get) => {
     loadPrefs: () => {
       const narrow = typeof window !== "undefined" && window.innerWidth < 1024;
       try {
-        const p = migrateTo12(JSON.parse(localStorage.getItem("nook:prefs") ?? "{}"));
+        const raw = JSON.parse(localStorage.getItem("nook:prefs") ?? "{}");
+        const p = migrateTo13(migrateTo12(raw), raw.theme === undefined && raw.uiStyle === undefined);
         // persisted notices / market feed carry numeric ids from the previous session;
         // the id counter restarts at 1 on reload, which would collide keys — move it past them
         const persistedIds = [
@@ -646,7 +697,11 @@ export const useStore = create<S>()((set, get) => {
         }
         set({
           theme: p.theme ?? get().theme,
-          uiStyle: isUiStyle(p.uiStyle) ? p.uiStyle : "clean",
+          uiStyle: isUiStyle(p.uiStyle) ? p.uiStyle : "pixel",
+          iconStyle: p.iconStyle === "clean" ? "clean" : "pixel",
+          layout: p.layout === "obsidian" ? "obsidian" : "nook",
+          features: normFeatures(p.features),
+          onboarded: p.onboarded ?? !!p.tourDone,
           cleanMode: p.cleanMode ?? false,
           roam: p.roam ?? true,
           follow: p.follow ?? false,
@@ -699,7 +754,7 @@ export const useStore = create<S>()((set, get) => {
           obsLight: p.obsLight ?? false,
           petNag: p.petNag ?? true,
           railFloat: p.railFloat && typeof p.railFloat.x === "number" ? (p.railFloat as { x: number; y: number }) : { x: 84, y: 120 },
-          petEnabled: p.petEnabled ?? true,
+          petEnabled: (p.petEnabled ?? true) && (p.features?.pet ?? true) !== false,
           wallpaper: p.wallpaper && typeof p.wallpaper === "object" && typeof p.wallpaper.id === "string" ? { id: p.wallpaper.id, img: typeof p.wallpaper.img === "string" ? p.wallpaper.img : undefined, dim: typeof p.wallpaper.dim === "number" ? p.wallpaper.dim : 0.55, blur: typeof p.wallpaper.blur === "number" ? p.wallpaper.blur : 2 } : { id: "none", dim: 0.55, blur: 2 },
         });
         loadPacksFromLocal();
@@ -712,6 +767,8 @@ export const useStore = create<S>()((set, get) => {
         document.documentElement.dataset.fx = get().effects ? "on" : "off";
         document.documentElement.dataset.font = get().font;
         applyUiChrome(get().uiStyle, get().obsLight, get().appScale);
+        applyIconStyle(get().iconStyle);
+        document.documentElement.dataset.layout = get().layout;
         // the server rulebook is the source of truth (AI harness + every browser write there);
         // local prefs keep a mirror for offline use, but a saved server rulebook always wins on boot
         void fetch("/api/rules")
@@ -743,6 +800,7 @@ export const useStore = create<S>()((set, get) => {
             railIcons: s.railIcons, railOrder: s.railOrder, railHidden: s.railHidden,
             railPos: s.railPos, railFloat: s.railFloat, sidebarCollapsed: s.sidebarCollapsed, petEnabled: s.petEnabled, wallpaper: s.wallpaper, iconPackPref: true, fontPackPref: true,
             openTabs: s.openTabs, tabPins: s.tabPins, obsLight: s.obsLight, petNag: s.petNag,
+            iconStyle: s.iconStyle, layout: s.layout, features: s.features, onboarded: s.onboarded, v13: true,
           }),
         );
         persistPackPrefs();
@@ -750,6 +808,7 @@ export const useStore = create<S>()((set, get) => {
     },
 
     setView: (view) => {
+      if (!viewEnabled(get().features, view)) view = "notes";
       const prev = get().view;
       set({ view, palette: false, noticeOpen: false, ...(view === "market" && prev !== "market" ? { marketUnread: 0 } : {}) });
       if (prev !== view) sfx("open");
@@ -880,12 +939,15 @@ export const useStore = create<S>()((set, get) => {
       sfx("pop");
     },
 
-    setUiStyle: (uiStyle) => {
+    setUiStyle: (uiStyle, quiet) => {
       applyUiChrome(uiStyle, get().obsLight, get().appScale);
       get().set({ uiStyle });
+      try {
+        localStorage.setItem("nook:uiPicked", uiStyle);
+      } catch {}
       sfx("pop");
-      const name = { clean: "Clean", nook: "Classic pixel", pixel: "Pixelated Soft", obsidian: "Obsidian" }[uiStyle];
-      get().toast(`UI style: ${name}`, "sparkle");
+      const name = { clean: "Clean", nook: "Classic pixel", pixel: "Pixel", obsidian: "Obsidian" }[uiStyle];
+      if (!quiet) get().toast(`UI style: ${name}`, "sparkle");
       logEvent(`ui style → ${uiStyle}`, "info", "ui");
     },
 
@@ -993,14 +1055,15 @@ export const useStore = create<S>()((set, get) => {
     },
 
     // ---------- folders ----------
-    createFolder: (name = "New folder") => {
+    createFolder: (name = "New folder", parentId = null) => {
       const id = uid();
       const position = get().folders.length;
-      const colors = ["#9db7d0", "#bccb92", "#cba5ba", "#e0b589", "#b59fd0", "#8fbfae"];
-      const folder: Folder = { id, name: name.trim() || "New folder", icon: "folder", color: colors[position % colors.length], position };
+      const colors = ["#f2c14e", "#6fb4f2", "#5fd29b", "#f27ba0", "#a98bf0", "#ffa06d"];
+      const folder: Folder = { id, name: name.trim() || "New folder", icon: "folder", color: colors[position % colors.length], position, parentId, pinned: false };
       set((s) => ({ folders: [...s.folders, folder] }));
       void api("POST", "/api/folders", folder);
       sfx("pop");
+      return id;
     },
 
     renameFolder: (id, name) => {
@@ -1009,9 +1072,10 @@ export const useStore = create<S>()((set, get) => {
     },
 
     deleteFolder: (id) => {
+      const parent = get().folders.find((f) => f.id === id)?.parentId ?? null;
       set((s) => ({
-        folders: s.folders.filter((f) => f.id !== id),
-        notes: s.notes.map((n) => (n.folderId === id ? { ...n, folderId: null } : n)),
+        folders: s.folders.filter((f) => f.id !== id).map((f) => (f.parentId === id ? { ...f, parentId: parent } : f)),
+        notes: s.notes.map((n) => (n.folderId === id ? { ...n, folderId: parent } : n)),
         activeFolder: s.activeFolder === id ? null : s.activeFolder,
       }));
       get().notes.filter((n) => n.folderId === null).forEach((n) => saveNote(n.id));
@@ -1336,8 +1400,38 @@ export const useStore = create<S>()((set, get) => {
       get().toast(p === "dock" ? "Sidebar is now a bottom dock" : p === "float" ? "Sidebar floats — drag it anywhere" : p === "right" ? "Sidebar moved to the right" : "Sidebar back on the left", "layout");
     },
     setRailFloat: (x, y) => get().set({ railFloat: { x: Math.round(x), y: Math.round(y) } }),
+    setIconStyle: (iconStyle) => {
+      applyIconStyle(iconStyle);
+      get().set({ iconStyle });
+      sfx("pop");
+      logEvent(`icon style → ${iconStyle}`, "info", "ui");
+    },
+    setLayout: (layout) => {
+      document.documentElement.dataset.layout = layout;
+      get().set({ layout, ...(layout === "obsidian" ? { view: get().view === "notes" ? "notes" : get().view } : {}) });
+      sfx("pop");
+      logEvent(`layout → ${layout}`, "info", "ui");
+    },
+    isOn: (id) => get().features[id] !== false,
+    setFeature: (id, on) => {
+      const features = { ...get().features, [id]: on };
+      const patch: Partial<S> = { features };
+      if (id === "pet") patch.petEnabled = on;
+      // leaving a view whose feature was just switched off
+      if (!on && featureOfView(get().view) === id) patch.view = "notes";
+      get().set(patch);
+      void import("@/lib/featureEffects").then((m) => {
+        void m.syncFeatures(features);
+        void m.applyFeature(id, on);
+      });
+      logEvent(`feature ${id} → ${on ? "on" : "off"}`, "info", "features");
+    },
+    updateFolder: (id, patch) => {
+      set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, ...patch } : f)) }));
+      void api("PATCH", `/api/folders/${id}`, patch);
+    },
     setPetEnabled: (on) => {
-      get().set({ petEnabled: on });
+      get().set({ petEnabled: on, features: { ...get().features, pet: on } });
       sfx(on ? "happy" : "close");
       get().toast(on ? `${get().pet.name} is back!` : `${get().pet.name} is resting — re-enable in Settings → Features`, "heart");
       get().notify(on ? `${get().pet.name} woke up and stretched` : `${get().pet.name} curled up for a long nap`, "heart", "pet");

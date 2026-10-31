@@ -1,5 +1,6 @@
 /** Timelens shared bits: types, formatting, the app-icon / favicon cache and avatars. */
-import { memo, useEffect, useState, useSyncExternalStore } from "react";
+import { createElement, memo, useEffect, useState, useSyncExternalStore } from "react";
+import { brandLogoFor } from "@/lib/appLogos";
 
 export type Cat = "productive" | "neutral" | "distracting";
 export type Seg = { app: string; title: string; start: number; end: number; afk: boolean; focus: boolean; cat: string };
@@ -109,14 +110,28 @@ function Letter({ name, size }: { name: string; size: number }) {
   );
 }
 
-/** The real app icon (extracted from the exe on Windows), else a coloured letter avatar. */
+/** built-in brand icon (inline SVG, no network) when the real icon is missing or broken */
+function Brand({ app, size }: { app: string; size: number }) {
+  const Logo = brandLogoFor(app);
+  if (!Logo) return null;
+  return (
+    <span className="tl-brand" data-testid="tl-brand-icon" data-app-logo={app} style={{ width: size, height: size }}>
+      {createElement(Logo, { size })}
+    </span>
+  );
+}
+
+/** The real app icon (extracted from the exe on Windows), else a built-in brand icon, else a
+ *  coloured letter avatar. A broken / undecodable icon falls through too. */
 export const AppIcon = memo(function AppIcon({ app, size = 20 }: { app: string; size?: number }) {
   const m = useMaps();
+  const [bad, setBad] = useState<string | null>(null);
   useEffect(() => loadIcons(), []);
   if (app === "AFK") return <span className="tl-letter" aria-hidden style={{ width: size, height: size, borderRadius: Math.round(size * 0.26), background: "var(--panel2)", color: "var(--faint)", fontSize: Math.round(size * 0.5) }}>☾</span>;
   if (app === "Focus") return <Letter name="Focus" size={size} />;
   const src = m.icons[app];
-  if (src) return <img src={src} alt="" aria-hidden width={size} height={size} data-testid="tl-app-icon" className="tl-icon" style={{ width: size, height: size }} draggable={false} />;
+  if (src && bad !== src) return <img src={src} alt="" aria-hidden width={size} height={size} data-testid="tl-app-icon" className="tl-icon" style={{ width: size, height: size }} draggable={false} onError={() => setBad(src)} />;
+  if (brandLogoFor(app)) return <Brand app={app} size={size} />;
   return <Letter name={app} size={size} />;
 });
 
@@ -125,6 +140,7 @@ export const SiteIcon = memo(function SiteIcon({ site, domain, size = 20 }: { si
   const [bad, setBad] = useState(false);
   const src = domain ? m.favicons[domain] : undefined;
   if (src && !bad) return <img src={src} alt="" aria-hidden width={size} height={size} className="tl-icon" data-testid="tl-favicon" style={{ width: size, height: size, borderRadius: 4 }} onError={() => setBad(true)} draggable={false} />;
+  if (brandLogoFor(site)) return <Brand app={site} size={size} />;
   return <Letter name={site} size={size} />;
 });
 

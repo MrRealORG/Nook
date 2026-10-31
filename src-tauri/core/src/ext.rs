@@ -903,15 +903,30 @@ fn auto_backup(c: &Connection, now: i64) -> Option<Value> {
 
 /// Run every minute by the desktop shell (and on demand). Returns native notifications to show.
 pub fn maintenance(c: &Connection, now: i64) -> Vec<Value> {
-    let mut out: Vec<Value> = due_reminders(c, now, true)
-        .into_iter()
-        .map(|t| json!({ "kind": "reminder", "title": "Task reminder", "body": t["title"], "taskId": t["id"] }))
-        .collect();
-    out.extend(timelens::maintenance(c, now));
-    if let Some(n) = auto_backup(c, now) {
-        out.push(n);
+    // 1.3 feature switches (Settings ▸ Features): an "off" feature does no background work
+    let on = |id: &str| feature_on(c, id);
+    let mut out: Vec<Value> = if on("reminders") && on("tasks") {
+        due_reminders(c, now, true)
+            .into_iter()
+            .map(|t| json!({ "kind": "reminder", "title": "Task reminder", "body": t["title"], "taskId": t["id"] }))
+            .collect()
+    } else {
+        vec![]
+    };
+    if on("timelens") {
+        out.extend(timelens::maintenance(c, now));
+    }
+    if on("backups") {
+        if let Some(n) = auto_backup(c, now) {
+            out.push(n);
+        }
     }
     out
+}
+
+/// Feature switch as mirrored to the vault by the UI (`PUT /api/features`); default on.
+pub fn feature_on(c: &Connection, id: &str) -> bool {
+    setting_get(c, "features").and_then(|s| serde_json::from_str::<Value>(&s).ok()).map(|v| v[id].as_bool() != Some(false)).unwrap_or(true)
 }
 
 /// The desktop shell's maintenance loop (reminders, goals, retention, tray text) runs this often.
@@ -1286,5 +1301,18 @@ mod tests {
         assert!(p.0 && p.1.contains("paused"));
         assert!(run_tool(&c, "nope", &Map::new()).is_none());
         assert_eq!(mcp_catalog().len(), EXT_TOOLS.len());
+    }
+
+    #[test]
+    fn switched_off_features_do_no_background_work() {
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let c = db.conn();
+        c.execute(r#"INSERT INTO "Task" ("id","title","list","priority","done","by","createdAt","remindAt") VALUES ('t1','Ping','inbox',0,0,'me',1,5)"#, []).unwrap();
+        crate::db::setting_put(&c, "features", r#"{"reminders":false}"#).unwrap();
+        assert!(!feature_on(&c, "reminders"));
+        assert!(feature_on(&c, "backups"), "unknown / unset = on");
+        assert!(maintenance(&c, 10).iter().all(|e| e["kind"] != "reminder"));
+        crate::db::setting_put(&c, "features", r#"{"reminders":true}"#).unwrap();
+        assert!(maintenance(&c, 10).iter().any(|e| e["kind"] == "reminder"));
     }
 }

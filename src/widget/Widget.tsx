@@ -1,3 +1,4 @@
+import { TILE_FEATURE, featuresFromPrefs } from "@/lib/features";
 /**
  * Desktop widget (1.2) — a small (300×380), rounded, translucent card in its own frameless
  * window. Tiles (quick capture, today's tasks, Timelens with top-app icons, focus timer, mini AI,
@@ -76,7 +77,10 @@ export function Widget() {
   const capRef = useRef<HTMLTextAreaElement>(null);
   const lastLoad = useRef(0);
 
-  const on = (id: TileId) => cfg.tiles.some((t) => t.id === id && t.on);
+  // 1.3: tiles of switched-off features never show (features live in the shared prefs)
+  const feats = featuresFromPrefs();
+  const live = (id: TileId) => !TILE_FEATURE[id] || feats[TILE_FEATURE[id]] !== false;
+  const on = (id: TileId) => live(id) && cfg.tiles.some((t) => t.id === id && t.on);
 
   const load = useCallback(async (force = false) => {
     // at most one refresh per 30 s unless something told us data changed
@@ -88,7 +92,7 @@ export function Widget() {
       const [p, t, s] = await Promise.all([
         fetch("/api/pet").then((r) => r.json()),
         fetch("/api/tasks").then((r) => r.json()),
-        fetch(`/api/timelens/summary?from=${d.getTime()}&to=${Date.now() + 1}`).then((r) => r.json()).catch(() => null),
+        featuresFromPrefs().timelens === false ? Promise.resolve(null) : fetch(`/api/timelens/summary?from=${d.getTime()}&to=${Date.now() + 1}`).then((r) => r.json()).catch(() => null),
       ]);
       if (p) setPet(p as Pet);
       setTasks(Array.isArray(t) ? (t as Task[]) : []);
@@ -367,7 +371,7 @@ export function Widget() {
         <button className="wg-ib" title="Open Nook" aria-label="Open Nook" onClick={() => openMain()}><Icon name="external-arrow" size={13} /></button>
         <button className="wg-ib" title="Hide widget" aria-label="Hide widget" onClick={() => isTauri && void invoke("widget_toggle", { show: false })}><Icon name="close" size={13} /></button>
       </header>
-      <div className="wg-body">{cfg.tiles.filter((t) => t.on).map((t) => tile(t.id))}</div>
+      <div className="wg-body">{cfg.tiles.filter((t) => t.on && live(t.id)).map((t) => tile(t.id))}</div>
     </div>
   );
 }

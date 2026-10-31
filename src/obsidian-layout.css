@@ -1,0 +1,36 @@
+/* 1.3 Obsidian-style layout (loaded with its chunk) */
+.obs-layout { display: flex; min-height: 0; flex: 1; gap: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--panel-solid); }
+html[data-ui="pixel"] .obs-layout { border-width: 2px; box-shadow: 0 3px 0 0 var(--px-step); }
+.obs-ribbon { width: 46px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0; background: var(--sunken, var(--panel2)); border-right: 1px solid var(--line); }
+.obs-rb { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--dim); position: relative; }
+.obs-rb:hover { background: var(--hover); color: var(--ink); }
+.obs-rb[data-on="true"] { background: var(--hl); color: var(--accent); }
+.obs-rb[data-on="true"]::before { content: ""; position: absolute; left: -6px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 2px 2px 0; background: var(--accent); }
+.obs-rb .nav-px { transition: transform 0.12s steps(2); }
+.obs-rb:hover .nav-px { transform: translateY(-2px); }
+.obs-rb-sep { width: 20px; height: 2px; margin: 4px 0; background: var(--line); }
+.obs-left { width: 268px; flex: none; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel-solid); }
+.obs-center { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.obs-center-bar { display: flex; align-items: center; height: 32px; padding: 0 6px; border-bottom: 1px solid var(--line); flex: none; }
+.obs-right { width: 260px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--panel-solid); }
+.obs-rtabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); }
+.obs-rtabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; height: 28px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--faint); }
+.obs-rtabs button:hover { background: var(--hover); color: var(--ink); }
+.obs-rtabs button[data-on="true"] { background: var(--hl); color: var(--accent); }
+.obs-rbody { flex: 1; min-height: 0; padding: 8px; }
+.obs-h { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); padding: 4px 6px; }
+html[data-ui="pixel"] .obs-h { font-family: var(--f-silk), monospace; font-size: 9px; font-weight: 400; }
+.obs-item { display: flex; width: 100%; align-items: center; gap: 6px; height: 27px; padding: 0 8px; border-radius: 6px; font-size: 12.5px; color: var(--dim); text-align: left; }
+.obs-item:hover { background: var(--hover); color: var(--ink); }
+.obs-hl { font-size: 9.5px; font-weight: 700; color: var(--faint); flex: none; }
+.obs-empty { padding: 10px 8px; font-size: 12px; color: var(--faint); }
+.obs-graph { width: 100%; height: auto; }
+.obs-graph line { stroke: color-mix(in srgb, var(--ink) 22%, transparent); stroke-width: 1.2; }
+.obs-graph text { font-size: 8px; fill: var(--dim); font-family: var(--font-ui); }
+.obs-gn { cursor: pointer; }
+.obs-gn rect { fill: var(--panel-solid); stroke: var(--accent); stroke-width: 1.6; }
+.obs-gn:hover rect { fill: var(--accent); }
+.obs-gme { fill: var(--accent); stroke: color-mix(in srgb, var(--accent) 60%, #000); stroke-width: 2; }
+.obs-gme-t { font-weight: 700; fill: var(--ink) !important; font-size: 9px !important; }
+.obs-g-empty { fill: var(--faint) !important; }
+.obs-layout .tabs { border-radius: 0; }

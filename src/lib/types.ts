@@ -30,6 +30,9 @@ export type Folder = {
   icon: string;
   color: string;
   position: number;
+  /** 1.3: nested folders + pinned (favourites) */
+  parentId?: string | null;
+  pinned?: boolean;
 };
 
 export type CanvasNode = {

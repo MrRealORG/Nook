@@ -339,6 +339,70 @@ const Teams: AppLogoComponent = ({ size = 16, className }) => (
   </svg>
 );
 
+
+/* 1.3 — more fallbacks for apps whose real icon could not be extracted */
+const Explorer: AppLogoComponent = ({ size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path d="M2.5 6.5a1.5 1.5 0 0 1 1.5-1.5h5l2 2h9a1.5 1.5 0 0 1 1.5 1.5V9h-19z" fill="#E8A21B" />
+    <rect x="2.5" y="8.6" width="19" height="10.9" rx="1.6" fill="#FFC83D" />
+    <rect x="2.5" y="8.6" width="19" height="2.2" fill="#FFD866" />
+    <rect x="6" y="13" width="12" height="2.4" rx="1" fill="#1E88E5" />
+  </svg>
+);
+const officeTile = (bg: string, dark: string, letter: string): AppLogoComponent =>
+  function Office({ size = 16, className }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <rect x="7" y="3" width="14" height="18" rx="2.2" fill={bg} />
+        <path d="M14 7h5M14 10.5h5M14 14h5M14 17.5h5" stroke="#fff" strokeOpacity=".55" strokeWidth="1.4" />
+        <rect x="2.5" y="6.5" width="11" height="11" rx="1.8" fill={dark} />
+        <text x="8" y="15.2" textAnchor="middle" fontSize="8.4" fontWeight="800" fill="#fff" fontFamily="Segoe UI, Arial, sans-serif">{letter}</text>
+      </svg>
+    );
+  };
+const Word = officeTile("#41A5EE", "#185ABD", "W");
+const Excel = officeTile("#33C481", "#107C41", "X");
+const PowerPoint = officeTile("#FF8F6B", "#C43E1C", "P");
+const Outlook = officeTile("#28A8EA", "#0364B8", "O");
+const Photoshop: AppLogoComponent = ({ size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <rect x="2" y="2.5" width="20" height="19" rx="4.4" fill="#001E36" />
+    <text x="12" y="16.2" textAnchor="middle" fontSize="10" fontWeight="800" fill="#31A8FF" fontFamily="Segoe UI, Arial, sans-serif">Ps</text>
+  </svg>
+);
+const Obsidian: AppLogoComponent = ({ size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path d="M8.6 2.6 15.9 4l3.5 7.3-2.8 9.9-7.9.2-4.5-6.6 1.6-7.7z" fill="#7C3AED" />
+    <path d="M8.6 2.6 9.9 9.6l-4.1 4.7 1.6-7.7z" fill="#A78BFA" />
+    <path d="M15.9 4 9.9 9.6l6.7 11.6 2.8-9.9z" fill="#5B21B6" />
+    <path d="M9.9 9.6 8.7 21.4l7.9-.2z" fill="#6D28D9" />
+  </svg>
+);
+const OBS: AppLogoComponent = ({ size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <circle cx="12" cy="12" r="10" fill="#302E31" />
+    <circle cx="12" cy="7.6" r="2.9" fill="#fff" />
+    <circle cx="8.2" cy="14.3" r="2.9" fill="#fff" />
+    <circle cx="15.8" cy="14.3" r="2.9" fill="#fff" />
+    <circle cx="12" cy="12" r="2.1" fill="#302E31" />
+  </svg>
+);
+const VLC: AppLogoComponent = ({ size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path d="M10.2 3h3.6l5.4 15.5H4.8z" fill="#FF8800" />
+    <path d="M8.6 8.8h6.8l.9 2.7H7.7zM6.8 14h10.4l.9 2.6H5.9z" fill="#fff" />
+    <rect x="3.2" y="18.2" width="17.6" height="2.8" rx="1.2" fill="#E85E00" />
+  </svg>
+);
+const Notepad: AppLogoComponent = ({ size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <rect x="4" y="3.5" width="16" height="17.5" rx="2" fill="#5AB6F5" />
+    <rect x="5.5" y="6.5" width="13" height="13" rx="1" fill="#fff" />
+    <path d="M7.5 9.5h9M7.5 12.5h9M7.5 15.5h6" stroke="#5AB6F5" strokeWidth="1.3" />
+    <path d="M7 2.5v3M11 2.5v3M15 2.5v3" stroke="#2B6CB0" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+);
+
 /* ----------------------------------------------------------------- map --- */
 
 export const APP_LOGOS: Record<string, AppLogoComponent> = {
@@ -376,6 +440,16 @@ export const APP_LOGOS: Record<string, AppLogoComponent> = {
   codex: Codex,
   copilot: Copilot,
   teams: Teams,
+  explorer: Explorer,
+  word: Word,
+  excel: Excel,
+  powerpoint: PowerPoint,
+  outlook: Outlook,
+  photoshop: Photoshop,
+  obsidian: Obsidian,
+  obs: OBS,
+  vlc: VLC,
+  notepad: Notepad,
 };
 
 export const LOGO_APPS: string[] = Object.keys(APP_LOGOS);
@@ -396,6 +470,32 @@ const ALIAS: Record<string, string> = {
   drive: "gdrive",
   microsoftteams: "teams",
   claudeai: "claude",
+  // 1.3: names Timelens derives from exe files / window titles
+  fileexplorer: "explorer",
+  windowsexplorer: "explorer",
+  windowsterminal: "terminal",
+  wt: "terminal",
+  powershell: "terminal",
+  cmd: "terminal",
+  commandprompt: "terminal",
+  microsoftedge: "edge",
+  msedge: "edge",
+  mozillafirefox: "firefox",
+  adobephotoshop: "photoshop",
+  obsstudio: "obs",
+  obs64: "obs",
+  microsoftword: "word",
+  winword: "word",
+  microsoftexcel: "excel",
+  microsoftpowerpoint: "powerpoint",
+  powerpnt: "powerpoint",
+  microsoftoutlook: "outlook",
+  vlcmediaplayer: "vlc",
+  "notepad++": "notepad",
+  youtubemusic: "youtube",
+  steamwebhelper: "steam",
+  whatsappdesktop: "whatsapp",
+  telegramdesktop: "telegram",
   zoomus: "zoom",
 };
 
@@ -431,6 +531,13 @@ function FallbackLogo({ app, size = 16, className }: AppLogoProps & { app: strin
       </text>
     </svg>
   );
+}
+
+/** a real brand mark for a Timelens app / site name, or null (generic dock glyphs excluded) */
+export function brandLogoFor(app: string): AppLogoComponent | null {
+  const key = app.toLowerCase().trim().replace(/\s+/g, "");
+  if (key === "games" || key === "docs" || key === "music") return null;
+  return appLogoFor(app);
 }
 
 export function AppLogo({ app, size = 16, className }: { app: string; size?: number; className?: string }) {
