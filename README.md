@@ -2,6 +2,17 @@
 
 A pixel-art AI notes super app for Windows 10/11. It has notes, graph, canvas, tasks, focus, arcade (13 games), a desktop pet, market, team room, AI agent, an MCP server and a desktop widget. It's built with Tauri v2 and a Rust backend, so there's no bundled Chromium and no Node server at runtime. It uses Windows' built-in WebView2.
 
+## What's new in 1.2
+
+- **Light on CPU by default.** Nook is built to sit quietly in the background:
+  - **Hard CPU cap (Windows):** at startup, before WebView2 starts, Nook puts itself in a Windows Job Object with a hard CPU-rate cap. The WebView2 helper processes inherit the cap, so the whole app tree shares it. The default is **10 %** of the machine, adjustable from 5 % to 50 % (or off) in **Settings → Performance & widget**. Child processes that escape the job are found and added back. Nook also runs at below-normal priority and turns on Windows **EcoQoS** (efficiency mode) while no window is visible.
+  - **Low-power mode (on by default):** turns off decorative motion (roaming pet, idle animations, blur, grain). Polling stops while the window is hidden or minimised to the tray, and catches up once when you come back. Idle views draw no animation frames.
+  - **Timelens sampler:** samples every 5 s (never faster), backs off to 30 s while you're away, locked or paused, and writes to the database once a minute.
+- **Clean theme.** New installs get a clean Light/Dark look that follows Windows, with Segoe UI Variable and crisp line icons. If you were on the old default you're moved to Clean automatically. A customised 1.1 theme is kept, and the pixel themes are still in Settings → Appearance.
+- **New sidebar.** It's grouped into Workspace, Create, Productivity and Play, and it collapses to an icon rail with tooltips. It remembers its state. Right-click any item to move it within its group, hide it or change its icon.
+- **Timelens, redesigned.** Its tabs are **Dashboard** (total / productive / focused / idle cards and today's timeline), **Timeline** (zoomable day view with hover details, sessions list and day navigation), **Apps** (every app with its real icon taken from the .exe, plus search, sort and exclude; changing a category also re-categorises past time), **Websites** (with favicons), **Analytics**, **Goals**, **Focus** and **Settings / Privacy**.
+- **Desktop widget, rebuilt.** It's a small **300×380 card** that collapses to a **200×48 pill** and remembers which one you left it as. Choose its tiles and their order in Settings → Performance & widget: Quick capture, Today's tasks, Timelens today, Focus timer, Mini AI and Pet.
+
 ## What's new in 1.1
 
 - **Timelens** — private, local time tracking (see below).
@@ -16,7 +27,7 @@ A pixel-art AI notes super app for Windows 10/11. It has notes, graph, canvas, t
 
 ## Timelens
 
-Timelens records which app and window is in the foreground (Windows: `GetForegroundWindow` + `QueryFullProcessImageNameW`, sampled every 2 s) and when you are away (`GetLastInputInfo`, 3 min idle by default; the lock screen counts as away). Everything is stored in the local SQLite vault and never leaves the PC.
+Timelens records which app and window is in the foreground (Windows: `GetForegroundWindow` + `QueryFullProcessImageNameW`, sampled every 5 s by default, never faster; 30 s back-off while away) and when you are away (`GetLastInputInfo`, 3 min idle by default; the lock screen counts as away). Everything is stored in the local SQLite vault and never leaves the PC.
 
 - **View** (`Alt+L`): today / 7 days / 30 days, a timeline strip, hourly heatmap, per-app and per-window totals, a productivity score, history and streaks, AI insights, CSV/JSON export.
 - **Categories**: productive / neutral / distracting via built-in rules plus your own (Settings → Timelens → Categories).
@@ -31,12 +42,12 @@ Timelens records which app and window is in the foreground (Windows: `GetForegro
    git remote add origin https://github.com/MrRealORG/Nook.git
    git push -u origin master --force   # replaces the old Next.js code
    ```
-2. **Actions → Build & Release** runs on every push. Open the finished run and download the **Nook-Windows-installers** artifact. It contains `Nook_1.1.0_x64-setup.exe` (NSIS) and an `.msi`.
+2. **Actions → Build & Release** runs on every push. Open the finished run and download the **Nook-Windows-installers** artifact. It contains `Nook_1.2.0_x64-setup.exe` (NSIS) and an `.msi`.
 3. For a public Release with the installer attached, tag a version:
    ```bash
-   git tag v1.1.0 && git push origin v1.1.0
+   git tag v1.2.0 && git push origin v1.2.0
    ```
-   The workflow builds and publishes **Releases → Nook v1.1.0 → Nook_1.1.0_x64-setup.exe**.
+   The workflow builds and publishes **Releases → Nook v1.2.0 → Nook_1.2.0_x64-setup.exe**.
 
 The installer installs per-user, needs no admin, and pulls WebView2 automatically if it's missing.
 

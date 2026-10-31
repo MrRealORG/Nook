@@ -44,7 +44,7 @@ function Ambience() {
     <div className="pointer-events-none absolute inset-0 overflow-hidden" title={meta.label}>
       <div className="absolute inset-0 transition-all duration-1000" style={{ background: meta.sky }} />
       {/* celestial body — sun by day, pixel moon by night, low warm orb at dawn/dusk */}
-      <div className="absolute right-[9%] top-[10%]" style={{ animation: "floaty 5.5s ease-in-out infinite" }}>
+      <div className="den-float absolute right-[9%] top-[10%]" style={{ animation: "floaty 5.5s ease-in-out infinite" }}>
         <PhaseCelestial phase={phase} size={night ? 34 : 30} />
       </div>
       {/* stars only when the sky is dark */}
@@ -108,7 +108,7 @@ function Stage() {
   useEffect(() => {
     const el = box.current!;
     let last = performance.now();
-    // 1.2: capped-fps timer loop (30 fps, 15 in low-power), stops while hidden / off screen
+    // 1.2: capped-fps timer loop (30 fps, 8 in low-power), stops while hidden / off screen
     const loop = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
@@ -182,7 +182,7 @@ function Stage() {
         ballEl.current.style.transform = `translate3d(${b.x - 11}px, ${-b.y}px, 0)`;
       }
     };
-    const fl = frameLoop(loop, isLowPower() ? 15 : 30, el);
+    const fl = frameLoop(loop, isLowPower() ? 8 : 30, el);
     return () => fl.stop();
   }, []);
 

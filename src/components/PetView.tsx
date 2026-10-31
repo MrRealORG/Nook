@@ -88,9 +88,9 @@ export function PetView({ species, tint, hat = "none", mood = "idle", scale = 3,
       return;
     }
     // capped fps with timers (not a 60 Hz rAF wake-up), paused while hidden / scrolled away
-    const fl = frameLoop(draw, fps, cv);
+    const fl = frameLoop(draw, power ? Math.min(fps, 8) : fps, cv);
     return () => fl.stop();
-  }, [fps, moving, species, hat, mood, facing, pal]);
+  }, [fps, moving, power, species, hat, mood, facing, pal]);
 
   return <canvas ref={ref} width={SW} height={SH} className={`pixelated ${className ?? ""}`} style={{ width: SW * scale, height: SH * scale, ...style }} />;
 }

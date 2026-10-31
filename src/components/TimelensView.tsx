@@ -354,7 +354,7 @@ function TimelineTab({ sum, day }: { sum: Summary; day: number }) {
               <AppIcon app={s.app} size={20} />
               <span className="tl-row-name">{s.app}<span className="ml-2 text-faint">{s.title}</span></span>
               <CatChip cat={s.focus ? "focus" : s.cat} />
-              <span className="tl-row-time w-[118px]">{clock(s.start)} – {clock(s.end)}</span>
+              <span className="tl-row-time tl-row-range">{clock(s.start)} – {clock(s.end)}</span>
               <span className="tl-row-time">{fmt((s.end - s.start) / 1000)}</span>
             </div>
           ))}

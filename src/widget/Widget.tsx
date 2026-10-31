@@ -28,13 +28,16 @@ const notifyMain = () => {
   if (isTauri) void invoke("broadcast", { event: "data-changed", payload: { source: "widget" } }).catch(() => {});
 };
 
+/** before the main window has saved any prefs (fresh install), follow the OS like the app does */
+const osTheme = (): ThemeId => (typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+
 function readLook(): { theme: ThemeId; ui: string } {
   try {
     const p = JSON.parse(localStorage.getItem("nook:prefs") ?? "{}");
-    const theme = THEME_IDS.includes(p.theme) ? (p.theme as ThemeId) : "light";
+    const theme = THEME_IDS.includes(p.theme) ? (p.theme as ThemeId) : osTheme();
     return { theme, ui: typeof p.uiStyle === "string" ? p.uiStyle : "clean" };
   } catch {
-    return { theme: "light", ui: "clean" };
+    return { theme: osTheme(), ui: "clean" };
   }
 }
 

@@ -117,6 +117,7 @@ html[data-motion="reduced"] *, html[data-motion="reduced"] *::before, html[data-
 html[data-motion="reduced"] .view-enter { animation: fadeIn 0.14s ease-out both; }
 html[data-motion="reduced"] .cube { animation: none !important; }
 html[data-motion="reduced"] .shimmer { animation: none !important; }
+html[data-motion="reduced"] .arcade-title, html[data-motion="reduced"] .arcade-glow, html[data-motion="reduced"] .den-float { animation: none !important; }
 html[data-motion="reduced"] [class*="ambience"] { display: none !important; }
 /* the window is hidden / minimised: freeze everything */
 html[data-active="false"] *, html[data-active="false"] *::before, html[data-active="false"] *::after { animation-play-state: paused !important; transition: none !important; }
@@ -226,6 +227,7 @@ html[data-active="false"] *, html[data-active="false"] *::before, html[data-acti
 .tl-row-bar { width: 120px; height: 6px; border-radius: 99px; background: var(--panel2); overflow: hidden; flex: none; }
 .tl-row-bar i { display: block; height: 100%; border-radius: 99px; }
 .tl-row-time { width: 64px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); flex: none; font-size: 12.5px; }
+.tl-row-range { width: auto; min-width: 128px; white-space: nowrap; }
 .tl-icon { flex: none; object-fit: contain; image-rendering: auto; }
 .tl-letter { flex: none; display: inline-grid; place-items: center; font-weight: 650; line-height: 1; font-family: var(--font-ui); }
 .tl-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 99px; font-size: 11.5px; font-weight: 600; flex: none; white-space: nowrap; }
@@ -300,7 +302,7 @@ html[data-widget="true"] body { font-family: var(--font-ui); font-size: 13px; }
 .wg-ib[data-on="true"] { color: var(--accent); background: var(--hl); }
 .wg-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; scrollbar-width: thin; }
 .wg-tile { border-radius: 11px; background: var(--panel2); padding: 8px 10px; flex: none; }
-.wg-tasks { flex: 1 1 auto; min-height: 64px; }
+.wg-tasks { flex: 1 1 auto; min-height: 64px; overflow-y: auto; scrollbar-width: thin; }
 .wg-row { display: flex; align-items: center; gap: 6px; }
 .wg-input { width: 100%; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-solid); outline: none; font-size: 12.5px; color: var(--ink); }
 .wg-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--hl); }

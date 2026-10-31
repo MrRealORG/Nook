@@ -1,6 +1,6 @@
 [package]
 name = "nook-core"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "Nook backend core: SQLite vault, API router, AI client, agent tools, MCP server, team room"
 license = "MIT"

@@ -15,6 +15,8 @@ const SCALE = 2.5;
 const PW = 32 * SCALE;
 const PH = 38 * SCALE;
 const FLOOR = 5;
+/** low-power: the pet stands just above the 32 px status bar instead of on top of it */
+const PARKED_FLOOR = 36;
 
 type Mode = "idle" | "walk" | "sleep";
 
@@ -69,7 +71,7 @@ export function DesktopPet() {
   const look = useRef({ x: 0, y: 0 });
   const [menu, setMenu] = useState(false);
   const [hover, setHover] = useState(false);
-  const S = useRef({ x: 160, y: 0, vy: 0, mode: "idle" as Mode, until: 0, target: 160, held: false, moved: false, dx: 0, dy: 0, sx: 0, sy: 0, mx: -1, my: -1, lastClick: 0, facing: 1 as 1 | -1 });
+  const S = useRef({ x: 160, y: 0, vy: 0, mode: "idle" as Mode, until: 0, target: 160, held: false, moved: false, userPlaced: false, dx: 0, dy: 0, sx: 0, sy: 0, mx: -1, my: -1, lastClick: 0, facing: 1 as 1 | -1 });
 
   const hidden = !roam || view === "den";
   // 1.2 low-power mode (default): the pet sits still — no per-frame loop at all; it still
@@ -97,9 +99,13 @@ export function DesktopPet() {
     if (hidden || !low) return;
     const el = wrap.current;
     const s = S.current;
+    // parked (low-power) pets rest in the bottom-right corner above the status bar, so neither
+    // the sprite nor its speech bubble sits on top of the sidebar navigation
+    if (!s.userPlaced) s.x = window.innerWidth - PW - 28;
     const place = () => {
       if (!el) return;
       const W = window.innerWidth;
+      if (!s.userPlaced) s.x = W - PW - 28;
       s.x = clamp(s.x, 0, W - PW);
       el.style.transform = `translate3d(${s.x}px, 0, 0)`;
       el.style.setProperty("--bl", `${clamp(s.x + PW / 2 - 118, 8, W - 244) - s.x}px`);
@@ -207,7 +213,7 @@ export function DesktopPet() {
     <div
       ref={wrap}
       className="pointer-events-none fixed left-0 z-[70]"
-      style={{ bottom: FLOOR, width: PW, height: PH, willChange: "transform" }}
+      style={{ bottom: low ? PARKED_FLOOR : FLOOR, width: PW, height: PH, willChange: "transform" }}
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => { setHover(false); }}
     >
@@ -289,7 +295,7 @@ export function DesktopPet() {
         }}
         onPointerMove={(e) => {
           if (!(e.buttons & 1)) return;
-          if (!s.moved && Math.hypot(e.clientX - s.sx, e.clientY - s.sy) > 6) { s.moved = true; s.held = true; }
+          if (!s.moved && Math.hypot(e.clientX - s.sx, e.clientY - s.sy) > 6) { s.moved = true; s.userPlaced = true; s.held = true; }
           if (s.held) {
             s.x = e.clientX - s.dx;
             s.y = clamp(s.dy + (s.sy - e.clientY), 0, window.innerHeight - PH - 70);

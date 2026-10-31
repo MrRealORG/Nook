@@ -48,7 +48,7 @@ const DEFAULTS: DesktopSettings = { mcpEnabled: true, mcpPort: 3000, lanShare: f
 export const useDesktopInfo = create<DesktopInfo>(() => ({
   ready: false,
   desktop: isTauri,
-  version: "1.0.0",
+  version: "1.2.0",
   platform: "web",
   dataDir: "",
   dbPath: "",
