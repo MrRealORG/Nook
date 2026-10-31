@@ -169,8 +169,18 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
     match (m, seg.as_slice()) {
         ("POST", ["ai-chat"]) => return ai_chat(ctx, &b).await,
         ("POST", ["agent-tools"]) => return agent_exec(ctx, &b).await,
-        ("POST", ["ai-test"]) => return ai_test(ctx).await,
+        ("POST", ["ai-test"]) => return ai_test(ctx, &req).await,
+        ("POST", ["ai-models"]) => return ai_models(ctx, &req).await,
         ("POST", ["timelens", "favicons", "fetch"]) => return favicons_fetch(ctx, &b).await,
+        ("POST", ["timelens", "icons", "refresh"]) => {
+            // icon extraction is blocking Win32/COM work: off the async runtime, no DB lock held
+            let db = ctx.db.clone();
+            let v = tokio::task::spawn_blocking(move || crate::tlapps::refresh_icons(&db, &crate::tlapps::PlatformIcons, crate::db::now_ms())).await;
+            return match v {
+                Ok(v) => R::json(v),
+                Err(e) => R::err(500, &e.to_string()),
+            };
+        }
         _ => {}
     }
     if seg.first() == Some(&"mcp") {
@@ -220,7 +230,10 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
         ("POST", ["folders"]) => folders_create(&c, &b),
         ("PATCH", ["folders", id]) => folders_patch(&c, id, &b),
         ("DELETE", ["folders", id]) => {
-            let _ = c.execute(r#"UPDATE "Note" SET "folderId"=NULL WHERE "folderId"=?1"#, params![id]);
+            // notes and sub-folders move up to the deleted folder's parent (top level if none)
+            let parent: Option<String> = c.query_row(r#"SELECT "parentId" FROM "Folder" WHERE "id"=?1"#, params![id], |r| r.get(0)).ok().flatten();
+            let _ = c.execute(r#"UPDATE "Note" SET "folderId"=?2 WHERE "folderId"=?1"#, params![id, parent]);
+            let _ = c.execute(r#"UPDATE "Folder" SET "parentId"=?2 WHERE "parentId"=?1"#, params![id, parent]);
             let _ = c.execute(r#"DELETE FROM "Folder" WHERE "id"=?1"#, params![id]);
             R::ok()
         }
@@ -448,6 +461,8 @@ fn folder_row(r: &Row) -> rusqlite::Result<Value> {
         "icon": r.get::<_, String>("icon")?,
         "color": r.get::<_, String>("color")?,
         "position": r.get::<_, i64>("position")?,
+        "parentId": r.get::<_, Option<String>>("parentId")?,
+        "pinned": r.get::<_, i64>("pinned")? != 0,
         "createdAt": iso(r.get::<_, i64>("createdAt")?),
     }))
 }
@@ -726,14 +741,15 @@ pub fn radix36(mut n: u64) -> String {
 fn folders_create(c: &Connection, b: &Map<String, Value>) -> R {
     let id = valid_or_uuid(b.get("id"));
     let _ = c.execute(
-        r#"INSERT INTO "Folder" ("id","name","icon","color","position","createdAt") VALUES (?1,?2,?3,?4,?5,?6)"#,
+        r#"INSERT INTO "Folder" ("id","name","icon","color","position","createdAt","parentId") VALUES (?1,?2,?3,?4,?5,?6,?7)"#,
         params![
             id,
             take(str_of(b.get("name")).unwrap_or("New folder"), 80),
             take(str_of(b.get("icon")).unwrap_or("folder"), 32),
             take(str_of(b.get("color")).unwrap_or(""), 16),
             num_of(b.get("position")).map(|p| p.round() as i64).unwrap_or(0),
-            now_ms()
+            now_ms(),
+            str_of(b.get("parentId")).filter(|p| !p.is_empty()),
         ],
     );
     R::json(json!({ "id": id }))
@@ -745,7 +761,35 @@ fn folders_patch(c: &Connection, id: &str, b: &Map<String, Value>) -> R {
             let _ = c.execute(&format!(r#"UPDATE "Folder" SET "{k}"=?1 WHERE "id"=?2"#), params![take(v, max), id]);
         }
     }
+    if let Some(p) = num_of(b.get("position")) {
+        let _ = c.execute(r#"UPDATE "Folder" SET "position"=?1 WHERE "id"=?2"#, params![p.round() as i64, id]);
+    }
+    if let Some(p) = b.get("pinned").and_then(|v| v.as_bool()) {
+        let _ = c.execute(r#"UPDATE "Folder" SET "pinned"=?1 WHERE "id"=?2"#, params![p as i64, id]);
+    }
+    if let Some(v) = b.get("parentId") {
+        // move into another folder (null / "" = top level); never into itself or a descendant
+        let parent = v.as_str().filter(|p| !p.is_empty() && *p != id).map(String::from);
+        if parent.as_deref().map(|p| !folder_is_descendant(c, p, id)).unwrap_or(true) {
+            let _ = c.execute(r#"UPDATE "Folder" SET "parentId"=?1 WHERE "id"=?2"#, params![parent, id]);
+        } else {
+            return R::err(400, "can't move a folder into itself");
+        }
+    }
     R::ok()
+}
+
+/// Is `node` inside `ancestor` (following parent links, cycle-safe)?
+fn folder_is_descendant(c: &Connection, node: &str, ancestor: &str) -> bool {
+    let mut cur = Some(node.to_string());
+    for _ in 0..64 {
+        let Some(n) = cur else { return false };
+        if n == ancestor {
+            return true;
+        }
+        cur = c.query_row(r#"SELECT "parentId" FROM "Folder" WHERE "id"=?1"#, params![n], |r| r.get::<_, Option<String>>(0)).ok().flatten();
+    }
+    true
 }
 
 fn canvases_create(c: &Connection, b: &Map<String, Value>) -> R {
@@ -1566,16 +1610,37 @@ async fn ai_chat(ctx: &Ctx, b: &Map<String, Value>) -> R {
     }
 }
 
-async fn ai_test(ctx: &Ctx) -> R {
-    let cfg = ctx.ai.config(&ctx.db);
+fn req_json(req: &ApiRequest) -> Value {
+    req.body.clone().unwrap_or(Value::Null)
+}
+
+/// Test a provider. With a body (`{provider, baseUrl?, model?, apiKey?}`) the draft settings are
+/// tested without saving (onboarding / Settings "Test connection"); without one, the saved config.
+async fn ai_test(ctx: &Ctx, req: &ApiRequest) -> R {
+    let cfg = match ctx.ai.draft_config(&ctx.db, &req_json(req)) {
+        Ok(c) => c,
+        Err(e) => return R::json(json!({ "ok": false, "error": e })),
+    };
     if !cfg.is_usable() {
         return R::json(json!({ "ok": false, "error": "Pick a provider and model (and an API key for cloud providers) first." }));
     }
     let t0 = std::time::Instant::now();
     let msgs = vec![ChatMsg { role: "user".into(), content: "Reply with exactly: pong".into() }];
     match ctx.ai.chat(&cfg, &msgs).await {
-        Ok(t) => R::json(json!({ "ok": true, "reply": take(&t, 200), "ms": t0.elapsed().as_millis() as u64 })),
+        Ok(t) => R::json(json!({ "ok": true, "reply": take(&t, 200), "ms": t0.elapsed().as_millis() as u64, "model": cfg.model })),
         Err(e) => R::json(json!({ "ok": false, "error": e })),
+    }
+}
+
+/// Model picker: `{provider, baseUrl?, apiKey?}` → `{ ok, models }` (Ollama: installed models).
+async fn ai_models(ctx: &Ctx, req: &ApiRequest) -> R {
+    let cfg = match ctx.ai.draft_config(&ctx.db, &req_json(req)) {
+        Ok(c) => c,
+        Err(e) => return R::json(json!({ "ok": false, "error": e, "models": [] })),
+    };
+    match ctx.ai.list_models(&cfg).await {
+        Ok(m) => R::json(json!({ "ok": true, "models": m, "provider": cfg.provider })),
+        Err(e) => R::json(json!({ "ok": false, "error": e, "models": [], "provider": cfg.provider })),
     }
 }
 
@@ -1831,5 +1896,36 @@ mod tests {
         let (st, _) = call(&c, "GET", "/api/nope", None).await;
         assert_eq!(st, 404);
         assert_eq!(pct_decode("a%20b+c%2F"), "a b c/");
+    }
+
+    #[tokio::test]
+    async fn nested_folders_move_pin_and_delete_up() {
+        let c = ctx();
+        let (_, a) = call(&c, "POST", "/api/folders", Some(json!({ "name": "Projects", "color": "#e0a13d" }))).await;
+        let a = a["id"].as_str().unwrap().to_string();
+        let (_, b) = call(&c, "POST", "/api/folders", Some(json!({ "name": "Nook", "parentId": a }))).await;
+        let b = b["id"].as_str().unwrap().to_string();
+        let (_, list) = call(&c, "GET", "/api/folders", None).await;
+        let nook = list.as_array().unwrap().iter().find(|f| f["id"] == b.as_str()).unwrap().clone();
+        assert_eq!(nook["parentId"], a.as_str());
+        assert_eq!(nook["pinned"], false);
+        // can't move a folder into its own child
+        let (st, _) = call(&c, "PATCH", &format!("/api/folders/{a}"), Some(json!({ "parentId": b }))).await;
+        assert_eq!(st, 400);
+        let (st, _) = call(&c, "PATCH", &format!("/api/folders/{b}"), Some(json!({ "pinned": true, "icon": "🚀", "position": 3, "parentId": null }))).await;
+        assert_eq!(st, 200);
+        let (_, list) = call(&c, "GET", "/api/folders", None).await;
+        let nook = list.as_array().unwrap().iter().find(|f| f["id"] == b.as_str()).unwrap().clone();
+        assert_eq!((nook["pinned"].clone(), nook["icon"].clone(), nook["position"].clone(), nook["parentId"].clone()), (json!(true), json!("🚀"), json!(3), Value::Null));
+        // deleting a parent lifts its children + notes one level up
+        call(&c, "PATCH", &format!("/api/folders/{b}"), Some(json!({ "parentId": a }))).await;
+        let (_, n) = call(&c, "POST", "/api/notes", Some(json!({ "title": "In projects", "folderId": a }))).await;
+        call(&c, "DELETE", &format!("/api/folders/{a}"), None).await;
+        let (_, list) = call(&c, "GET", "/api/folders", None).await;
+        assert_eq!(list.as_array().unwrap().iter().find(|f| f["id"] == b.as_str()).unwrap()["parentId"], Value::Null);
+        let (_, notes) = call(&c, "GET", "/api/notes", None).await;
+        let notes = notes.as_array().cloned().or_else(|| notes["notes"].as_array().cloned()).unwrap();
+        let note = notes.iter().find(|x| x["id"] == n["id"]).unwrap();
+        assert_eq!(note["folderId"], Value::Null);
     }
 }

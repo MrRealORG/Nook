@@ -897,43 +897,26 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
         let _ = c.execute(r#"DELETE FROM "TimeSpan" WHERE "app"=?1 AND "title"=?2 AND "start">=?3 AND "start"<?4"#, params![app, title, y, day + 86_400_000]);
     }
     write_spans(c, &spans)?;
-    // demo app registry with generated icons (stand-ins for the real exe icons on Windows)
-    let demo: &[(&str, &str, [u8; 3])] = &[
-        ("VS Code", "C:\\Users\\demo\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", [0x23, 0x7a, 0xcc]),
-        ("Chrome", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", [0xe8, 0x45, 0x3c]),
-        ("Slack", "C:\\Users\\demo\\AppData\\Local\\slack\\slack.exe", [0x4a, 0x15, 0x4b]),
-        ("Figma", "C:\\Users\\demo\\AppData\\Local\\Figma\\Figma.exe", [0xa2, 0x59, 0xff]),
-        ("Terminal", "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal\\WindowsTerminal.exe", [0x2b, 0x2b, 0x2b]),
-        ("Spotify", "C:\\Users\\demo\\AppData\\Roaming\\Spotify\\Spotify.exe", [0x1d, 0xb9, 0x54]),
+    // demo app registry. 1.3: no generated stand-in icons any more (they showed up as coloured
+    // squares and blocked real icons) — the UI draws its built-in brand icons for these apps —
+    // and a real, already-registered app is never touched.
+    let demo: &[(&str, &str)] = &[
+        ("VS Code", "C:\\Users\\demo\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"),
+        ("Chrome", "C:\\Users\\demo\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe"),
+        ("Slack", "C:\\Users\\demo\\AppData\\Local\\slack\\slack.exe"),
+        ("Figma", "C:\\Users\\demo\\AppData\\Local\\Figma\\Figma.exe"),
+        ("Terminal", "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal\\WindowsTerminal.exe"),
+        ("Spotify", "C:\\Users\\demo\\AppData\\Roaming\\Spotify\\Spotify.exe"),
     ];
-    for (app, exe, rgb) in demo {
-        let png = demo_icon(*rgb);
-        let _ = c.execute(
-            r#"INSERT INTO "TimelensApp" ("app","exe","icon","iconAt","firstSeen","lastSeen") VALUES (?1,?2,?3,?4,?4,?4)
-               ON CONFLICT("app") DO UPDATE SET "exe"=excluded."exe", "icon"=CASE WHEN "TimelensApp"."icon"='' THEN excluded."icon" ELSE "TimelensApp"."icon" END"#,
-            params![app, exe, crate::tlapps::data_url("image/png", &png), now],
-        );
+    for (app, exe) in demo {
+        let _ = c.execute(r#"INSERT OR IGNORE INTO "TimelensApp" ("app","exe","icon","iconAt","firstSeen","lastSeen") VALUES (?1,?2,'',0,?3,?3)"#, params![app, exe, now]);
     }
+    crate::tlapps::purge_demo_icons(c);
     let _ = c.execute(r#"INSERT OR IGNORE INTO "TimelensApp" ("app","firstSeen","lastSeen") VALUES ('Nook',?1,?1)"#, params![now]);
     // a focus session + a productive yesterday for the streak
     let _ = add_focus(c, at(9 * 60), at(9 * 60 + 25), "Pomodoro");
     write_spans(c, &[Span { app: "VS Code".into(), title: "yesterday — nook".into(), start: y + 10 * 3_600_000, end: y + 13 * 3_600_000, afk: false }])?;
     Ok(n)
-}
-
-/// A 32×32 rounded square with a soft highlight — the demo vault's stand-in app icons.
-fn demo_icon(rgb: [u8; 3]) -> Vec<u8> {
-    let n = 32u32;
-    let mut px = Vec::with_capacity((n * n * 4) as usize);
-    for y in 0..n {
-        for x in 0..n {
-            let (dx, dy) = ((x as i32 - 15).abs().max(9) - 9, (y as i32 - 15).abs().max(9) - 9);
-            let inside = dx * dx + dy * dy <= 49;
-            let lift = if y < 14 { 18 } else { 0 };
-            px.extend_from_slice(&[rgb[0].saturating_add(lift), rgb[1].saturating_add(lift), rgb[2].saturating_add(lift), if inside { 255 } else { 0 }]);
-        }
-    }
-    crate::tlapps::encode_png(n, n, &px)
 }
 
 pub fn tray_status(c: &Connection) -> String {
@@ -1084,6 +1067,7 @@ pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
             let _ = TRACKER_THREAD.set(std::thread::current());
             lower_this_thread();
             let mut tracker = Tracker::new(load_config(&db.conn()));
+            crate::tlapps::purge_demo_icons(&db.conn());
             loop {
                 if CONFIG_DIRTY.swap(false, Ordering::SeqCst) {
                     let cfg = load_config(&db.conn());

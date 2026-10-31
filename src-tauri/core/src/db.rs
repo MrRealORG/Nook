@@ -270,6 +270,11 @@ CREATE TABLE IF NOT EXISTS "TimelensFavicon" (
 );
 CREATE INDEX IF NOT EXISTS "TimeSpan_app_idx" ON "TimeSpan"("app");
 "#,
+    // v1.3: nested folders (drag a folder into another), pinned folders
+    r#"
+ALTER TABLE "Folder" ADD COLUMN "parentId" TEXT;
+ALTER TABLE "Folder" ADD COLUMN "pinned" INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 impl Db {
