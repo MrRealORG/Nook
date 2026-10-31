@@ -540,6 +540,7 @@ const VIEW_META = [
   { type: 'favorites', label: 'Favorites', icon: 'star' },
   { type: 'tasks', label: 'Tasks', icon: 'checkSq' },
   { type: 'board', label: 'Board', icon: 'board' },
+  { type: 'insights', label: 'Insights', icon: 'chart' },
   { type: 'chat', label: 'AI Chat', icon: 'sparkle' },
   { type: 'recordings', label: 'Recordings', icon: 'mic' },
   { type: 'trash', label: 'Trash', icon: 'trash' }
@@ -570,7 +571,7 @@ function renderSidebar() {
   viewsEl.innerHTML = VIEW_META.map((v) => {
     const active = state.view.type === v.type && !state.activeTag ? ' active' : '';
     const count = v.type === 'all' ? s.notes : v.type === 'favorites' ? s.favorites : v.type === 'tasks' ? s.openTasks : v.type === 'board' ? (state.tasks.filter((x) => !x.done).length || s.openTasks) : s.trash;
-    const showCount = v.type !== 'tasks' && v.type !== 'board' && v.type !== 'recordings' && v.type !== 'chat';
+    const showCount = v.type !== 'tasks' && v.type !== 'board' && v.type !== 'recordings' && v.type !== 'chat' && v.type !== 'insights';
     return `
       <button class="sb-row${active}" data-view="${v.type}">
         <span class="sb-ico">${ico(v.icon)}</span>
@@ -590,7 +591,7 @@ function renderSidebar() {
   const tagsWrap = $('#sb-tags-wrap');
   const tagsEl = $('#sb-tags');
   const tags = allTags();
-  tagsWrap.classList.toggle('hidden', !tags.length || state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat');
+  tagsWrap.classList.toggle('hidden', !tags.length || state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat' || state.view.type === 'insights');
   tagsEl.innerHTML = tags
     .slice(0, 12)
     .map(
@@ -1458,7 +1459,7 @@ function setView(view, opts = {}) {
   closeMention();
   closeMenu();
   if (prevType !== view.type) sfx('nav');
-  if (view.type === 'tasks' || view.type === 'board' || view.type === 'recordings' || view.type === 'chat') {
+  if (view.type === 'tasks' || view.type === 'board' || view.type === 'recordings' || view.type === 'chat' || view.type === 'insights') {
     state.currentNoteId = null;
     state.openNote = null;
   }
@@ -1501,6 +1502,16 @@ function setView(view, opts = {}) {
         }).catch(() => {});
       }
       renderRecordings();
+    } else if (view.type === 'insights') {
+      $('#insights-view').classList.remove('hidden');
+      $('#insights-view').classList.add('view-enter');
+      $('#tasks-view').classList.add('hidden');
+      $('#board-view').classList.add('hidden');
+      $('#rec-view').classList.add('hidden');
+      $('#chat-view').classList.add('hidden');
+      $('#note-list').classList.add('hidden');
+      $('#editor').style.display = 'none';
+      renderInsights();
     } else if (view.type === 'chat') {
       $('#chat-view').classList.remove('hidden');
       $('#chat-view').classList.add('view-enter');
@@ -1515,6 +1526,7 @@ function setView(view, opts = {}) {
       $('#board-view').classList.add('hidden');
       $('#rec-view').classList.add('hidden');
       $('#chat-view').classList.add('hidden');
+      $('#insights-view').classList.add('hidden');
       $('#note-list').classList.remove('hidden');
       $('#editor').style.display = '';
     }
@@ -1532,8 +1544,8 @@ function setView(view, opts = {}) {
 
 async function selectNote(id) {
   if (state.currentNoteId === id) return;
-  // coming from Tasks / Board / Recordings / Chat — bring the library back
-  if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat') {
+  // coming from Tasks / Board / Recordings / Chat / Insights — bring the library back
+  if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat' || state.view.type === 'insights') {
     setView({ type: 'all' });
   }
   await flushSave();
@@ -2827,7 +2839,9 @@ function openShortcuts() {
   const rows = [
     ['New note', 'Ctrl + N'],
     ['Search notes', 'Ctrl + F'],
-    ['Quick switcher', 'Ctrl + K'],
+    ['Command palette (jump / run anything)', 'Ctrl + K'],
+    ['Switch view — Notes / Tasks / Board', 'Ctrl + 1 / 2 / 3'],
+    ['Switch view — Recordings / AI Chat', 'Ctrl + 4 / 5'],
     ['Save now', 'Ctrl + S'],
     ['Preview markdown', 'Ctrl + E'],
     ['Find & replace', 'Ctrl + H'],
@@ -3024,6 +3038,19 @@ function wireShortcuts() {
         e.preventDefault();
         toggleZen();
         break;
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5': {
+        // v0.17 — Ctrl+1..5 jumps straight to a view
+        e.preventDefault();
+        const targets = ['all', 'tasks', 'board', 'recordings', 'chat'];
+        const vtype = targets[Number(e.key) - 1];
+        state.activeTag = null;
+        setView({ type: vtype });
+        break;
+      }
       default:
         break;
     }
@@ -4031,6 +4058,107 @@ function openLightbox(src, alt) {
 }
 
 // ==================================================================
+// v0.17 — INSIGHTS (cozy stats dashboard, all local, one SQLite pass)
+// ==================================================================
+
+async function renderInsights() {
+  const body = $('#iv-body');
+  if (!body) return;
+  body.innerHTML = `<div class="iv-loading"><span class="spin"></span>Counting your words…</div>`;
+  let d;
+  try {
+    d = await call('get_insights', { todayStart: startOfToday() });
+  } catch (err) {
+    body.innerHTML = `<div class="iv-loading">Could not load insights: ${esc(err.message)}</div>`;
+    return;
+  }
+  if (state.view.type !== 'insights') return; // user navigated away mid-load
+
+  const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+  const words = fmt(d.words);
+
+  // -- stat tiles
+  const tiles = [
+    { ico: 'all',     label: 'Notes',        val: d.notes,      sub: `${d.created7} new this week` },
+    { ico: 'wand',    label: 'Words',        val: words,        sub: 'across every note' },
+    { ico: 'flame',   label: 'Day streak',   val: d.streak,     sub: d.streak > 0 ? 'keep it going' : 'start today' },
+    { ico: 'checkSq', label: 'Tasks done',   val: d.tasksDone,  sub: `${d.done7} this week` },
+    { ico: 'board',   label: 'Open tasks',   val: d.tasksOpen,  sub: `${d.done7}/${d.done7 + d.tasksOpen} closed this week` },
+    { ico: 'sparkle', label: 'AI chats',     val: d.chats,      sub: `${d.msgs} messages` }
+  ];
+
+  // -- 14-day activity chart
+  const max = Math.max(1, ...d.notes14, ...d.tasks14);
+  const dayCols = d.notes14.map((n, i) => {
+    const off = i - 13; // 13 = today
+    const dt = new Date(Date.now() + off * 86400000);
+    const lbl = dt.toLocaleDateString(undefined, { weekday: 'narrow' });
+    const dateTxt = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const hn = Math.max(n ? 8 : 0, Math.round((n / max) * 100));
+    const ht = Math.max(d.tasks14[i] ? 8 : 0, Math.round((d.tasks14[i] / max) * 100));
+    return `
+      <div class="iv-day${off === 0 ? ' today' : ''}" title="${dateTxt} — ${n} note${n === 1 ? '' : 's'} touched · ${d.tasks14[i]} task${d.tasks14[i] === 1 ? '' : 's'} done">
+        <div class="iv-bars"><i class="iv-bn" style="height:${hn}%"></i><i class="iv-bt" style="height:${ht}%"></i></div>
+        <span>${lbl}</span>
+      </div>`;
+  }).join('');
+
+  // -- top tags (click to filter the library)
+  const tags = d.topTags.length
+    ? d.topTags.map((t) => `<button class="iv-tag" data-tag="${esc(t.tag)}"><span class="iv-tag-ico">${ico('tag')}</span>${esc(t.tag)}<b>${t.count}</b></button>`).join('')
+    : `<div class="iv-none">No tags yet — add one under any note.</div>`;
+
+  // -- board momentum
+  const bTotal = d.tasksDone + d.tasksOpen;
+  const bPct = bTotal ? Math.round((d.tasksDone / bTotal) * 100) : 0;
+
+  body.innerHTML = `
+    <div class="iv-grid">
+      <div class="iv-tiles">
+        ${tiles.map((t) => `
+          <div class="iv-tile">
+            <span class="iv-tile-ico">${ico(t.ico)}</span>
+            <span class="iv-tile-val">${t.val}</span>
+            <span class="iv-tile-label">${t.label}</span>
+            <span class="iv-tile-sub">${esc(t.sub)}</span>
+          </div>`).join('')}
+      </div>
+
+      <div class="iv-card">
+        <div class="iv-card-head">
+          <h2>Last 14 days</h2>
+          <span class="iv-legend"><i class="lg-n"></i>notes touched<i class="lg-t"></i>tasks done</span>
+        </div>
+        <div class="iv-chart">${dayCols}</div>
+      </div>
+
+      <div class="iv-row2">
+        <div class="iv-card">
+          <div class="iv-card-head"><h2>Top tags</h2></div>
+          <div class="iv-tags">${tags}</div>
+        </div>
+        <div class="iv-card">
+          <div class="iv-card-head"><h2>Board progress</h2><span class="iv-pct">${bPct}%</span></div>
+          <div class="iv-boardbar"><i style="width:${bPct}%"></i></div>
+          <p class="iv-note">${bTotal ? `${d.tasksDone} of ${bTotal} cards are done.` : 'Add a card on the Board to get going.'}</p>
+          <p class="iv-note">${d.favorites} favorite${d.favorites === 1 ? '' : 's'} · ${d.folders} folder${d.folders === 1 ? '' : 's'} in your nook.</p>
+        </div>
+      </div>
+    </div>`;
+
+  body.querySelectorAll('.iv-tag').forEach((b) => {
+    b.addEventListener('click', async () => {
+      state.activeTag = b.dataset.tag;
+      sfx('tap');
+      setView({ type: 'all' });
+      renderSidebar();
+      await refreshNotes();
+      renderNoteList();
+    });
+  });
+}
+
+// ==================================================================
 // v0.8 — BOARD (Notion-style kanban, drag cards between columns)
 // ==================================================================
 
@@ -4072,7 +4200,7 @@ function boardCardHtml(t) {
       <div class="bv-card-title">${esc(t.title)}</div>
       ${labs ? `<div class="bv-labs">${labs}</div>` : ''}
       ${badges ? `<div class="bv-card-badges">${badges}</div>` : ''}
-      ${subs.length ? `<div class="bv-subs">${ico('checkSq')}${subDone}/${subs.length}</div>` : ''}
+      ${subs.length ? `<div class="bv-subs">${ico('checkSq')}<span>${subDone}/${subs.length}</span><span class="bv-subbar"><i style="width:${Math.round((subDone / subs.length) * 100)}%"></i></span></div>` : ''}
     </div>`;
 }
 
@@ -4394,9 +4522,8 @@ function boardPointerUp(e) {
   }
   boardDragCleanup();
   if (!started) {
-    // plain click — open the card in Tasks (click handler replaced by pointerup)
-    state.expandedTask = tid;
-    setView({ type: 'tasks' });
+    // plain click — open the card's own detail modal right here on the board (v0.17)
+    openCardModal(tid);
     return;
   }
   if (status !== null) boardDrop(status, beforeTid, tid);
@@ -4405,6 +4532,257 @@ function boardPointerUp(e) {
 function boardPointerCancel(e) {
   if (!bd || e.pointerId !== bd.id) return;
   boardDragCleanup();
+}
+
+// ------------------------------------------------------------------
+// v0.17 — CARD DETAIL MODAL: click a card, edit everything in place.
+// Title, notes, checklist with progress, priority, due date, labels,
+// column — all saved straight to SQLite, board re-renders live beneath.
+// ------------------------------------------------------------------
+
+let cmSaveTimer = null;
+
+function cmClMeta(t) {
+  const subs = t.subtasks || [];
+  const done = subs.filter((x) => x.done).length;
+  return { subs, done, pct: subs.length ? Math.round((done / subs.length) * 100) : 0 };
+}
+
+function cmSubsHtml(t) {
+  const { subs, done, pct } = cmClMeta(t);
+  return `
+    <div class="cm-cl-bar"><i style="width:${pct}%"></i></div>
+    <span class="cm-cl-count">${subs.length ? `${done}/${subs.length}` : 'empty'}</span>
+    <div class="cm-subs">${subs.map((s) => `
+      <div class="cm-sub${s.done ? ' done' : ''}" data-sid="${esc(s.id)}">
+        <button class="cm-sub-check" title="Toggle">${ico('check')}</button>
+        <span class="cm-sub-title">${esc(s.title)}</span>
+        <button class="cm-sub-del" title="Remove">${ico('close')}</button>
+      </div>`).join('')}</div>`;
+}
+
+function openCardModal(tid) {
+  const t0 = state.tasks.find((x) => x.id === tid);
+  if (!t0) return;
+  const root = $('#overlay-root');
+  const labels = BOARD_LABELS.map((L) =>
+    `<button class="cm-lab${(t0.labels || []).includes(L.key) ? ' on' : ''}" data-k="${L.key}" style="--lab:${L.c}">${L.name}</button>`
+  ).join('');
+  root.innerHTML = `
+    <div class="overlay cm-overlay">
+      <div class="modal cm-modal">
+        <div class="cm-head">
+          <span class="cm-dot p${t0.priority || 0}"></span>
+          <input id="cm-title" type="text" value="${esc(t0.title)}" maxlength="200" spellcheck="false" autocomplete="off" />
+          <button class="icon-ghost" data-x="close" title="Close (Esc)">${ico('close')}</button>
+        </div>
+        <div class="cm-grid">
+          <div class="cm-main">
+            <label class="cm-lbl">Notes</label>
+            <textarea id="cm-notes" placeholder="Details, links, anything…" spellcheck="false">${esc(t0.notes || '')}</textarea>
+            <label class="cm-lbl">Checklist</label>
+            <div class="cm-cl" id="cm-cl">${cmSubsHtml(t0)}
+              <form id="cm-sub-add">
+                <input type="text" placeholder="Add an item and press Enter…" maxlength="200" spellcheck="false" autocomplete="off" />
+                <button type="submit" title="Add item">${ico('plus')}</button>
+              </form>
+            </div>
+          </div>
+          <div class="cm-side">
+            <label class="cm-lbl">Column</label>
+            <div class="cm-seg" id="cm-col">
+              ${BOARD_COLS.map((c) => `<button data-s="${c.status}" class="${(t0.status ?? (t0.done ? 2 : 0)) === c.status ? 'on' : ''}">${c.label}</button>`).join('')}
+            </div>
+            <label class="cm-lbl">Priority</label>
+            <div class="cm-seg" id="cm-prio">
+              ${[0, 1, 2, 3].map((p) => `<button data-p="${p}" class="${(t0.priority || 0) === p ? 'on' : ''}">${['None', 'Low', 'Med', 'High'][p]}</button>`).join('')}
+            </div>
+            <label class="cm-lbl">Due date</label>
+            <input type="datetime-local" id="cm-due" value="${tsToInput(t0.dueAt)}" />
+            <div class="cm-quick">
+              <button data-d="today">Today</button><button data-d="tomorrow">Tomorrow</button><button data-d="week">Next week</button><button data-d="clear">Clear</button>
+            </div>
+            <label class="cm-lbl">Labels</label>
+            <div class="cm-labs">${labels}</div>
+          </div>
+        </div>
+        <div class="modal-actions cm-foot">
+          <button class="btn ghost small" id="cm-open">${ico('external')}Open in Tasks</button>
+          <span class="tb-spacer"></span>
+          <button class="btn danger small" id="cm-del">${ico('trash')}Delete card</button>
+        </div>
+      </div>
+    </div>`;
+
+  const modal = root.querySelector('.cm-modal');
+  const q = (sel) => modal.querySelector(sel);
+
+  const save = async (patch) => {
+    const t = state.tasks.find((x) => x.id === tid);
+    if (!t) return;
+    Object.assign(t, patch);
+    try {
+      await call('update_task', {
+        id: t.id, title: t.title, notes: t.notes || '', priority: t.priority || 0,
+        dueAt: t.dueAt ?? null, remindAt: t.remindAt ?? null, repeat: t.repeat || 'none',
+        subtasks: t.subtasks || [], labels: t.labels || [], status: t.status ?? 0, position: t.position ?? null
+      });
+      renderBoard(false);
+      refreshStatsOnly();
+      renderSidebar();
+    } catch (err) {
+      toast('Could not save card: ' + err.message);
+    }
+  };
+  const saveSoon = (patch) => { clearTimeout(cmSaveTimer); cmSaveTimer = setTimeout(() => save(patch), 320); };
+
+  const wireSubs = () => {
+    modal.querySelectorAll('.cm-sub').forEach((row) => {
+      const sid = row.dataset.sid;
+      row.querySelector('.cm-sub-check').addEventListener('click', () => {
+        const t = state.tasks.find((x) => x.id === tid);
+        if (!t) return;
+        const subs = (t.subtasks || []).map((s) => (s.id === sid ? { ...s, done: !s.done } : s));
+        save({ subtasks: subs });
+        row.classList.toggle('done', subs.find((s) => s.id === sid).done);
+        const meta = cmClMeta({ subtasks: subs });
+        const cl = modal.querySelector('.cm-cl-bar i');
+        if (cl) cl.style.width = `${meta.pct}%`;
+        modal.querySelector('.cm-cl-count').textContent = meta.subs.length ? `${meta.done}/${meta.subs.length}` : 'empty';
+        sfx(meta.done === meta.subs.length && meta.subs.length ? 'success' : 'tap');
+      });
+      row.querySelector('.cm-sub-del').addEventListener('click', () => {
+        const t = state.tasks.find((x) => x.id === tid);
+        if (!t) return;
+        save({ subtasks: (t.subtasks || []).filter((s) => s.id !== sid) });
+        refreshClKeepFocus();
+      });
+    });
+  };
+  const refreshClKeepFocus = () => {
+    const t = state.tasks.find((x) => x.id === tid);
+    if (!t) return;
+    const keep = document.activeElement && document.activeElement.id === 'cm-sub-add-input';
+    $('#cm-cl').innerHTML = cmSubsHtml(t) + `
+      <form id="cm-sub-add">
+        <input id="cm-sub-add-input" type="text" placeholder="Add an item and press Enter…" maxlength="200" spellcheck="false" autocomplete="off" />
+        <button type="submit" title="Add item">${ico('plus')}</button>
+      </form>`;
+    wireSubs();
+    wireAddForm();
+    if (keep) $('#cm-sub-add-input').focus();
+  };
+
+  const wireAddForm = () => {
+    const form = modal.querySelector('#cm-sub-add');
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = form.querySelector('input');
+      const title = input.value.trim();
+      if (!title) return;
+      const t = state.tasks.find((x) => x.id === tid);
+      if (!t) return;
+      const subs = (t.subtasks || []).concat([{ id: 's' + Date.now().toString(36) + Math.floor(Math.random() * 999), title, done: false }]);
+      input.value = '';
+      save({ subtasks: subs });
+      setTimeout(() => {
+        const tt = state.tasks.find((x) => x.id === tid);
+        if (!tt) return;
+        $('#cm-cl').innerHTML = cmSubsHtml(tt) + `
+          <form id="cm-sub-add">
+            <input id="cm-sub-add-input" type="text" placeholder="Add an item and press Enter…" maxlength="200" spellcheck="false" autocomplete="off" />
+            <button type="submit" title="Add item">${ico('plus')}</button>
+          </form>`;
+        wireSubs();
+        wireAddForm();
+        $('#cm-sub-add-input').focus();
+        sfx('tap');
+      }, 60);
+    });
+  };
+
+  q('#cm-title').addEventListener('input', (e) => saveSoon({ title: e.target.value }));
+  q('#cm-notes').addEventListener('input', (e) => saveSoon({ notes: e.target.value }));
+  q('#cm-due').addEventListener('change', (e) => save({ dueAt: inputToTs(e.target.value) }));
+
+  modal.querySelectorAll('.cm-quick button').forEach((b) => {
+    b.addEventListener('click', () => {
+      const d = b.dataset.d;
+      const v = d === 'today' ? startOfToday() + 86400000 - 1
+        : d === 'tomorrow' ? startOfToday() + 2 * 86400000 - 1
+        : d === 'week' ? startOfToday() + 7 * 86400000 - 1
+        : null;
+      q('#cm-due').value = tsToInput(v);
+      save({ dueAt: v });
+      sfx('tap');
+    });
+  });
+
+  q('#cm-col').querySelectorAll('button').forEach((b) => {
+    b.addEventListener('click', () => {
+      const status = Number(b.dataset.s);
+      q('#cm-col').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      const t = state.tasks.find((x) => x.id === tid);
+      if (t) { t.status = status; t.done = status === 2; }
+      save({ status });
+      sfx('tap');
+      if (status === 2) toast('Card done — nice!', { icon: 'checkSq' });
+    });
+  });
+
+  q('#cm-prio').querySelectorAll('button').forEach((b) => {
+    b.addEventListener('click', () => {
+      const p = Number(b.dataset.p);
+      q('#cm-prio').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      modal.querySelector('.cm-dot').className = `cm-dot p${p}`;
+      save({ priority: p });
+      sfx('tap');
+    });
+  });
+
+  modal.querySelectorAll('.cm-lab').forEach((b) => {
+    b.addEventListener('click', () => {
+      const t = state.tasks.find((x) => x.id === tid);
+      if (!t) return;
+      const my = t.labels || [];
+      const next = my.includes(b.dataset.k) ? my.filter((k) => k !== b.dataset.k) : [...my, b.dataset.k];
+      b.classList.toggle('on', next.includes(b.dataset.k));
+      save({ labels: next });
+      sfx('tap');
+    });
+  });
+
+  wireSubs();
+  wireAddForm();
+
+  q('#cm-open').addEventListener('click', () => {
+    clearTimeout(cmSaveTimer);
+    save({}); // flush
+    closeModal();
+    state.expandedTask = tid;
+    setView({ type: 'tasks' });
+  });
+  q('#cm-del').addEventListener('click', async () => {
+    clearTimeout(cmSaveTimer);
+    try {
+      await call('delete_task', { id: tid });
+      state.tasks = state.tasks.filter((x) => x.id !== tid);
+      closeModal();
+      renderBoard();
+      refreshStatsOnly();
+      renderSidebar();
+      toast('Card deleted', { icon: 'trash' });
+      sfx('tap');
+    } catch (err) {
+      toast('Could not delete card: ' + err.message);
+    }
+  });
+  q('[data-x="close"]').addEventListener('click', () => { clearTimeout(cmSaveTimer); save({}); closeModal(); });
+  root.querySelector('.overlay').addEventListener('mousedown', (e) => {
+    if (e.target === e.currentTarget) { clearTimeout(cmSaveTimer); save({}); closeModal(); }
+  });
+
+  setTimeout(() => q('#cm-title').focus(), 30);
 }
 
 function wireBoard() {
@@ -5477,17 +5855,19 @@ function showContextualMenu(e) {
 // v0.7 — QUICK SWITCHER (Ctrl+K)
 // ==================================================================
 
-let quickSwitchItems = [];
-
 function openQuickSwitcher() {
   const root = $('#overlay-root');
   root.innerHTML = `
     <div class="overlay">
-      <div class="modal" style="width:480px">
-        <input type="text" id="qs-input" placeholder="Jump to a note… (type to filter, Enter to open)" spellcheck="false" autocomplete="off" />
-        <div class="qs-list" id="qs-list"></div>
-        <div class="modal-actions" style="justify-content:space-between">
-          <span style="font-size:11px;color:var(--text-faint)">↑↓ navigate · Enter open · Esc close</span>
+      <div class="modal cmdk">
+        <div class="cmdk-head">
+          <span class="cmdk-ico">${ico('search')}</span>
+          <input type="text" id="qs-input" placeholder="Type a command, a place, a theme or a note…" spellcheck="false" autocomplete="off" />
+          <span class="cmdk-esc">Esc</span>
+        </div>
+        <div class="qs-list cmdk-list" id="qs-list"></div>
+        <div class="modal-actions cmdk-foot">
+          <span class="cmdk-hints"><b>&uarr;&darr;</b> navigate &middot; <b>Enter</b> run &middot; <b>Esc</b> close</span>
           <button class="btn primary" data-x="close">Close</button>
         </div>
       </div>
@@ -5498,44 +5878,110 @@ function openQuickSwitcher() {
     if (e.target === e.currentTarget) done();
   });
 
+  // v0.17 — the quick switcher grew into a real command palette:
+  // actions, places, instant theme switching and note jumping in one box.
+  const items = [
+    { group: 'Actions', icon: 'plus', label: 'New note', hint: 'Ctrl+N', run: () => { setView({ type: 'all' }); createNote(); } },
+    { group: 'Actions', icon: 'calendar', label: "Open today's daily note", hint: 'Today', run: () => { setView({ type: 'all' }); openDailyNote(); } },
+    { group: 'Actions', icon: 'pencil', label: 'Add a task', hint: 'Tasks', run: () => { setView({ type: 'tasks' }); setTimeout(() => { const i = $('#tv-input'); if (i) i.focus(); }, 140); } },
+    { group: 'Actions', icon: 'board', label: 'Add a board card', hint: 'Board', run: () => { setView({ type: 'board' }); setTimeout(() => { const b = document.querySelector('.bv-foot[data-status="0"]'); if (b) b.click(); }, 160); } },
+    { group: 'Actions', icon: 'folder', label: 'New folder', hint: 'Library', run: () => { const b = $('#btn-new-folder'); if (b) b.click(); } },
+    { group: 'Actions', icon: 'zen', label: 'Toggle Zen mode', hint: 'Ctrl+Shift+F', run: () => toggleZen() },
+    { group: 'Actions', icon: 'settings', label: 'Open settings', hint: 'Ctrl+,', run: () => openSettings() },
+    { group: 'Actions', icon: 'book', label: 'Open the guide', hint: 'Help', run: () => openGuide() },
+    { group: 'Actions', icon: 'flame', label: 'Keyboard shortcuts', hint: 'Ctrl+/', run: () => openShortcuts() },
+    ...VIEW_META.map((v) => ({
+      group: 'Places', icon: v.icon, label: v.label, hint: v.type === 'all' ? 'Ctrl+1' : v.type === 'tasks' ? 'Ctrl+2' : v.type === 'board' ? 'Ctrl+3' : v.type === 'recordings' ? 'Ctrl+4' : v.type === 'chat' ? 'Ctrl+5' : '',
+      run: () => { state.activeTag = null; setView({ type: v.type }); }
+    })),
+    ...THEMES.map((t) => ({
+      group: 'Themes', icon: 'palette', label: t.name, hint: t.light ? 'Light' : 'Dark',
+      run: async () => {
+        state.settings.theme = t.id;
+        await call('set_setting', { key: 'theme', value: t.id });
+        applySettings();
+        sfx('tap');
+      }
+    })),
+    ...state.allNotesCache.map((n) => ({
+      group: 'Notes', icon: 'all', label: (n.title || '').trim() || 'Untitled note', hint: (n.snippet || '').slice(0, 46),
+      run: async () => {
+        if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat' || state.view.type === 'insights') {
+          setView({ type: 'all' });
+        }
+        await selectNote(n.id);
+      }
+    }))
+  ];
+
   const input = root.querySelector('#qs-input');
   const list = root.querySelector('#qs-list');
+  let flat = [];
   let sel = 0;
 
   const renderList = () => {
     const q = input.value.trim().toLowerCase();
-    quickSwitchItems = state.allNotesCache
-      .filter((n) => !q || (n.title || '').toLowerCase().includes(q) || (n.snippet || '').toLowerCase().includes(q))
-      .slice(0, 12);
-    sel = Math.min(sel, Math.max(0, quickSwitchItems.length - 1));
-    if (!quickSwitchItems.length) {
-      list.innerHTML = '<div class="qs-empty">No matching notes</div>';
+    const scored = [];
+    for (const it of items) {
+      const hay = it.label.toLowerCase();
+      let score = -1;
+      if (!q) score = 0;
+      else if (hay.startsWith(q)) score = 0;
+      else if (hay.includes(q)) score = 1;
+      else if (it.hint && it.hint.toLowerCase().includes(q)) score = 2;
+      if (score >= 0) scored.push({ it, score });
+    }
+    const GROUPS = ['Actions', 'Places', 'Themes', 'Notes'];
+    scored.sort((a, b) => a.score - b.score || GROUPS.indexOf(a.it.group) - GROUPS.indexOf(b.it.group) || a.it.label.length - b.it.label.length);
+    // keep every group represented when the query is empty, but cap the noise
+    const LIMIT = q ? 20 : 14;
+    flat = [];
+    let lastGroup = '';
+    for (const { it } of scored) {
+      if (flat.length >= LIMIT) break;
+      flat.push(it);
+    }
+    sel = Math.min(sel, Math.max(0, flat.length - 1));
+    if (!flat.length) {
+      list.innerHTML = `<div class="qs-empty">Nothing matches "${esc(input.value)}"</div>`;
       return;
     }
-    list.innerHTML = quickSwitchItems.map((n, i) => `
-      <button class="qs-item${i === sel ? ' sel' : ''}" data-i="${i}">
-        <span class="qs-title">${esc(n.title.trim() || 'Untitled note')}</span>
-        <span class="qs-snippet">${esc((n.snippet || '').slice(0, 60))}</span>
-      </button>`).join('');
-    list.querySelectorAll('.qs-item').forEach((b) => {
-      b.addEventListener('click', () => pick(Number(b.dataset.i)));
+    let html = '';
+    flat.forEach((it, i) => {
+      if (it.group !== lastGroup) {
+        lastGroup = it.group;
+        html += `<div class="cmdk-group">${it.group}</div>`;
+      }
+      html += `
+        <button class="qs-item cmdk-item${i === sel ? ' sel' : ''}" data-i="${i}">
+          <span class="cmdk-ico">${ico(it.icon)}</span>
+          <span class="qs-title">${esc(it.label)}</span>
+          ${it.hint ? `<span class="cmdk-hint">${esc(it.hint)}</span>` : ''}
+        </button>`;
     });
+    list.innerHTML = html;
+    list.querySelectorAll('.cmdk-item').forEach((b) => {
+      b.addEventListener('click', () => pick(Number(b.dataset.i)));
+      b.addEventListener('mousemove', () => {
+        const i = Number(b.dataset.i);
+        if (i !== sel) { sel = i; list.querySelectorAll('.cmdk-item').forEach((x, xi) => x.classList.toggle('sel', xi === sel)); }
+      });
+    });
+    const selEl = list.querySelector('.cmdk-item.sel');
+    if (selEl) selEl.scrollIntoView({ block: 'nearest' });
   };
 
-  const pick = async (i) => {
-    const n = quickSwitchItems[i];
-    if (!n) return;
+  const pick = (i) => {
+    const it = flat[i];
+    if (!it) return;
     closeModal();
-    if (state.view.type === 'tasks' || state.view.type === 'recordings' || state.view.type === 'chat') {
-      setView({ type: 'all' });
-    }
-    await selectNote(n.id);
+    it.run();
   };
 
   input.addEventListener('input', () => { sel = 0; renderList(); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % Math.max(1, quickSwitchItems.length); renderList(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + quickSwitchItems.length) % Math.max(1, quickSwitchItems.length); renderList(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % Math.max(1, flat.length); renderList(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + flat.length) % Math.max(1, flat.length); renderList(); }
     else if (e.key === 'Enter') { e.preventDefault(); pick(sel); }
     else if (e.key === 'Escape') { e.preventDefault(); done(); }
   });
@@ -5549,11 +5995,12 @@ function openQuickSwitcher() {
 
 function openGuide() {
   const rows = [
-    ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> jump to any note · everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it. <b>Ctrl+Shift+F</b> is Zen mode — everything hides but your words.'],
+    ['Basics', '<b>Ctrl+N</b> new note · <b>Ctrl+F</b> search · <b>Ctrl+K</b> opens the command palette — jump anywhere, run any action, switch any theme · <b>Ctrl+1…5</b> hop between Notes, Tasks, Board, Recordings and AI Chat. Everything autosaves as you type. <b>Right-click anywhere</b> — notes, folders, tabs, tasks, the editor, empty space — for quick actions. Drag a note onto a folder to file it. <b>Ctrl+Shift+F</b> is Zen mode — everything hides but your words.'],
     ['Slash commands', 'Type <b>/</b> at the start of an empty line in the editor — a Notion-style menu opens with headings, lists, to-dos, quotes, code, images and more. Filter by typing. At the bottom you\'ll find <b>Templates</b> — daily journal, meeting notes and weekly review, one click each.'],
     ['Images in notes', 'Paste an image straight into the editor (<b>Ctrl+V</b>), drag an image file onto the page, or use the image button / <b>/image</b>. Images live inside your local database, render in preview, and click to zoom.'],
     ['Mention notes', 'Type <b>@</b> anywhere in a note to link another note — it becomes a [[wiki-link]]. Click one in preview to jump there. Below the editor you\'ll see <b>Linked from</b> — which notes point here.'],
-    ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order, click a card to edit details in Tasks. Each column has its own + button. Card order sticks after restart.'],
+    ['Board', 'Sidebar → <b>Board</b> — a Notion-style kanban. Drag cards between <b>To do · In progress · Done</b>, drop them in order. <b>Click a card</b> to open its detail card right there: notes, a checklist with a live progress bar, priority, due date and labels. Right-click for quick actions. Each column has its own + button. Card order sticks after restart.'],
+    ['Insights', 'Sidebar → <b>Insights</b> — your nook at a glance: notes, words written, <b>day streak</b>, tasks closed, a 14-day activity chart and your top tags (click one to filter). All computed on this PC, nothing leaves it.'],
     ['Tags', 'Under the editor there\'s a <b>+ tag</b> box — type a tag and press Enter. Tags show on note cards and in the sidebar; click one to filter. Backspace in the box removes the last tag.'],
     ['Find & Replace', 'Press <b>Ctrl+H</b> in any note — find with match counter, Enter/Shift+Enter to hop between matches, replace one or everything. Esc closes.'],
     ['Daily note', 'The <b>Today</b> button in the list header opens (or creates) today\'s dated note, tagged <b>#daily</b> — one tidy page per day.'],

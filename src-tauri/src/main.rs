@@ -1348,6 +1348,182 @@ async fn get_stats(state: State<'_, Db>) -> CmdResult<Stats> {
     Ok(stats)
 }
 
+// ---------------------------------------------------------------- insights ----
+// v0.17 — one command that powers the whole Insights view. The frontend passes
+// its own local midnight (startOfToday()) so day bucketing needs no timezone
+// logic here: (ts - today_start).div_euclid(86_400_000) is 0 for today,
+// -1 for yesterday and so on, in the user's own timezone.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TagCount {
+    tag: String,
+    count: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Insights {
+    notes: i64,
+    words: i64,
+    favorites: i64,
+    folders: i64,
+    tasks_open: i64,
+    tasks_done: i64,
+    done_7: i64,
+    created_7: i64,
+    chats: i64,
+    msgs: i64,
+    streak: i64,
+    notes_14: Vec<i64>,
+    tasks_14: Vec<i64>,
+    top_tags: Vec<TagCount>,
+}
+
+#[tauri::command]
+async fn get_insights(state: State<'_, Db>, today_start: i64) -> CmdResult<Insights> {
+    let conn = db(&state);
+    const DAY: i64 = 86_400_000;
+    let day_idx = |ts: i64| -> i64 { (ts - today_start).div_euclid(DAY) };
+
+    let notes: i64 = conn
+        .query_row("SELECT COUNT(*) FROM notes WHERE trashed = 0", [], |r| r.get(0))
+        .map_err(es)?;
+    let favorites: i64 = conn
+        .query_row("SELECT COUNT(*) FROM notes WHERE trashed = 0 AND favorite = 1", [], |r| r.get(0))
+        .map_err(es)?;
+    let folders: i64 = conn
+        .query_row("SELECT COUNT(*) FROM folders", [], |r| r.get(0))
+        .map_err(es)?;
+    let tasks_open: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks WHERE done = 0", [], |r| r.get(0))
+        .map_err(es)?;
+    let tasks_done: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks WHERE done = 1", [], |r| r.get(0))
+        .map_err(es)?;
+    let chats: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chats", [], |r| r.get(0))
+        .map_err(es)?;
+    let msgs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chat_messages", [], |r| r.get(0))
+        .map_err(es)?;
+
+    // words written across every live note
+    let mut words: i64 = 0;
+    {
+        let mut stmt = conn.prepare("SELECT content FROM notes WHERE trashed = 0").map_err(es)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(es)?;
+        for row in rows {
+            words += row.map_err(es)?.split_whitespace().count() as i64;
+        }
+    }
+
+    let week_ago = today_start - 6 * DAY; // 7 days including today
+
+    // 14-day activity: notes touched per day (updated_at) + tasks completed per day
+    let mut note_days: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut notes_14 = vec![0i64; 14];
+    {
+        let mut stmt = conn
+            .prepare("SELECT updated_at FROM notes WHERE trashed = 0")
+            .map_err(es)?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(es)?;
+        for row in rows {
+            let ts: i64 = row.map_err(es)?;
+            let idx = day_idx(ts);
+            if (-13..=0).contains(&idx) {
+                notes_14[(idx + 13) as usize] += 1;
+            }
+            note_days.insert(idx);
+        }
+    }
+    let mut task_days: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut tasks_14 = vec![0i64; 14];
+    let mut done_7: i64 = 0;
+    {
+        let mut stmt = conn
+            .prepare("SELECT completed_at FROM tasks WHERE done = 1 AND completed_at IS NOT NULL")
+            .map_err(es)?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(es)?;
+        for row in rows {
+            let ts: i64 = row.map_err(es)?;
+            let idx = day_idx(ts);
+            if (-13..=0).contains(&idx) {
+                tasks_14[(idx + 13) as usize] += 1;
+            }
+            if ts >= week_ago {
+                done_7 += 1;
+            }
+            task_days.insert(idx);
+        }
+    }
+    let created_7: i64 = {
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM notes WHERE trashed = 0 AND created_at >= ?1")
+            .map_err(es)?;
+        stmt.query_row([week_ago], |r| r.get(0)).map_err(es)?
+    };
+
+    // writing streak — consecutive days (ending today, or yesterday if today is
+    // still empty) with any note edit or completed task
+    let mut streak: i64 = 0;
+    let active: std::collections::HashSet<i64> = note_days.union(&task_days).copied().collect();
+    let mut cursor = if active.contains(&0) {
+        0
+    } else if active.contains(&-1) {
+        -1
+    } else {
+        1 // loop below won't run — streak stays 0
+    };
+    while active.contains(&cursor) {
+        streak += 1;
+        cursor -= 1;
+    }
+
+    // top tags across live notes (tags column is a JSON array of strings)
+    let mut tag_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT tags FROM notes WHERE trashed = 0").map_err(es)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(es)?;
+        for row in rows {
+            let raw: String = row.map_err(es)?;
+            if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(&raw) {
+                for v in arr {
+                    if let Some(t) = v.as_str() {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            *tag_map.entry(t.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut top_tags: Vec<TagCount> = tag_map
+        .into_iter()
+        .map(|(tag, count)| TagCount { tag, count })
+        .collect();
+    top_tags.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
+    top_tags.truncate(8);
+
+    Ok(Insights {
+        notes,
+        words,
+        favorites,
+        folders,
+        tasks_open,
+        tasks_done,
+        done_7,
+        created_7,
+        chats,
+        msgs,
+        streak,
+        notes_14,
+        tasks_14,
+        top_tags,
+    })
+}
+
 // ---------------------------------------------------------------- backup ----
 
 fn read_backup_data(conn: &Connection) -> Result<Backup, String> {
@@ -2098,6 +2274,7 @@ fn main() {
             get_setting,
             set_setting,
             get_stats,
+            get_insights,
             export_backup,
             import_backup,
             list_chats,

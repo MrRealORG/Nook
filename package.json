@@ -1,6 +1,6 @@
 {
   "name": "nook",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "A cozy little notes desk for your PC. 100% local, offline-first.",
   "private": true,
   "type": "module",

@@ -416,6 +416,53 @@ function mockCall(cmd, args) {
       return Promise.resolve('clipboard mock text');
     case 'get_stats':
       return Promise.resolve(mockStats());
+    case 'get_insights': {
+      // mirrors the Rust command: day buckets relative to the caller's local midnight
+      const todayStart = a.todayStart || new Date().setHours(0, 0, 0, 0);
+      const DAY = 86400000;
+      const idx = (ts) => Math.floor((ts - todayStart) / DAY);
+      const live = mock.notes.filter((n) => !n.trashed);
+      const notes14 = new Array(14).fill(0);
+      const tasks14 = new Array(14).fill(0);
+      const days = new Set();
+      let words = 0;
+      const tagMap = {};
+      for (const n of live) {
+        notes14[Math.min(13, Math.max(0, idx(n.updatedAt) + 13))] += 1;
+        days.add(idx(n.updatedAt));
+        words += (n.content || '').split(/\s+/).filter(Boolean).length;
+        let tags = [];
+        try { tags = typeof n.tags === 'string' ? JSON.parse(n.tags) : n.tags || []; } catch { tags = []; }
+        for (const t of tags) tagMap[t] = (tagMap[t] || 0) + 1;
+      }
+      const weekAgo = todayStart - 6 * DAY;
+      for (const t of mock.tasks) {
+        if (t.done && t.completedAt != null) {
+          tasks14[Math.min(13, Math.max(0, idx(t.completedAt) + 13))] += 1;
+          days.add(idx(t.completedAt));
+        }
+      }
+      let streak = 0;
+      let cur = days.has(0) ? 0 : days.has(-1) ? -1 : 1;
+      while (days.has(cur)) { streak += 1; cur -= 1; }
+      return Promise.resolve({
+        notes: live.length,
+        words,
+        favorites: live.filter((n) => n.favorite).length,
+        folders: mock.folders.length,
+        tasksOpen: mock.tasks.filter((t) => !t.done).length,
+        tasksDone: mock.tasks.filter((t) => t.done).length,
+        done7: mock.tasks.filter((t) => t.done && t.completedAt != null && t.completedAt >= weekAgo).length,
+        created7: live.filter((n) => n.createdAt >= weekAgo).length,
+        chats: mock.chats ? mock.chats.length : 0,
+        msgs: 0,
+        streak,
+        notes14,
+        tasks14,
+        topTags: Object.entries(tagMap).map(([tag, count]) => ({ tag, count }))
+          .sort((x, y) => y.count - x.count).slice(0, 8)
+      });
+    }
     case 'data_dir':
       return Promise.resolve('C:\\Users\\demo\\AppData\\Roaming\\Nook');
     case 'export_note':
