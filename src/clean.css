@@ -283,3 +283,50 @@ html[data-active="false"] *, html[data-active="false"] *::before, html[data-acti
   .tl-apphead { grid-template-columns: minmax(0, 1fr) 150px 120px 64px; }
   .tl-approw .tl-row-bar { width: 70px; }
 }
+
+/* ============================================================================
+   1.2 desktop widget — small translucent card, tiles, pill mode
+   ============================================================================ */
+html[data-widget="true"] body { font-family: var(--font-ui); font-size: 13px; }
+.wg {
+  position: fixed; inset: 4px; display: flex; flex-direction: column; overflow: hidden;
+  border-radius: 16px; border: 1px solid var(--line); background: var(--wbg, var(--panel-solid));
+  box-shadow: 0 10px 30px -14px rgba(16, 24, 40, 0.45);
+}
+.wg-header { display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 6px 0 12px; flex: none; cursor: grab; border-bottom: 1px solid var(--line); }
+.wg-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; font-size: 13px; }
+.wg-ib { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--faint); flex: none; }
+.wg-ib:hover { background: var(--hover); color: var(--ink); }
+.wg-ib[data-on="true"] { color: var(--accent); background: var(--hl); }
+.wg-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; scrollbar-width: thin; }
+.wg-tile { border-radius: 11px; background: var(--panel2); padding: 8px 10px; flex: none; }
+.wg-tasks { flex: 1 1 auto; min-height: 64px; }
+.wg-row { display: flex; align-items: center; gap: 6px; }
+.wg-input { width: 100%; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-solid); outline: none; font-size: 12.5px; color: var(--ink); }
+.wg-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--hl); }
+.wg-capture { height: 54px; padding: 7px 10px; resize: none; display: block; margin-bottom: 6px; line-height: 1.4; }
+.wg-check { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
+.wg-check input, .widget-task input { accent-color: var(--accent); }
+.wg-btn { height: 28px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-solid); font-size: 12.5px; font-weight: 500; flex: none; }
+.wg-btn:hover { background: var(--hover); }
+.wg-btn:disabled { opacity: 0.45; pointer-events: none; }
+.wg-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.wg-primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.wg-muted { font-size: 12px; color: var(--faint); }
+.wg-big { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.wg-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
+.wg-dot[data-state="on"] { background: var(--ok); }
+.wg-dot[data-state="idle"] { background: var(--warn); }
+.wg-apps { display: flex; gap: 6px; margin-top: 7px; }
+.wg-app { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 3px; border-radius: 99px; background: var(--panel-solid); font-size: 11px; color: var(--dim); min-width: 0; }
+.wg-app img { border-radius: 4px; flex: none; }
+.wg-letter { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: var(--hl); color: var(--accent); font-size: 10px; font-style: normal; font-weight: 700; }
+.wg-head2 { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--faint); margin-bottom: 2px; }
+.wg-link { font-size: 11.5px; color: var(--accent); font-weight: 500; }
+.wg-answer { margin-top: 6px; max-height: 96px; overflow: auto; white-space: pre-wrap; font-size: 12px; color: var(--dim); }
+.wg-pet { gap: 10px; }
+.wg-pill { inset: auto; left: 2px; top: 2px; width: calc(min(100vw, 200px) - 4px); height: calc(min(100vh, 48px) - 4px); flex-direction: row; align-items: center; gap: 8px; padding: 0 6px 0 14px; border-radius: 99px; cursor: grab; }
+.wg-pill-time { font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.wg-pill-app { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
+.widget-task { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 12.5px; }
+.widget-task[data-done="true"] span { text-decoration: line-through; color: var(--faint); }

@@ -390,11 +390,24 @@ export function Rail() {
   const badge = (v: View) => (v === "market" ? marketUnread : v === "tasks" ? openTasks : 0);
   const st = useStore.getState;
 
+  /** move within the item's own section (the global order also feeds the dock / float rails) */
+  const groupOf = (v: View) => NAV_GROUPS.find((g) => g.views.includes(v))?.views ?? [v];
+  const siblings = (v: View) => railOrderOf(st().railOrder).filter((x) => groupOf(v).includes(x));
+  const moveInGroup = (v: View, dir: -1 | 1) => {
+    const sib = siblings(v);
+    const target = sib[sib.indexOf(v) + dir];
+    if (!target) return;
+    for (let guard = 0; guard < 20; guard++) {
+      st().moveRailItem(v, dir);
+      const o = railOrderOf(st().railOrder);
+      if ((dir < 0 && o.indexOf(v) < o.indexOf(target)) || (dir > 0 && o.indexOf(v) > o.indexOf(target))) break;
+    }
+  };
   const menu = (v: View): CtxItem[] => [
     { icon: "external-link", label: `Open ${META[v].label}`, run: () => st().setView(v) },
     { sep: true },
-    { icon: "arrow-up", label: "Move up", disabled: order.indexOf(v) <= 0, run: () => st().moveRailItem(v, -1) },
-    { icon: "arrow-down", label: "Move down", disabled: order.indexOf(v) >= order.length - 1, run: () => st().moveRailItem(v, 1) },
+    { icon: "arrow-up", label: "Move up", disabled: siblings(v).indexOf(v) <= 0, run: () => moveInGroup(v, -1) },
+    { icon: "arrow-down", label: "Move down", disabled: siblings(v).indexOf(v) >= siblings(v).length - 1, run: () => moveInGroup(v, 1) },
     { icon: "palette", label: "Change icon…", run: () => { useStore.setState({ railEdit: true }); setPicking(v); } },
     { icon: railHidden.includes(v) ? "eye" : "close", label: railHidden.includes(v) ? "Show in sidebar" : "Hide from sidebar", disabled: v === "notes", run: () => st().toggleRailHidden(v) },
     { sep: true },

@@ -43,6 +43,8 @@ test.describe.serial("Nook 1.1", () => {
     await expect(page.getByTestId("tl-timeline")).toBeVisible();
     await expect(page.getByTestId("tl-donut")).toBeVisible();
     await expect(page.getByTestId("tl-apps")).toContainText(sum.topApp ?? /./);
+    // 1.2: the weekday×hour heatmap lives on the Analytics tab
+    await page.getByTestId("tl-tab-analytics").click();
     await expect(page.getByTestId("tl-heatmap")).toBeVisible();
     // pause from the view
     const before = (await api<any>("/api/timelens/config")).paused;

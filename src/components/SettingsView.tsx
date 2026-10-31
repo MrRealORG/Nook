@@ -1,4 +1,5 @@
 
+import { PerformanceSection } from "@/components/settings/PerformanceSection";
 import { everyActive } from "@/lib/power";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
@@ -25,7 +26,7 @@ import { getFollow, onFollowChange, rememberThemeChoice, setFollow, systemIsDark
 import { BackupSettings, ImportSettings, TimelensSettings } from "@/components/settings/TimelensSettings";
 import { useDesktopInfo } from "@/lib/desktop";
 
-type Section = "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import";
+type Section = "performance" | "desktop" | "account" | "look" | "packs" | "sidebar" | "features" | "mcp" | "sound" | "voice" | "notif" | "pet" | "ai" | "data" | "keys" | "timelens" | "backup" | "import";
 
 const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "account", label: "Profile & account", icon: "user" },
@@ -34,6 +35,7 @@ const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
   { id: "sidebar", label: "Sidebar & dock", icon: "layout" },
   { id: "features", label: "Features on/off", icon: "checkbox-on" },
   { id: "mcp", label: "MCP & AI agents", icon: "cpu" },
+  { id: "performance", label: "Performance & widget", icon: "gauge" },
   { id: "desktop", label: "Desktop & widget", icon: "monitor" },
   { id: "sound", label: "Sound", icon: "zap" },
   { id: "voice", label: "Voice & speech", icon: "mic" },
@@ -1421,6 +1423,7 @@ export function SettingsView() {
 
         {/* ---------------- AI harness ---------------- */}
         {section === "desktop" && <DesktopSection />}
+        {section === "performance" && <PerformanceSection />}
 
         {section === "ai" && (
           <div className="space-y-4">

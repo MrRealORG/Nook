@@ -1,0 +1,17 @@
+import { chromium } from "@playwright/test";
+const out = process.argv[2] || "/tmp/w.png";
+const theme = process.argv[3] || "light";
+const b = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
+const ctx = await b.newContext({ viewport: { width: 308, height: 388 }, deviceScaleFactor: 2 });
+await ctx.addInitScript((t) => localStorage.setItem("nook:prefs", JSON.stringify({ theme: t, uiStyle: "clean", v12: true })), theme);
+const p = await ctx.newPage();
+const errs = [];
+p.on("pageerror", (e) => errs.push(e.message));
+await p.goto("http://localhost:4173/widget.html");
+await p.waitForTimeout(1500);
+await p.screenshot({ path: out });
+await p.getByTestId("widget-collapse").click();
+await p.waitForTimeout(300);
+await p.screenshot({ path: out.replace(".png", "-pill.png"), clip: { x: 0, y: 0, width: 210, height: 56 } });
+console.log(errs.join("\n") || "no errors");
+await b.close();

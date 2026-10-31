@@ -17,7 +17,13 @@ export type DesktopSettings = {
   closeToTray: boolean;
   glass: "off" | "mica" | "acrylic";
   autoUpdate: boolean;
+  /** 1.2: hard CPU cap (Windows Job Object), % of the machine, 5–50 */
+  cpuCap: number;
+  cpuCapOn: boolean;
+  widgetOnTop: boolean;
 };
+
+export type PerfStatus = { supported: boolean; applied: boolean; capPct: number; belowNormal: boolean; eco: boolean; childrenInJob: number; childrenAdopted: number; error: string | null };
 
 export type DesktopInfo = {
   ready: boolean;
@@ -32,11 +38,12 @@ export type DesktopInfo = {
   mcpError: string | null;
   lanIp: string | null;
   updaterConfigured: boolean;
+  perf?: PerfStatus;
   settings: DesktopSettings;
   update: { available: boolean; version?: string; notes?: string } | null;
 };
 
-const DEFAULTS: DesktopSettings = { mcpEnabled: true, mcpPort: 3000, lanShare: false, widget: false, autostart: false, hotkeys: true, closeToTray: true, glass: "off", autoUpdate: false };
+const DEFAULTS: DesktopSettings = { mcpEnabled: true, mcpPort: 3000, lanShare: false, widget: false, autostart: false, hotkeys: true, closeToTray: true, glass: "off", autoUpdate: false, cpuCap: 10, cpuCapOn: true, widgetOnTop: false };
 
 export const useDesktopInfo = create<DesktopInfo>(() => ({
   ready: false,

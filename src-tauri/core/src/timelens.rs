@@ -869,11 +869,18 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
         ("Figma", "Nook widget — Figma", 14 * 60 + 20, 40),
         ("Spotify", "Spotify Premium", 15 * 60, 10),
     ];
+    // The plan covers 09:00–15:10. Early in the day (or just after midnight) it is shifted / scaled
+    // so the whole demo day always lies within [midnight, now] — the seed never depends on the clock.
+    let plan_start = 9 * 60i64;
+    let plan_len = (15 * 60 + 10 - plan_start) as f64; // minutes
+    let avail = ((now - day) as f64 / 60_000.0 - 1.0).max(1.0);
+    let (base, scale) = if avail >= plan_start as f64 + plan_len { (plan_start as f64, 1.0) } else if avail >= plan_len { (avail - plan_len, 1.0) } else { (0.0, avail / plan_len) };
+    let at = |m: i64| day + ((base + (m - plan_start) as f64 * scale) * 60_000.0) as i64;
     let mut spans = vec![];
     for (app, title, start_min, mins) in plan {
-        let start = day + start_min * 60_000;
-        let end = start + mins * 60_000;
-        if start > now {
+        let start = at(*start_min);
+        let end = at(start_min + mins);
+        if start >= now || end <= start {
             continue;
         }
         spans.push(Span { app: app.to_string(), title: title.to_string(), start, end: end.min(now), afk: *app == "AFK" });
@@ -899,7 +906,7 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
     }
     let _ = c.execute(r#"INSERT OR IGNORE INTO "TimelensApp" ("app","firstSeen","lastSeen") VALUES ('Nook',?1,?1)"#, params![now]);
     // a focus session + a productive yesterday for the streak
-    let _ = add_focus(c, day + 9 * 3_600_000, day + 9 * 3_600_000 + 25 * 60_000, "Pomodoro");
+    let _ = add_focus(c, at(9 * 60), at(9 * 60 + 25), "Pomodoro");
     let y = local_day_start(day - 3_600_000);
     write_spans(c, &[Span { app: "VS Code".into(), title: "yesterday — nook".into(), start: y + 10 * 3_600_000, end: y + 13 * 3_600_000, afk: false }])?;
     Ok(n)
