@@ -32,6 +32,10 @@ unsafe fn dib_bits(hdc: windows_sys::Win32::Graphics::Gdi::HDC, hbm: windows_sys
 }
 
 /// HICON → PNG bytes. Handles 32-bit alpha icons and legacy mask-only transparency.
+///
+/// # Safety
+/// `icon` must be a valid icon handle owned by the caller for the duration of the call.
+/// The function only reads from it; the bitmaps returned by `GetIconInfo` are freed here.
 pub unsafe fn hicon_to_png(icon: HICON) -> Option<Vec<u8>> {
     let mut ii: ICONINFO = std::mem::zeroed();
     if GetIconInfo(icon, &mut ii) == 0 {
