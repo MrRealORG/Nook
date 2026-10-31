@@ -63,7 +63,7 @@ async function loadImageData(id) {
 setImgResolver(resolveImg);
 
 const THEMES = [
-  { id: 'midnight', name: 'Cozy Midnight', dots: ['#171126', '#8fe3a0'], light: false },
+  { id: 'midnight', name: 'Cozy Midnight', dots: ['#171126', '#5aa2ff'], light: false },
   { id: 'oled',     name: 'OLED Black',    dots: ['#000000', '#3ddc97'], light: false },
   { id: 'forest',   name: 'Forest Night',  dots: ['#0f1a13', '#7ddb8a'], light: false },
   { id: 'ocean',    name: 'Ocean Deep',    dots: ['#0c1726', '#5ec8f8'], light: false },
@@ -89,6 +89,18 @@ const THEMES = [
   { id: 'carbon',   name: 'Carbon',        dots: ['#161616', '#e0e0e0'], light: false }
 ];
 const LIGHT_THEMES = THEMES.filter((t) => t.light).map((t) => t.id);
+
+// v0.11 — accent color override (Settings → Look). '' = theme's own accent.
+const ACCENTS = {
+  '':      null,
+  blue:   { name: 'Default Blue', a: '#5aa2ff', s: '#82bcff', t: '#0a2550', soft: 'rgba(90,162,255,.15)',  glow: 'rgba(90,162,255,.45)'  },
+  azure:  { name: 'Sky Azure',   a: '#38bdf8', s: '#6fd2fb', t: '#062a3c', soft: 'rgba(56,189,248,.15)',  glow: 'rgba(56,189,248,.45)'  },
+  mint:   { name: 'Fresh Mint',  a: '#4ade9e', s: '#7dedbb', t: '#04301d', soft: 'rgba(74,222,158,.15)',  glow: 'rgba(74,222,158,.42)'  },
+  violet: { name: 'Violet',      a: '#a78bfa', s: '#c0aafc', t: '#241457', soft: 'rgba(167,139,250,.16)', glow: 'rgba(167,139,250,.42)' },
+  rose:   { name: 'Rose',        a: '#fb7ba2', s: '#ff9dbe', t: '#4a0c22', soft: 'rgba(251,123,162,.16)', glow: 'rgba(251,123,162,.42)' },
+  amber:  { name: 'Amber',       a: '#fbbf24', s: '#ffd45e', t: '#3d2a02', soft: 'rgba(251,191,36,.16)',  glow: 'rgba(251,191,36,.4)'   },
+  teal:   { name: 'Teal',        a: '#2dd4bf', s: '#5ee6d6', t: '#03302b', soft: 'rgba(45,212,191,.15)',  glow: 'rgba(45,212,191,.4)'   }
+};
 
 const PRIO_LABEL = ['', 'Low', 'Medium', 'High'];
 const REPEAT_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
@@ -295,7 +307,7 @@ function toggleZen() {
 // ------------------------------------------------------------------ confetti (v0.10) ----
 // A tiny burst of paper squares wherever a little win just happened:
 // a task ticked done, a Board card sailed into Done, onboarding finished.
-const CONFETTI_COLORS = ['#8fe3a0', '#b9a8ff', '#f5c26b', '#ff8fab', '#7dd3fc', '#a9efb4', '#ffd6a5'];
+const CONFETTI_COLORS = ['#5aa2ff', '#82bcff', '#b9a8ff', '#7dd3fc', '#4de3c1', '#f5c26b', '#ff8fab', '#a9c9ff'];
 function confettiBurst(x, y, n = 18) {
   for (let i = 0; i < n; i++) {
     const p = document.createElement('i');
@@ -1951,7 +1963,7 @@ async function exportCurrentHtml() {
     if (IS_TAURI) await Promise.all(ids.map((id) => loadImageData(id)));
     const body = renderMarkdown(n.content || '');
     const title = esc(n.title || 'Untitled note');
-    const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1"/>\n<title>${title}</title>\n<style>\n  :root{color-scheme:light dark}\n  body{margin:0;background:#101418;color:#e8e6e3;font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}\n  article{max-width:760px;margin:0 auto;padding:48px 24px 80px}\n  h1,h2,h3,h4{line-height:1.25;color:#f4f2ee;margin:1.4em 0 .5em}\n  h1{font-size:2em;border-bottom:1px solid #2c333a;padding-bottom:.3em}\n  a{color:#7ec9ff}\n  blockquote{margin:1em 0;padding:.6em 1.2em;border-left:3px solid #8fe3a0;background:#1a2027;border-radius:0 8px 8px 0;color:#c9d4cd}\n  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#1c232b;padding:.15em .4em;border-radius:5px}\n  pre{background:#161c23;padding:16px 18px;border-radius:12px;overflow:auto;border:1px solid #26303a}\n  pre code{background:none;padding:0}\n  mark{background:#5a4a18;color:#ffd98a;padding:0 .2em;border-radius:3px}\n  del{color:#8b949e}\n  hr{border:none;border-top:1px solid #2c333a;margin:2em 0}\n  table{border-collapse:collapse;margin:1em 0;width:100%}\n  th,td{border:1px solid #2c333a;padding:8px 12px;text-align:left}\n  th{background:#1a2027}\n  .md-tablewrap{overflow-x:auto}\n  img{max-width:100%;border-radius:10px}\n  li.md-task{list-style:none;margin-left:-1.4em}\n  .md-box{display:inline-flex;width:15px;height:15px;border:1.5px solid #6b7684;border-radius:4px;margin-right:.5em;vertical-align:-2px;align-items:center;justify-content:center}\n  li.md-task.on .md-box{background:#8fe3a0;border-color:#8fe3a0}\n  li.md-task.on .md-box svg{width:11px;height:11px;color:#0d3015}\n  footer{max-width:760px;margin:0 auto;padding:0 24px 48px;color:#69737e;font-size:13px}\n  @media (prefers-color-scheme:light){body{background:#fbfaf8;color:#26282b}h1,h2,h3,h4{color:#1c1e21}a{color:#0b62c4}blockquote{background:#f2f4f1;color:#4a5349}code{background:#eef0f3}pre{background:#f3f5f7;border-color:#e1e4e8}mark{background:#ffe9a8;color:#5c4708}hr,th,td{border-color:#e1e4e8}th{background:#f2f4f1}}\n</style>\n</head>\n<body>\n<article>${body}</article>\n<footer>Exported from Nook — the cozy notes app</footer>\n</body>\n</html>`;
+    const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1"/>\n<title>${title}</title>\n<style>\n  :root{color-scheme:light dark}\n  body{margin:0;background:#101418;color:#e8e6e3;font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}\n  article{max-width:760px;margin:0 auto;padding:48px 24px 80px}\n  h1,h2,h3,h4{line-height:1.25;color:#f4f2ee;margin:1.4em 0 .5em}\n  h1{font-size:2em;border-bottom:1px solid #2c333a;padding-bottom:.3em}\n  a{color:#7ec9ff}\n  blockquote{margin:1em 0;padding:.6em 1.2em;border-left:3px solid #5aa2ff;background:#16202e;border-radius:0 8px 8px 0;color:#c6d3e2}\n  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#1c232b;padding:.15em .4em;border-radius:5px}\n  pre{background:#161c23;padding:16px 18px;border-radius:12px;overflow:auto;border:1px solid #26303a}\n  pre code{background:none;padding:0}\n  mark{background:#5a4a18;color:#ffd98a;padding:0 .2em;border-radius:3px}\n  del{color:#8b949e}\n  hr{border:none;border-top:1px solid #2c333a;margin:2em 0}\n  table{border-collapse:collapse;margin:1em 0;width:100%}\n  th,td{border:1px solid #2c333a;padding:8px 12px;text-align:left}\n  th{background:#1a2027}\n  .md-tablewrap{overflow-x:auto}\n  img{max-width:100%;border-radius:10px}\n  li.md-task{list-style:none;margin-left:-1.4em}\n  .md-box{display:inline-flex;width:15px;height:15px;border:1.5px solid #6b7684;border-radius:4px;margin-right:.5em;vertical-align:-2px;align-items:center;justify-content:center}\n  li.md-task.on .md-box{background:#5aa2ff;border-color:#5aa2ff}\n  li.md-task.on .md-box svg{width:11px;height:11px;color:#0a2550}\n  footer{max-width:760px;margin:0 auto;padding:0 24px 48px;color:#69737e;font-size:13px}\n  @media (prefers-color-scheme:light){body{background:#fbfaf8;color:#26282b}h1,h2,h3,h4{color:#1c1e21}a{color:#0b62c4}blockquote{background:#f2f4f1;color:#4a5349}code{background:#eef0f3}pre{background:#f3f5f7;border-color:#e1e4e8}mark{background:#ffe9a8;color:#5c4708}hr,th,td{border-color:#e1e4e8}th{background:#f2f4f1}}\n</style>\n</head>\n<body>\n<article>${body}</article>\n<footer>Exported from Nook — the cozy notes app</footer>\n</body>\n</html>`;
     const path = await call('export_note_html', { title: n.title || 'Untitled note', html });
     if (path) toast(`Web page saved — ${path.split(/[\\/]/).pop()}`, { icon: 'export' });
   } catch (err) {
@@ -2079,6 +2091,17 @@ async function openSettings(section) {
                   <span class="t-name">${t.name}</span>
                 </button>`).join('')}
               </div>
+            </div>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Accent color</div>
+              <div class="set-sub">Default Blue — or tint the whole app your way.</div>
+            </div>
+            <div class="seg" id="seg-accent">
+              <button data-v="" class="${!state.settings.accent ? 'on' : ''}" title="Theme's own accent">Auto</button>
+              ${Object.entries(ACCENTS).filter(([k]) => k).map(([k, v]) => `
+                <button data-v="${k}" class="${state.settings.accent === k ? 'on' : ''}" title="${v.name}"><i class="acc-dot" style="background:${v.a}"></i>${v.name}</button>`).join('')}
             </div>
           </div>
           <div class="set-row">
@@ -2362,6 +2385,16 @@ async function openSettings(section) {
       root.querySelectorAll('#seg-width button').forEach((x) => x.classList.toggle('on', x === b));
       await setSetting('editorWidth', b.dataset.v);
       applySettings();
+    });
+  });
+
+  root.querySelectorAll('#seg-accent button').forEach((b) => {
+    b.addEventListener('click', async () => {
+      state.settings.accent = b.dataset.v;
+      root.querySelectorAll('#seg-accent button').forEach((x) => x.classList.toggle('on', x === b));
+      await setSetting('accent', b.dataset.v);
+      applySettings();
+      toast(b.dataset.v ? `Accent: ${ACCENTS[b.dataset.v].name}` : 'Accent: theme default');
     });
   });
 
@@ -2750,6 +2783,8 @@ async function loadSettings() {
   state.settings.defaultView = (await call('get_setting', { key: 'defaultView' })) || 'all';
   state.settings.zoom = (await call('get_setting', { key: 'zoom' })) || '100';
   state.settings.trashDays = (await call('get_setting', { key: 'trashDays' })) || '0';
+  // v0.11 — accent color override ('' = theme default)
+  state.settings.accent = (await call('get_setting', { key: 'accent' })) || '';
   // v0.10 — the user's name from onboarding, used for greetings
   state.userName = ((await call('get_setting', { key: 'userName' })) || '').trim();
   // AI providers (JSON blob; API keys stay in the local DB, never in backups)
@@ -2800,6 +2835,15 @@ function applySettings() {
   document.body.dataset.edwidth = state.settings.editorWidth || 'normal';
   document.body.dataset.edline = state.settings.edLine || '1.6';
   document.body.dataset.density = state.settings.density || 'cozy';
+  // v0.11 — accent color override (Settings → Look); '' keeps the theme's own
+  const acc = ACCENTS[state.settings.accent || ''];
+  const setVar = (k, v) => document.body.style.setProperty(k, v);
+  if (acc) {
+    setVar('--accent', acc.a); setVar('--accent-strong', acc.s); setVar('--accent-text', acc.t);
+    setVar('--accent-soft', acc.soft); setVar('--accent-glow', acc.glow);
+  } else {
+    ['--accent', '--accent-strong', '--accent-text', '--accent-soft', '--accent-glow'].forEach((k) => setVar(k, ''));
+  }
   // v0.9: whole-UI zoom
   const z = Number(state.settings.zoom || '100');
   document.body.style.zoom = z && z !== 100 ? String(z / 100) : '';
