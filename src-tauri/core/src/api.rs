@@ -165,6 +165,139 @@ async fn favicons_fetch(ctx: &Ctx, b: &Map<String, Value>) -> ApiResponse {
     R::json(json!({ "ok": true, "fetched": got.iter().filter(|(_, d)| !d.is_empty()).count(), "favicons": crate::tlapps::favicons_map(&c) }))
 }
 
+/// v1.4: transcribe a meeting's pending chunks with cloud STT. With no STT key the answer is
+/// `{ engine: "local", pending: [...] }` and the UI runs the local Whisper worker instead.
+async fn meeting_transcribe(ctx: &Ctx, id: &str) -> ApiResponse {
+    use crate::meeting as mt;
+    let (pending, mcfg, exists) = {
+        let c = ctx.db.conn();
+        (mt::pending_chunks(&c, id), mt::config(&c), mt::get(&c, id).is_some())
+    };
+    if !exists {
+        return R::err(404, "no such meeting");
+    }
+    let ai_cfg = ctx.ai.config(&ctx.db);
+    let ai = ctx.ai.clone();
+    let stt = mt::pick_stt(mcfg["stt"].as_str().unwrap_or("auto"), mcfg["sttModel"].as_str().filter(|m| !m.is_empty()), &|p| ai.key_for(p), &ai_cfg);
+    let pend_json = |p: &[(mt::Track, u32)]| json!(p.iter().map(|(t, n)| json!({ "track": t.key(), "n": n, "url": format!("/api/meetings/{id}/chunks/{}/{n}", t.key()) })).collect::<Vec<_>>());
+    if stt == mt::Stt::Local {
+        return R::json(json!({ "ok": true, "engine": "local", "pending": pend_json(&pending) }));
+    }
+    if pending.is_empty() {
+        let c = ctx.db.conn();
+        let lines = mt::rebuild_transcript(&c, id);
+        mt::set_status(&c, id, "transcribed", None);
+        return R::json(json!({ "ok": true, "engine": stt.engine(), "done": 0, "lines": lines.len(), "pending": [] }));
+    }
+    mt::set_status(&ctx.db.conn(), id, "transcribing", None);
+    let lang = mcfg["language"].as_str().map(String::from);
+    let mut done = 0;
+    let mut err: Option<String> = None;
+    // 3 chunks in flight: fast on Groq without hammering rate limits
+    for batch in pending.chunks(3) {
+        let jobs = batch.iter().map(|(t, n)| {
+            let (stt, http, lang) = (stt.clone(), ctx.ai.http().clone(), lang.clone());
+            let wav = mt::chunk_wav(id, *t, *n);
+            async move {
+                let Some(wav) = wav else { return (*t, *n, Err("chunk file missing".to_string())) };
+                (*t, *n, mt::transcribe_chunk(&http, &stt, wav, lang.as_deref()).await)
+            }
+        });
+        for (t, n, r) in futures_util::future::join_all(jobs).await {
+            match r {
+                Ok(segs) => {
+                    let _ = mt::save_segments(&ctx.db.conn(), id, t, n, &segs, &stt.engine());
+                    done += 1;
+                }
+                Err(e) => err = Some(e),
+            }
+        }
+        if err.is_some() {
+            break;
+        }
+    }
+    let c = ctx.db.conn();
+    let lines = mt::rebuild_transcript(&c, id);
+    let left = mt::pending_chunks(&c, id);
+    match &err {
+        Some(e) => mt::set_status(&c, id, "error", Some(e)),
+        None => mt::set_status(&c, id, if left.is_empty() { "transcribed" } else { "recorded" }, None),
+    }
+    R::json(json!({ "ok": err.is_none(), "engine": stt.engine(), "done": done, "lines": lines.len(), "pending": pend_json(&left), "error": err }))
+}
+
+/// v1.4: summarise a transcribed meeting with the configured model (Ollama as a local fallback)
+/// and write / update its note.
+async fn meeting_summarize(ctx: &Ctx, id: &str) -> ApiResponse {
+    use crate::meeting as mt;
+    let (meeting, lines) = {
+        let c = ctx.db.conn();
+        let Some(m) = mt::get(&c, id) else { return R::err(404, "no such meeting") };
+        let lines = mt::rebuild_transcript(&c, id);
+        (m, lines)
+    };
+    if lines.is_empty() {
+        return R::err(400, "No transcript yet — transcribe the meeting first (or nothing was said).");
+    }
+    let msgs = mt::summary_prompt(meeting["title"].as_str().unwrap_or("Meeting"), meeting["durationMs"].as_i64().unwrap_or(0), &lines);
+    let mut cfg = ctx.ai.config(&ctx.db);
+    let mut tried: Vec<String> = vec![];
+    if !cfg.is_usable() {
+        // no cloud model configured → try a local Ollama
+        match ctx.ai.draft_config(&ctx.db, &json!({ "provider": "ollama" })) {
+            Ok(mut o) => match ctx.ai.list_models(&o).await {
+                Ok(models) if !models.is_empty() => {
+                    o.model = models[0].clone();
+                    cfg = o;
+                }
+                Ok(_) => tried.push("Ollama is running but has no models".into()),
+                Err(e) => tried.push(e),
+            },
+            Err(e) => tried.push(e),
+        }
+    }
+    if !cfg.is_usable() {
+        let e = format!("No AI model for the summary: set one up in Settings → AI (Gemini, GLM, Groq, OpenAI-compatible) or run Ollama. {}", tried.join(" "));
+        mt::set_status(&ctx.db.conn(), id, "transcribed", Some(&e));
+        return R::json(json!({ "ok": false, "error": e }));
+    }
+    mt::set_status(&ctx.db.conn(), id, "summarizing", None);
+    let raw = match ctx.ai.chat(&cfg, &msgs).await {
+        Ok(t) => t,
+        Err(e) => {
+            mt::set_status(&ctx.db.conn(), id, "transcribed", Some(&e));
+            return R::json(json!({ "ok": false, "error": e, "provider": cfg.provider }));
+        }
+    };
+    let sum = mt::parse_summary(&raw);
+    let md = mt::note_markdown(&meeting, &sum, &lines, "");
+    let title = sum.title.clone().filter(|t| !t.is_empty()).map(|t| format!("🎙️ {t}")).unwrap_or_else(|| format!("🎙️ {}", meeting["title"].as_str().unwrap_or("Meeting")));
+    let c = ctx.db.conn();
+    let mut b = Map::new();
+    b.insert("title".into(), json!(title));
+    b.insert("content".into(), json!(md));
+    b.insert("tags".into(), json!(["meeting"]));
+    let existing = meeting["noteId"].as_str().filter(|n| c.query_row(r#"SELECT 1 FROM "Note" WHERE "id"=?1"#, params![n], |_| Ok(())).is_ok()).map(String::from);
+    let note_id = match existing {
+        Some(n) => {
+            notes_patch(&c, &n, &b);
+            n
+        }
+        None => {
+            let r = notes_create(&c, &b);
+            match &r.body {
+                Body::Json(v) => v["id"].as_str().map(String::from).unwrap_or_default(),
+                _ => String::new(),
+            }
+        }
+    };
+    let _ = c.execute(
+        r#"UPDATE "Meeting" SET "summary"=?2, "noteId"=?3, "status"='summarized', "error"=NULL WHERE "id"=?1"#,
+        params![id, serde_json::to_string(&sum).unwrap_or_default(), note_id],
+    );
+    R::json(json!({ "ok": true, "noteId": note_id, "summary": sum, "model": cfg.model, "provider": cfg.provider }))
+}
+
 pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
     let path = req.path.trim_end_matches('/');
     let rest = path.strip_prefix("/api").unwrap_or(path);
@@ -180,6 +313,25 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
         ("POST", ["ai-test"]) => return ai_test(ctx, &req).await,
         ("POST", ["ai-models"]) => return ai_models(ctx, &req).await,
         ("POST", ["timelens", "favicons", "fetch"]) => return favicons_fetch(ctx, &b).await,
+        // v1.4 meetings: start/stop touch the vault from the recorder thread → never under our lock
+        ("POST", ["meetings", "start"]) | ("POST", ["meetings", "stop"]) | ("POST", ["meetings", "toggle"]) => {
+            let db = ctx.db.clone();
+            let title = b.get("title").and_then(|v| v.as_str()).map(String::from);
+            let what = seg[1].to_string();
+            let r = tokio::task::spawn_blocking(move || match what.as_str() {
+                "start" => crate::meeting::start(&db, title.as_deref()).map(|s| serde_json::to_value(s).unwrap_or(Value::Null)),
+                "stop" => crate::meeting::stop(&db),
+                _ => crate::meeting::toggle(&db).map(|s| serde_json::to_value(s).unwrap_or(Value::Null)),
+            })
+            .await;
+            return match r {
+                Ok(Ok(v)) => R::json(v),
+                Ok(Err(e)) => R::err(409, &e),
+                Err(e) => R::err(500, &e.to_string()),
+            };
+        }
+        ("POST", ["meetings", id, "transcribe"]) => return meeting_transcribe(ctx, id).await,
+        ("POST", ["meetings", id, "summarize"]) => return meeting_summarize(ctx, id).await,
         ("POST", ["timelens", "icons", "refresh"]) => {
             // icon extraction is blocking Win32/COM work: off the async runtime, no DB lock held
             let db = ctx.db.clone();
@@ -210,6 +362,11 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
     let c = db.conn();
     if let Some(r) = crate::ext::route(&c, m, seg.as_slice(), &b, &req.query) {
         return r;
+    }
+    if seg.first() == Some(&"meetings") {
+        if let Some(r) = crate::meeting::route(&c, m, &seg[1..], &b) {
+            return r;
+        }
     }
     match (m, seg.as_slice()) {
         ("GET", []) => R::json(json!({ "message": "Hello, world!" })),

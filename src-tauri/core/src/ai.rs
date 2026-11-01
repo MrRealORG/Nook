@@ -135,6 +135,11 @@ impl AiState {
         &self.client
     }
 
+    /// v1.4: the stored key for a provider (meeting speech-to-text reuses the AI keys).
+    pub fn key_for(&self, provider: &str) -> Option<String> {
+        self.keys.get(provider).filter(|k| !k.is_empty())
+    }
+
     /// Effective config (with key resolved).
     pub fn config(&self, db: &Db) -> AiConfig {
         let mut cfg: AiConfig = db

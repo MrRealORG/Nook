@@ -13,6 +13,7 @@ pub mod tlapps;
 pub mod sites;
 pub mod shield;
 pub mod mcp;
+pub mod meeting;
 pub mod server;
 pub mod team;
 pub mod util;

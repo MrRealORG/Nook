@@ -543,6 +543,12 @@ pub fn set_listener(f: impl Fn(&str, Value) + Send + Sync + 'static) {
     let _ = LISTENER.set(Box::new(f));
 }
 
+/// v1.4: other background modules (the meeting recorder) push their events through the same
+/// listener the desktop shell registered.
+pub fn emit_event(kind: &str, v: Value) {
+    emit(kind, v)
+}
+
 fn emit(kind: &str, v: Value) {
     if let Some(f) = LISTENER.get() {
         // a panicking listener must never take the tracker thread down
