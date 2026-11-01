@@ -203,7 +203,10 @@ export function renderMarkdown(src) {
       continue;
     }
 
-    const bq = t.match(/^>\s?(.*)$/);
+    // v0.19 — blockquote fix: esc() runs BEFORE the line loop, so ">" arrives
+    // pre-escaped as &gt; and the old /^>\s?/ pattern never matched (every quote
+    // block rendered as literal "> text"). Accept the escaped form first.
+    const bq = t.match(/^(?:&gt;|>)\s?(.*)$/);
     if (bq) {
       flushPara();
       flushList();

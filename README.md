@@ -39,8 +39,10 @@ The whole installer is **~2.1 MB**.
 | Editor | AI Chat |
 | --- | --- |
 | ![Editor](docs/screenshots/editor.png) | ![AI chat](docs/screenshots/ai-chat.png) |
-| **Insights** | **Board** |
-| ![Insights](docs/screenshots/insights.png) | ![Board](docs/screenshots/board.png) |
+| **Board** | **Tasks** |
+| ![Board](docs/screenshots/board.png) | ![Tasks](docs/screenshots/tasks.png) |
+| **Insights** | **Every screen is the real app** |
+| ![Insights](docs/screenshots/insights.png) | Light, dark and forest — three of the 24 themes, captured straight from v0.19. |
 
 ## Install
 
