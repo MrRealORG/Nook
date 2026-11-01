@@ -17,15 +17,26 @@ export type RulesState = {
   patterns: CatPattern[];
   /** sha-256 of the optional admin PIN; "" = no PIN */
   pinHash: string;
+  /** v1.4 Shield engine: what to do with an app / a website that breaks a rule */
+  appAction: AppAction;
+  siteAction: SiteAction;
+  /** opt-in: mirror blocked domains into the hosts file (needs admin once) */
+  hostsFile: boolean;
 };
+export type AppAction = "minimize" | "close" | "kill";
+export type SiteAction = "close-tab" | "minimize";
 
 export const DEFAULT_RULES: RulesState = {
-  shieldOn: false,
+  // v1.4: on by default — with no rules it enforces nothing, and new rules work at once
+  shieldOn: true,
   blocklist: [],
   limits: {},
   quiet: { enabled: false, from: 9, to: 12 },
   patterns: [],
   pinHash: "",
+  appAction: "minimize",
+  siteAction: "close-tab",
+  hostsFile: false,
 };
 
 /** sha-256 hex of a string (WebCrypto, browser only) */

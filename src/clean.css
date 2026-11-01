@@ -352,3 +352,11 @@ html[data-widget="true"] body { font-family: var(--font-ui); font-size: 13px; }
 .wg-pill-app { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
 .widget-task { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 12.5px; }
 .widget-task[data-done="true"] span { text-decoration: line-through; color: var(--faint); }
+
+/* v1.4 Rules: Shield engine */
+.shield-banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 12px; font-size: 12.5px; line-height: 1.45; color: var(--ink); border: 1px solid color-mix(in srgb, #d08a2a 55%, transparent); background: color-mix(in srgb, #d08a2a 10%, var(--panel-solid)); }
+.shield-banner > svg { flex: none; margin-top: 2px; color: #d08a2a; }
+.shield-opt { display: flex; gap: 9px; align-items: flex-start; padding: 7px 9px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
+.shield-opt:hover { background: var(--hover); }
+.shield-opt[data-on="true"] { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.shield-opt input { margin-top: 3px; accent-color: var(--accent); }

@@ -7,6 +7,7 @@ import { CAT_COLOR, CATS, fmt, DOCK } from "@/components/ActivityView";
 import { todayKey } from "@/lib/quests";
 import { categorize, useStore, type AppCat } from "@/lib/store";
 import { inQuiet } from "@/lib/rules";
+import { ShieldEngine } from "@/components/rules/ShieldEngine";
 
 /** every rule the admin manager controls, as a nav chip */
 type RuleTab = "shield" | "blocklist" | "limits" | "quiet" | "cats" | "admin";
@@ -115,7 +116,7 @@ export function RulesView() {
             <div className="min-w-[200px] flex-1">
               <div className="pixel-font text-[17px]">Shield mode {rules.shieldOn ? "is UP" : "is down"}</div>
               <div className="mt-0.5 text-[12.5px] text-dim">
-                With the shield up: blocked apps get bounced with a warning, app limits trigger over-budget alerts, and quiet hours push you toward productive apps.
+                With the shield up, the background engine enforces your rules even when Nook is closed to the tray: blocked apps and sites are bounced, daily limits cut off when spent, and quiet hours allow only productive apps.
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
                 <span className="chip !text-[11px]">{rules.blocklist.filter((b) => b.enabled).length} blocked</span>
@@ -143,6 +144,9 @@ export function RulesView() {
             </div>
           )}
         </div>
+
+        {/* v1.4: the real engine — banner, actions, live status */}
+        <ShieldEngine />
 
         {/* section tabs */}
         <div className="seg mt-4 flex-wrap" role="tablist" aria-label="Rule sections">

@@ -101,7 +101,8 @@ pub fn parse(v: &Value) -> Rules {
     let q = &v["quiet"];
     let quiet = (q["enabled"].as_bool() == Some(true)).then(|| (q["from"].as_u64().unwrap_or(9).min(23) as u32, q["to"].as_u64().unwrap_or(12).min(23) as u32)).filter(|(f, t)| f != t);
     Rules {
-        on: v["shieldOn"].as_bool().unwrap_or(false),
+        // v1.4: Shield is on by default (the UI default too); with no rules nothing is enforced
+        on: v["shieldOn"].as_bool().unwrap_or(true),
         blocks,
         limits,
         quiet,
