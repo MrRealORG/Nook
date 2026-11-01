@@ -502,7 +502,10 @@ mod tests {
         assert_eq!(r.limits, vec![("youtube.com".to_string(), 30)]);
         assert_eq!(r.quiet, Some((22, 7)));
         assert_eq!((r.app_action, r.site_action, r.hosts_file), (AppAction::Kill, SiteAction::Minimize, true));
-        assert!(!parse(&json!({ "blocklist": [{ "match": "xy", "enabled": true }] })).active(), "shield off by default");
+        // v1.4: Shield is on by default; an explicit `shieldOn: false` turns it off
+        assert!(parse(&json!({ "blocklist": [{ "match": "xy", "enabled": true }] })).active(), "shield on by default");
+        assert!(!parse(&json!({ "shieldOn": false, "blocklist": [{ "match": "xy", "enabled": true }] })).active());
+        assert!(!parse(&json!({})).active(), "on, but nothing to enforce without rules");
     }
 
     #[test]

@@ -88,6 +88,12 @@ pub struct UrlReader {
     broken: bool,
 }
 
+// SAFETY: a `UrlReader` is created empty (no COM objects) inside `WinSampler::default()` and is
+// moved into the tracker thread *before* its first use; `ensure()` lazily initialises COM and
+// creates every UIA interface on that thread, and they never leave it. The `Sampler: Send`
+// bound only covers that one move of the still-empty value.
+unsafe impl Send for UrlReader {}
+
 impl UrlReader {
     fn ensure(&mut self) -> Option<&windows::Win32::UI::Accessibility::IUIAutomation> {
         use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
