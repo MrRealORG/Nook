@@ -20,7 +20,7 @@ import type { CustomGameDef } from "@/lib/gameEngines";
 
 const usePackStoreFont = () => usePackStore.getState().fontPack;
 
-export type View = "notes" | "graph" | "canvas" | "den" | "focus" | "arcade" | "team" | "market" | "tasks" | "activity" | "rules" | "settings" | "calendar" | "timelens" | "chat";
+export type View = "notes" | "graph" | "canvas" | "den" | "focus" | "arcade" | "team" | "market" | "tasks" | "activity" | "rules" | "settings" | "calendar" | "timelens" | "chat" | "meetings";
 export type EditorMode = "write" | "split" | "read";
 export type AiMsg = { id: number; role: "user" | "ai"; text: string; res?: AiResult; action?: string; fresh?: boolean };
 export type TimerMode = "focus" | "short" | "long";
@@ -475,9 +475,9 @@ interface S {
 export const RAIL_DEFAULT_ICONS: Record<View, IconName> = {
   notes: "notes", graph: "algorithm", canvas: "shapes", tasks: "tasklist", den: "dog", focus: "hourglass",
   arcade: "gamepad", team: "message-text", market: "coins", activity: "activity", rules: "shield", settings: "sliders",
-  calendar: "calendar", timelens: "gauge", chat: "sparkles",
+  calendar: "calendar", timelens: "gauge", chat: "sparkles", meetings: "mic",
 };
-export const RAIL_DEFAULT_ORDER: View[] = ["notes", "calendar", "chat", "graph", "canvas", "tasks", "den", "focus", "arcade", "team", "market", "timelens", "activity", "rules", "settings"];
+export const RAIL_DEFAULT_ORDER: View[] = ["notes", "calendar", "chat", "graph", "canvas", "tasks", "den", "focus", "arcade", "team", "market", "timelens", "meetings", "activity", "rules", "settings"];
 /** saved rail order + any views added in newer versions (appended, never dropped) */
 export function railOrderOf(saved: View[]): View[] {
   if (!saved.length) return RAIL_DEFAULT_ORDER;
@@ -2028,7 +2028,7 @@ export const useStore = create<S>()((set, get) => {
 let appSyncAt = 0;
 /** last local rules write — the server poll won't revert fresh local edits */
 export let rulesDirtyAt = 0;
-export const VIEWS_ALL: View[] = ["notes", "graph", "canvas", "den", "focus", "arcade", "team", "market", "tasks", "activity", "rules", "settings", "calendar", "timelens", "chat"];
+export const VIEWS_ALL: View[] = ["notes", "graph", "canvas", "den", "focus", "arcade", "team", "market", "tasks", "activity", "rules", "settings", "calendar", "timelens", "chat", "meetings"];
 export const APP_PRESETS: Record<string, AppCat> = {
   // code / writing → productive
   vscode: "productive", "visual studio code": "productive", code: "productive", terminal: "productive", figma: "productive", notion: "productive", docs: "productive", excel: "productive", calendar: "productive", teams: "productive", slack: "productive", zoom: "productive",
@@ -2047,7 +2047,7 @@ export function categorize(app: string, overrides: Record<string, AppCat>, patte
   // in-app views: writing/graph/canvas/tasks/focus are productive; arcade/games/team/market lean fun
   if (key.startsWith("nook:")) {
     const v = key.slice(5);
-    if (["notes", "tasks", "focus", "graph", "canvas", "rules"].includes(v)) return "productive";
+    if (["notes", "tasks", "focus", "graph", "canvas", "rules", "meetings"].includes(v)) return "productive";
     if (["arcade", "team", "market", "den"].includes(v)) return "neutral";
     return "neutral";
   }

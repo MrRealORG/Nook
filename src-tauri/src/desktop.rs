@@ -15,6 +15,8 @@ pub const HOTKEY_CAPTURE: &str = "CommandOrControl+Alt+N";
 pub const HOTKEY_TOGGLE: &str = "CommandOrControl+Alt+H";
 pub const HOTKEY_TIMELENS: &str = "CommandOrControl+Alt+P";
 pub const HOTKEY_CLIPBOARD: &str = "CommandOrControl+Alt+V";
+/// v1.4: start / stop a meeting recording from anywhere
+pub const HOTKEY_MEETING: &str = "CommandOrControl+Alt+M";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -154,12 +156,13 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let widget = MenuItem::with_id(app, "widget", "Toggle desktop widget", true, None::<&str>)?;
     let tl_status = MenuItem::with_id(app, "tl-status", "Timelens: starting…", false, None::<&str>)?;
     let tl_pause = MenuItem::with_id(app, "tl-pause", "Pause Timelens", true, Some(HOTKEY_TIMELENS))?;
+    let meeting = MenuItem::with_id(app, "meeting", "Record / stop meeting", true, Some(HOTKEY_MEETING))?;
     let sep3 = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Nook", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &capture, &widget, &sep3, &tl_status, &tl_pause, &sep, &settings, &sep2, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &capture, &widget, &meeting, &sep3, &tl_status, &tl_pause, &sep, &settings, &sep2, &quit])?;
     app.manage(TrayItems { tl_status: tl_status.clone(), tl_pause: tl_pause.clone() });
     let mut tray = TrayIconBuilder::with_id("nook-tray")
         .tooltip("Nook")
@@ -169,6 +172,7 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "show" => toggle_main(app),
             "capture" => quick_capture(app),
             "tl-pause" => toggle_timelens(app),
+            "meeting" => toggle_meeting(app),
             "widget" => {
                 let state = app.state::<AppState>();
                 let mut s = DesktopSettings::load(&state.ctx.db);
@@ -212,6 +216,26 @@ pub fn toggle_timelens(app: &AppHandle) {
     refresh_tray(app);
     let _ = app.emit("nook://data-changed", json!({ "source": "tray", "timelens": true }));
     notify(app, if paused { "Timelens paused" } else { "Timelens resumed" }, if paused { "Nothing is being recorded." } else { "Tracking your day again." });
+}
+
+/// v1.4: start / stop the meeting recorder (hotkey + tray). Opening the audio endpoints can take
+/// a moment, so it runs off the main / shortcut thread; the recorder announces its state to every
+/// window (`nook://meeting-state`), and failures (no mic, no output device) become a notification.
+pub fn toggle_meeting(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let db = app.state::<AppState>().ctx.db.clone();
+        let was = nook_core::meeting::is_recording();
+        match nook_core::meeting::toggle(&db) {
+            Ok(s) if !was => {
+                let body = if s.warnings.is_empty() { "Press Ctrl+Alt+M again to stop.".to_string() } else { s.warnings.join(" ") };
+                notify(&app, "Recording meeting", &body);
+            }
+            Ok(_) => notify(&app, "Meeting saved", "Open Meetings in Nook to transcribe and summarise it."),
+            Err(e) => notify(&app, "Couldn't record the meeting", &e),
+        }
+        let _ = app.emit("nook://data-changed", json!({ "source": "meeting" }));
+    });
 }
 
 /// Update the tray tooltip + Timelens entries.
@@ -307,6 +331,10 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
         quick_capture(app);
         let target = if DesktopSettings::load(&app.state::<AppState>().ctx.db).widget { "widget" } else { "main" };
         let _ = app.emit_to(target, "nook://capture-clipboard", ());
+    } else if shortcut.matches(tauri_plugin_global_shortcut::Modifiers::CONTROL | tauri_plugin_global_shortcut::Modifiers::ALT, tauri_plugin_global_shortcut::Code::KeyM)
+        || shortcut.matches(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::ALT, tauri_plugin_global_shortcut::Code::KeyM)
+    {
+        toggle_meeting(app);
     } else {
         toggle_main(app);
     }
@@ -318,7 +346,7 @@ pub fn register_hotkeys(app: &AppHandle, on: bool) {
     if !on {
         return;
     }
-    for k in [HOTKEY_CAPTURE, HOTKEY_TOGGLE, HOTKEY_TIMELENS, HOTKEY_CLIPBOARD] {
+    for k in [HOTKEY_CAPTURE, HOTKEY_TOGGLE, HOTKEY_TIMELENS, HOTKEY_CLIPBOARD, HOTKEY_MEETING] {
         if let Err(e) = gs.register(k) {
             // another app may own the combo — never fatal
             log::warn!("could not register {k}: {e}");

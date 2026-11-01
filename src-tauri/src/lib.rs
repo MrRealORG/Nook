@@ -374,6 +374,9 @@ pub fn run() {
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 log::error!("cannot create app data dir {}: {e}", dir.display());
             }
+            // v1.4 meetings: recordings live next to the vault (%APPDATA%/com.realhackers.nook/meetings),
+            // never in %TEMP% where disk cleanup could delete them before they are transcribed
+            nook_core::meeting::set_dir(dir.join("meetings"));
             let db = match open_vault(&dir.join("nook.db")) {
                 Ok(db) => db,
                 Err(e) => {

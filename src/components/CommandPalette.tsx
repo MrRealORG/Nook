@@ -28,7 +28,7 @@ function fuzzy(q: string, t: string): number {
 const CMD_FEATURE: [RegExp, FeatureId][] = [
   [/^(v-graph)$/, "graph"], [/^(v-canvas|canvas-new)$/, "canvas"], [/^(v-tasks|task-add)$/, "tasks"],
   [/^(v-den|trick-random|pet-|feed-|roam|daily-gift)/, "pet"], [/^(v-focus|focus-go)$/, "focus"], [/^(v-arcade|arcade-stats)$/, "arcade"],
-  [/^v-team$/, "team"], [/^(v-market|my-booth)$/, "market"], [/^(v-activity|csv)$/, "activity"], [/^(v-rules|shield-toggle)$/, "rules"],
+  [/^v-team$/, "team"], [/^(v-market|my-booth)$/, "market"], [/^(v-activity|csv)$/, "activity"], [/^(v-rules|shield-toggle)$/, "rules"], [/^(v-meetings|meeting-)/, "meetings"],
   [/^(ai|plan-day|status-report)$/, "chat"],
 ];
 const cmdFeature = (id: string) => CMD_FEATURE.find(([re]) => re.test(id))?.[1];
@@ -66,6 +66,8 @@ function Palette() {
       c("my-booth", "Open my market booth", "map-pin", () => { useStore.setState({ view: "market" }); }),
       c("v-activity", "Go to Activity (app time)", "activity", go("activity"), "Alt 0"),
       c("v-rules", "Go to Rules (block sites, limits, quiet hours)", "shield", go("rules"), "Alt R"),
+      c("v-meetings", "Go to Meetings (record, transcribe, summarise calls)", "mic", go("meetings"), "Alt M"),
+      c("meeting-toggle", "Start / stop recording a meeting", "mic", () => { void import("@/lib/meetings").then(async ({ meetingsApi, isLive }) => { const l = await meetingsApi.live().catch(() => null); if (isLive(l)) await meetingsApi.stop(); else await meetingsApi.start(); }).catch((e) => st().toast(String(e instanceof Error ? e.message : e), "alert")); go("meetings")(); }, "Ctrl Alt M"),
       c("v-settings", "Go to Settings", "sliders", go("settings")),
       c("shield-toggle", "Toggle shield mode (rule enforcement)", "shield-on", () => {
         const next = !st().rules.shieldOn;

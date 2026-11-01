@@ -317,6 +317,7 @@ export function App({ initial }: { initial: InitialData }) {
         else if (k === "j") { e.preventDefault(); s.setView("calendar"); }
         else if (k === "l") { e.preventDefault(); s.setView("timelens"); }
         else if (k === "i") { e.preventDefault(); s.setView("chat"); }
+        else if (k === "m") { e.preventDefault(); s.setView("meetings"); }
         else if (/^[1-9]$/.test(k)) { e.preventDefault(); s.setView(VIEWS[Number(k) - 1]); }
         else if (k === "0") { e.preventDefault(); s.setView("activity"); }
         // Alt+- → Settings (was unreachable in the original: shadowed by this Alt branch)

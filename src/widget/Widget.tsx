@@ -20,6 +20,7 @@ import { uid } from "@/lib/util";
 import { PILL_SIZE, readWidgetCfg, writeWidgetCfg, type TileId, type WidgetCfg } from "@/widget/config";
 import { brandLogoFor } from "@/lib/appLogos";
 import { brandSrc, type BrandTone } from "@/lib/brandSrc";
+import { fmtElapsed, isLive, meetingsApi, watchLive, type MeetingLive } from "@/lib/meetings";
 
 /** 1.3: no real icon yet → the built-in brand mark (inline SVG), else a letter */
 function BrandOrLetter({ app }: { app: string }) {
@@ -83,6 +84,12 @@ export function Widget() {
   const [mood, setMood] = useState<Mood>("idle");
   const [flash, setFlash] = useState("");
   const [onTop, setOnTop] = useState(false);
+  // v1.4: small recording pill while a meeting is being recorded (hotkey / tray / main window)
+  const [meet, setMeet] = useState<MeetingLive | null>(null);
+  useEffect(() => {
+    if (featuresFromPrefs().meetings === false) return;
+    return watchLive(setMeet, 1000);
+  }, []);
   const capRef = useRef<HTMLTextAreaElement>(null);
   const lastLoad = useRef(0);
 
@@ -280,8 +287,11 @@ export function Widget() {
   const today = useMemo(() => tasks.filter((t) => t.list === "today" && (!t.done || (t.completedAt ?? 0) > Date.now() - 6 * 3600_000)).slice(0, 8), [tasks]);
   const shellStyle = { ["--wbg" as string]: `color-mix(in srgb, var(--panel-solid) ${Math.round(cfg.opacity * 100)}%, transparent)` };
 
+  const recPill = isLive(meet) ? <RecPill live={meet!} onOpen={() => openMain("meetings")} /> : null;
+
   // ---------------------------------------------------------------- pill
   if (cfg.compact) {
+    if (recPill) return <div className="wg wg-pill" data-testid="widget" data-compact="true" style={shellStyle} data-tauri-drag-region>{recPill}</div>;
     return (
       <div className="wg wg-pill" data-testid="widget" data-compact="true" style={shellStyle} data-tauri-drag-region>
         <span className="wg-dot" data-state={tl?.paused ? "off" : tl?.current?.running && !tl.current.afk ? "on" : "idle"} data-tauri-drag-region />
@@ -394,6 +404,7 @@ export function Widget() {
         <button className="wg-ib" title="Open Nook" aria-label="Open Nook" onClick={() => openMain()}><Icon name="external-arrow" size={13} /></button>
         <button className="wg-ib" title="Hide widget" aria-label="Hide widget" onClick={() => isTauri && void invoke("widget_toggle", { show: false })}><Icon name="close" size={13} /></button>
       </header>
+      {recPill && <div className="wg-rec-row">{recPill}</div>}
       <div className="wg-body">{cfg.tiles.filter((t) => t.on && live(t.id)).map((t) => tile(t.id))}</div>
     </div>
   );
@@ -438,5 +449,18 @@ function FocusTile({ onDone }: { onDone: () => void }) {
       <span className="wg-muted flex-1">{endsAt ? "focusing" : "focus"}</span>
       {endsAt ? <button className="wg-btn" onClick={stop}>Stop</button> : <button className="wg-btn wg-primary" onClick={start}>Start</button>}
     </section>
+  );
+}
+
+/** v1.4: "● REC 12:34" with pause / stop — shown while a meeting is recorded */
+function RecPill({ live, onOpen }: { live: MeetingLive; onOpen: () => void }) {
+  const paused = live.state === "paused";
+  return (
+    <div className="wg-rec" data-testid="widget-rec" data-state={live.state} data-tauri-drag-region>
+      <span className="wg-rec-dot" data-paused={paused} data-tauri-drag-region />
+      <button className="wg-rec-time" onClick={onOpen} title="Open Meetings">{paused ? "Paused" : "REC"} {fmtElapsed(live.elapsedMs)}</button>
+      <button className="wg-ib" title={paused ? "Resume" : "Pause"} aria-label={paused ? "Resume recording" : "Pause recording"} onClick={() => void meetingsApi.pause(!paused).catch(() => {})}><Icon name={paused ? "play" : "pause"} size={13} /></button>
+      <button className="wg-ib" title="Stop recording" aria-label="Stop recording" data-testid="widget-rec-stop" onClick={() => void meetingsApi.stop().then(onOpen).catch(() => {})}><Icon name="stop" size={13} /></button>
+    </div>
   );
 }

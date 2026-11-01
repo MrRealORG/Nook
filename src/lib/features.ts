@@ -14,7 +14,7 @@ import type { View } from "@/lib/store";
 
 export type FeatureId =
   | "timelens" | "pet" | "widget" | "chat" | "arcade" | "team" | "market" | "graph" | "canvas"
-  | "tasks" | "journal" | "focus" | "rules" | "reminders" | "backups" | "activity";
+  | "tasks" | "journal" | "focus" | "rules" | "reminders" | "backups" | "activity" | "meetings";
 
 export type FeatureDef = { id: FeatureId; label: string; desc: string; icon: IconName; views: View[]; group: "core" | "time" | "fun" | "system" };
 
@@ -24,6 +24,7 @@ export const FEATURES: FeatureDef[] = [
   { id: "chat", label: "AI chat", desc: "Chat with your notes — offline brain or your own model", icon: "sparkles", views: ["chat"], group: "core" },
   { id: "graph", label: "Graph", desc: "See how your notes link together", icon: "algorithm", views: ["graph"], group: "core" },
   { id: "canvas", label: "Canvas", desc: "An infinite whiteboard for cards, notes and arrows", icon: "shapes", views: ["canvas"], group: "core" },
+  { id: "meetings", label: "Meetings", desc: "Record calls, get a You/Them transcript, summary and action items", icon: "mic", views: ["meetings"], group: "core" },
   { id: "focus", label: "Focus / Pomodoro", desc: "A focus timer with breaks and a weekly chart", icon: "hourglass", views: ["focus"], group: "time" },
   { id: "timelens", label: "Timelens", desc: "Automatic, private time tracking of apps and sites", icon: "gauge", views: ["timelens"], group: "time" },
   { id: "activity", label: "Activity", desc: "In-app usage stats and the manual app dock", icon: "activity", views: ["activity"], group: "time" },

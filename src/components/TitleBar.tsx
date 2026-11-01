@@ -9,7 +9,7 @@ import { UI_STYLES, UI_STYLE_IDS } from "@/lib/uiStyles";
 import { isTauri } from "@/lib/platform";
 import { WindowControls } from "@/components/WindowControls";
 
-const LABEL = { notes: "Notes", graph: "Graph", canvas: "Canvas", den: "Den", focus: "Focus", arcade: "Arcade", team: "Team room", market: "Marketplace", tasks: "Tasks", activity: "Activity", rules: "Rules", settings: "Settings", calendar: "Journal", timelens: "Timelens", chat: "AI chat" } as const;
+const LABEL = { notes: "Notes", graph: "Graph", canvas: "Canvas", den: "Den", focus: "Focus", arcade: "Arcade", team: "Team room", market: "Marketplace", tasks: "Tasks", activity: "Activity", rules: "Rules", settings: "Settings", calendar: "Journal", timelens: "Timelens", chat: "AI chat", meetings: "Meetings" } as const;
 
 function fmt(s: number) {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;

@@ -39,6 +39,8 @@ const SettingsView = lazyView(() => import("@/components/SettingsView").then((m)
 const CalendarView = lazyView(() => import("@/components/CalendarView"));
 const TimelensView = lazyView(() => import("@/components/TimelensView"));
 const ChatView = lazyView(() => import("@/components/ChatView"));
+// 1.4
+const MeetingsView = lazyView(() => import("@/components/MeetingsView"));
 
 export function ViewHost({ tabs = true }: { tabs?: boolean }) {
   const view0 = useStore((s) => s.view);
@@ -69,6 +71,7 @@ export function ViewHost({ tabs = true }: { tabs?: boolean }) {
       {view === "calendar" && <CalendarView />}
       {view === "timelens" && <TimelensView />}
       {view === "chat" && <ChatView />}
+      {view === "meetings" && <MeetingsView />}
       </ErrorBoundary>
     </section>
   );

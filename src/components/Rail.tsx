@@ -26,6 +26,7 @@ export const META: Record<View, { label: string; key: string }> = {
   calendar: { label: "Journal", key: "J" },
   timelens: { label: "Timelens", key: "L" },
   chat: { label: "AI chat", key: "I" },
+  meetings: { label: "Meetings", key: "M" },
 };
 
 /** sidebar / ribbon glyph: the colour pixel sprite in the Pixel icon style (unless the user picked
@@ -355,7 +356,7 @@ export function DockRail() {
 
 /** sidebar sections (1.2): grouped navigation; order inside a group follows the user's rail order */
 export const NAV_GROUPS: { id: string; label: string; views: View[] }[] = [
-  { id: "workspace", label: "Workspace", views: ["notes", "calendar", "tasks", "chat"] },
+  { id: "workspace", label: "Workspace", views: ["notes", "calendar", "tasks", "chat", "meetings"] },
   { id: "create", label: "Create", views: ["canvas", "graph"] },
   { id: "productivity", label: "Productivity", views: ["focus", "timelens", "activity", "rules"] },
   { id: "play", label: "Play", views: ["den", "arcade", "market", "team"] },
