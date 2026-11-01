@@ -1688,7 +1688,11 @@ export const useStore = create<S>()((set, get) => {
         const streamId = seq++;
         let streamed = false;
         const res = await handleAiRequest(
-          { action, noteId: note?.id, title: note?.title, text: note?.content, question: opts.question, style: opts.style, persona: { name: s.pet.name, species: s.pet.species } },
+          {
+            action, noteId: note?.id, title: note?.title, text: note?.content, question: opts.question, style: opts.style, persona: { name: s.pet.name, species: s.pet.species },
+            // v1.4: conversation memory for follow-up questions in the side panel
+            history: s.aiLog.slice(-16).filter((m) => m.text && !m.text.startsWith("> ⚠️")).map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), content: m.role === "user" ? m.text : m.text.slice(0, 4000) })),
+          },
           (full) => {
             if (!streamed) {
               streamed = true;

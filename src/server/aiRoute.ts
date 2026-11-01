@@ -11,6 +11,7 @@ import { ask, brainstorm, continueText, flavor, linkSuggestions, outline, rewrit
 import { DEV_API, invoke, isTauri } from "@/lib/platform";
 import type { AiEffect, AiResult, AiTool, Note, Species } from "@/lib/types";
 import { parseNote } from "@/lib/util";
+import { providerError, systemPrompt, trimHistory } from "@/lib/aiPrompt";
 
 export type AiBody = {
   action: string;
@@ -35,19 +36,27 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 }
 const post = (body: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
+/** v1.4: the last provider failure (null after a success / when no provider is configured) */
+let lastError: string | null = null;
+export const lastAiError = () => lastError;
+
 /** One-shot completion via the configured provider; null when unavailable (→ local fallback). */
 export async function cloud(messages: ChatMsg[]): Promise<string | null> {
+  lastError = null;
   try {
-    const r = await json<{ ok: boolean; content: string | null }>("/api/ai-chat", post({ messages }));
+    const r = await json<{ ok: boolean; content: string | null; reason?: string }>("/api/ai-chat", post({ messages }));
+    if (!r.ok) lastError = providerError(r.reason) || null;
     return r.ok && r.content ? r.content.trim() : null;
-  } catch {
+  } catch (e) {
+    lastError = providerError(e instanceof Error ? e.message : String(e)) || null;
     return null;
   }
 }
 
-/** Streaming completion; falls back to `null` like `cloud()`. */
+/** Streaming completion; falls back to `null` like `cloud()` (the reason lands in `lastAiError()`). */
 export async function cloudStream(messages: ChatMsg[], onDelta: OnDelta, signal?: AbortSignal): Promise<string | null> {
   let full = "";
+  lastError = null;
   try {
     if (isTauri) {
       const { Channel } = await import("@tauri-apps/api/core");
@@ -57,14 +66,16 @@ export async function cloudStream(messages: ChatMsg[], onDelta: OnDelta, signal?
         if (m.type === "delta" && m.text) {
           full += m.text;
           onDelta(full);
-        }
+        } else if (m.type === "error") lastError = providerError(m.error) || null;
       };
       const stopped = new Promise<null>((r) => signal?.addEventListener("abort", () => r(null), { once: true }));
-      const res = await Promise.race([invoke<{ ok: boolean; text?: string }>("ai_stream", { messages, onEvent: ch }), stopped]);
+      const res = await Promise.race([invoke<{ ok: boolean; text?: string; error?: string }>("ai_stream", { messages, onEvent: ch }), stopped]);
       if (!res) return full.trim() || null;
+      if (!res.ok) lastError = providerError(res.error) || lastError;
       return res.ok ? (res.text ?? full).trim() || null : null;
     }
     const r = await fetch(`${DEV_API}/api/ai-stream`, { ...post({ messages }), signal });
+    if (!r.ok && r.status !== 200) lastError = providerError(`HTTP ${r.status}`);
     if (!r.body) return null;
     const reader = r.body.getReader();
     const dec = new TextDecoder();
@@ -79,15 +90,17 @@ export async function cloudStream(messages: ChatMsg[], onDelta: OnDelta, signal?
         const line = buf.slice(0, i).trim();
         buf = buf.slice(i + 2);
         if (!line.startsWith("data:")) continue;
-        const ev = JSON.parse(line.slice(5)) as { type: string; text?: string };
+        const ev = JSON.parse(line.slice(5)) as { type: string; text?: string; error?: string };
         if (ev.type === "delta" && ev.text) {
           full += ev.text;
           onDelta(full);
         } else if (ev.type === "done") ok = true;
+        else if (ev.type === "error") lastError = providerError(ev.error) || null;
       }
     }
     return ok ? full.trim() || null : null;
-  } catch {
+  } catch (e) {
+    if (!signal?.aborted && !full) lastError = providerError(e instanceof Error ? e.message : String(e)) || null;
     return full.trim() || null;
   }
 }
@@ -309,7 +322,10 @@ export async function handleAiRequest(b: AiBody, onDelta?: OnDelta, signal?: Abo
   const text = (body.text ?? current?.content ?? "").slice(0, 20_000);
   const title = body.title ?? current?.title ?? "";
   const res: AiResult = { mode: "local", text: "" };
-  const sys = `You are ${name}, a tiny pixel ${species} living inside a markdown notes app. Be warm, brief and useful. Keep markdown and [[wikilinks]] intact.`;
+  // v1.4: one strong system prompt (persona, rules, date, vault overview) + the open note as context
+  const sys = systemPrompt({ name, species, notes: rows });
+  const sysWithNote = current || body.text ? systemPrompt({ name, species, notes: rows, current: { title, content: text } }) : sys;
+  const memory = trimHistory(body.history);
   let useCloud: ChatMsg[] | null = null;
 
   switch (body.action) {
@@ -359,8 +375,8 @@ export async function handleAiRequest(b: AiBody, onDelta?: OnDelta, signal?: Abo
       const a = ask(q, mentioned.length ? mentioned : rows);
       res.text = flavor(species, name, a.text, "hi");
       useCloud = [
-        { role: "system", content: `${sys} Use markdown. When notes are attached, ground your answer in them and cite [[Title]].${ctx ? `\n\nAttached notes:\n${ctx}` : ""}` },
-        ...(body.history ?? []).slice(-12).map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }) as ChatMsg),
+        { role: "system", content: `${current ? sysWithNote : sys}${ctx ? `\n\nThe user attached these notes with @ — ground your answer in them and cite [[Title]]:\n${ctx}` : ""}` },
+        ...memory,
         { role: "user", content: q },
       ];
       break;
@@ -417,8 +433,9 @@ export async function handleAiRequest(b: AiBody, onDelta?: OnDelta, signal?: Abo
         .map((h) => `# ${h.note.title}\n${h.note.content.slice(0, 1400)}`)
         .join("\n\n---\n\n");
       useCloud = [
-        { role: "system", content: `${sys} Answer ONLY from the notes provided and cite them as [[Title]]. If they don't contain the answer, say so.` },
-        { role: "user", content: `Question: ${q}\n\nNotes:\n${ctx || "(no notes matched)"}` },
+        { role: "system", content: `${current ? sysWithNote : sys}\nPrefer the notes provided below and cite them as [[Title]]; if they don't cover the question, say so and answer briefly from general knowledge, clearly marked as such.` },
+        ...memory,
+        { role: "user", content: `Question: ${q}\n\nPossibly relevant notes:\n${ctx || "(no notes matched)"}` },
       ];
     }
   }
@@ -428,6 +445,10 @@ export async function handleAiRequest(b: AiBody, onDelta?: OnDelta, signal?: Abo
     if (out) {
       res.text = out;
       res.mode = "cloud";
+    } else if (lastError && !signal?.aborted) {
+      // v1.4: never fail silently — say why, then show the offline answer
+      res.error = lastError;
+      res.text = `> ⚠️ ${lastError} Showing the offline answer instead.\n\n${res.text}`;
     }
   }
   return res;

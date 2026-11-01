@@ -140,6 +140,8 @@ export type AiResult = {
   effects?: AiEffect[];
   /** true while the harness executed real work for this answer */
   acted?: boolean;
+  /** v1.4: the configured provider failed — a readable reason (the text is the offline fallback) */
+  error?: string;
 };
 
 export type Achievement = { key: string; title: string; desc: string; icon: string; at: number };

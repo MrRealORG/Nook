@@ -210,6 +210,7 @@ export default function ChatView() {
     abortRef.current = ac;
     let res: AiResult | null = null;
     let error = false;
+    let errText = "";
     try {
       const { handleAiRequest } = await import("@/server/aiRoute");
       res = await handleAiRequest(
@@ -218,16 +219,20 @@ export default function ChatView() {
           question,
           mentions: ment.map((x) => x.id),
           history: history.filter((x) => !x.error).map((x) => ({ role: x.role, content: x.text })),
+          // v1.4: the note open in the editor rides along as context
+          noteId: useStore.getState().activeId ?? undefined,
           persona: { name: pet.name, species: pet.species },
         },
         (full) => !ac.signal.aborted && setStreaming(full),
         ac.signal,
       );
-    } catch {
+    } catch (e) {
       error = true;
+      errText = e instanceof Error ? e.message : String(e);
     }
     const stopped = ac.signal.aborted;
-    const text = error ? "Something went wrong talking to the AI." : stopped ? (streamRef.current || res?.text || "") + "\n\n_(stopped)_" : (res?.text ?? "");
+    const text = error ? `Something went wrong talking to the AI${errText ? `: ${errText}` : "."}` : stopped ? (streamRef.current || res?.text || "") + "\n\n_(stopped)_" : (res?.text ?? "");
+    if (res?.error) st().toast(res.error, "alert");
     const reply: Msg = { id: uid(), role: "assistant", text, mode: m, tools: res?.tools, sources: res?.sources, cloud: res?.mode === "cloud", error, at: Date.now() };
     const next = [...base, reply];
     setMsgs(next);
