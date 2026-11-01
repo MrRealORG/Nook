@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
@@ -329,7 +330,71 @@ pub fn register_hotkeys(app: &AppHandle, on: bool) {
 
 /// Create/destroy the frameless, transparent desktop widget. Destroying (not hiding) it keeps
 /// idle RAM low when it is off; the window-state plugin remembers its position and size.
+///
+/// v1.4 crash fix: the widget used to be destroyed synchronously from inside its *own* IPC
+/// call (widget "close" button → `widget_toggle` → `w.destroy()`), and tray / hotkey / settings
+/// could create and destroy it concurrently. On WebView2 that tears the webview down while it
+/// is still dispatching the invoke → access violation. Now every caller only records the
+/// *desired* state; one deferred job on the main thread applies the latest desired state under a
+/// single mutex, so rapid toggles coalesce and a webview is never destroyed from its own call.
 pub fn set_widget(app: &AppHandle, on: bool) {
+    WIDGET_WANT.store(if on { 1 } else { 0 }, Ordering::SeqCst);
+    if WIDGET_QUEUED.swap(true, Ordering::SeqCst) {
+        return; // a job is already queued; it will read the newest desired state
+    }
+    let h = app.clone();
+    // defer: let the current IPC call (possibly from the widget itself) return first
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let h2 = h.clone();
+        let r = h.run_on_main_thread(move || {
+            WIDGET_QUEUED.store(false, Ordering::SeqCst);
+            let on = WIDGET_WANT.load(Ordering::SeqCst) == 1;
+            apply_widget(&h2, on);
+        });
+        if r.is_err() {
+            WIDGET_QUEUED.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+static WIDGET_WANT: AtomicU8 = AtomicU8::new(0);
+static WIDGET_QUEUED: AtomicBool = AtomicBool::new(false);
+static WIDGET_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Windows parks minimised windows at (-32000, -32000); multi-monitor setups can also leave a
+/// stale position that is on no screen any more. Never save or restore those.
+pub fn sane_widget_pos(x: i32, y: i32) -> bool {
+    x > -16_000 && y > -16_000 && x < 32_000 && y < 32_000
+}
+
+fn on_some_monitor(w: &tauri::WebviewWindow) -> bool {
+    let Ok(pos) = w.outer_position() else { return false };
+    if !sane_widget_pos(pos.x, pos.y) {
+        return false;
+    }
+    match w.available_monitors() {
+        Ok(ms) if !ms.is_empty() => ms.iter().any(|m| {
+            let (mp, sz) = (m.position(), m.size());
+            // at least the top-left 40 px of the widget must be on a monitor
+            pos.x + 40 > mp.x && pos.y + 20 > mp.y && pos.x < mp.x + sz.width as i32 - 40 && pos.y < mp.y + sz.height as i32 - 20
+        }),
+        _ => true,
+    }
+}
+
+fn save_widget_state(app: &AppHandle) {
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+    if let Some(w) = app.get_webview_window("widget") {
+        if w.is_minimized().unwrap_or(false) || !on_some_monitor(&w) {
+            return;
+        }
+    }
+    let _ = app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
+}
+
+fn apply_widget(app: &AppHandle, on: bool) {
+    let _g = WIDGET_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let existing = app.get_webview_window("widget");
     match (on, existing) {
         (true, Some(w)) => {
@@ -358,26 +423,69 @@ pub fn set_widget(app: &AppHandle, on: bool) {
                 Ok(w) => {
                     use tauri_plugin_window_state::{StateFlags, WindowExt};
                     let _ = w.restore_state(StateFlags::POSITION | StateFlags::SIZE);
-                    // remember where it was dragged/resized right away (not only on clean exit)
+                    if !on_some_monitor(&w) {
+                        // saved at -32000 (minimised) or on a monitor that is gone → bring it back
+                        let _ = w.center();
+                    }
+                    // remember where it was dragged/resized (throttled to 1 save / 1.5 s, trailing
+                    // save after the drag stops; minimised / off-screen coordinates are ignored)
                     let h = app.clone();
                     let last = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
-                    w.on_window_event(move |ev| {
-                        if matches!(ev, tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)) {
+                    let gen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                    w.on_window_event(move |ev| match ev {
+                        tauri::WindowEvent::Moved(p) if !sane_widget_pos(p.x, p.y) => {}
+                        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                             let now = nook_core::db::now_ms();
-                            if now - last.swap(now, std::sync::atomic::Ordering::SeqCst) > 400 {
-                                use tauri_plugin_window_state::AppHandleExt;
-                                let _ = h.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
+                            let g = gen.fetch_add(1, Ordering::SeqCst) + 1;
+                            if now - last.load(Ordering::SeqCst) > 1_500 {
+                                last.store(now, Ordering::SeqCst);
+                                save_widget_state(&h);
+                            } else {
+                                let (h, gen, last) = (h.clone(), gen.clone(), last.clone());
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_millis(1_600));
+                                    if gen.load(Ordering::SeqCst) == g {
+                                        last.store(nook_core::db::now_ms(), Ordering::SeqCst);
+                                        save_widget_state(&h);
+                                    }
+                                });
                             }
                         }
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            // Alt+F4 on the widget: go through the same deferred path
+                            api.prevent_close();
+                            let state = h.state::<AppState>();
+                            let mut s = DesktopSettings::load(&state.ctx.db);
+                            s.widget = false;
+                            let _ = s.save(&state.ctx.db);
+                            set_widget(&h, false);
+                            let _ = h.emit("nook://desktop-settings", ());
+                        }
+                        _ => {}
                     });
                 }
                 Err(e) => log::error!("widget window failed: {e}"),
             }
         }
         (false, Some(w)) => {
-            use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-            let _ = app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
-            let _ = w.destroy();
+            save_widget_state(app);
+            // let the widget drop its event listeners first, then destroy on the next turn
+            let _ = w.emit("nook://widget-closing", ());
+            let _ = w.hide();
+            let w2 = w.clone();
+            let h = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                let _ = h.run_on_main_thread(move || {
+                    let _g = WIDGET_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                    // re-enabled in the meantime? keep it
+                    if WIDGET_WANT.load(Ordering::SeqCst) == 1 {
+                        let _ = w2.show();
+                    } else {
+                        let _ = w2.destroy();
+                    }
+                });
+            });
         }
         (false, None) => {}
     }

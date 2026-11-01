@@ -404,6 +404,15 @@ pub fn run() {
             }
             desktop::register_deep_links(app.handle());
             // Timelens: the background tracker + the minute maintenance loop (reminders, goals, backups)
+            // v1.4: forward tracker events (`timelens-live` on a foreground change, `shield-bounce`
+            // / `shield-nudge` when a rule fires) to every window as `nook://<kind>` so Timelens,
+            // Rules and the widget update live instead of polling.
+            {
+                let h = app.handle().clone();
+                nook_core::timelens::set_listener(move |kind, v| {
+                    let _ = h.emit(&format!("nook://{kind}"), v);
+                });
+            }
             nook_core::timelens::start(app.state::<AppState>().ctx.db.clone(), nook_core::timelens::platform_sampler());
             desktop::start_maintenance(app.handle());
             desktop::start_perf_watch(app.handle());

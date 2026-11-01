@@ -5,7 +5,7 @@ import { brandLogoFor } from "@/lib/appLogos";
 export type Cat = "productive" | "neutral" | "distracting";
 export type Seg = { app: string; title: string; start: number; end: number; afk: boolean; focus: boolean; cat: string };
 export type AppRow = { app: string; secs: number; cat: string };
-export type SiteRow = { site: string; domain: string | null; secs: number; cat: string; browser: string };
+export type SiteRow = { site: string; domain: string | null; secs: number; cat: string; browser: string; override?: Cat | null; titles?: { title: string; secs: number }[] };
 export type Summary = {
   from: number; to: number; activeSecs: number; afkSecs: number; focusSecs: number; score: number;
   totalSecs: number; productiveSecs: number; focusedSecs: number; focusBlocks: [number, number][];
@@ -13,7 +13,7 @@ export type Summary = {
   categories: Record<Cat, number>;
   apps: AppRow[]; titles: { app: string; title: string; secs: number }[]; sites: SiteRow[]; hourly: number[]; hourlyProductive: number[];
   timeline: Seg[]; topApp: string | null; peakHour: number | null; intervalSecs: number;
-  current: { app: string; title: string; afk: boolean; since: number; running: boolean }; paused: boolean; enabled: boolean;
+  current: { app: string; title: string; domain?: string | null; afk: boolean; since: number; running: boolean }; paused: boolean; enabled: boolean;
 };
 export type Day = { day: string; activeSecs: number; productive: number; neutral: number; distracting: number; score: number; productiveDay: boolean };
 export type History = { days: Day[]; heatmap: number[][]; streak: number };

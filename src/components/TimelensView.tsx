@@ -9,10 +9,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { everyActive } from "@/lib/power";
+import { subscribe } from "@/lib/events";
 import { useStore } from "@/lib/store";
 import {
   addDays, AppIcon, CAT_COLOR, CAT_LABEL, CatChip, clock, dayStart, fmt, j, loadFavicons, loadIcons, send, SiteIcon,
-  type Cat, type RegApp, type Seg, type Summary,
+  type Cat, type RegApp, type Seg, type SiteRow, type Summary,
 } from "@/components/timelens/shared";
 
 const Analytics = lazy(() => import("@/components/timelens/More").then((m) => ({ default: m.Analytics })));
@@ -63,6 +64,29 @@ export default function TimelensView() {
     }, 60_000);
   }, [load, isToday]);
 
+  // v1.4 live: the tracker pushes `timelens-live` on every foreground change (desktop). Update
+  // the "Tracking …" header at once and re-read today's numbers at most every 10 s. In a plain
+  // browser (no events) a light 15 s poll of /live keeps the header honest.
+  const lastReload = useRef(0);
+  useEffect(() => {
+    if (!isToday) return;
+    const apply = (l: Partial<Summary["current"]> & { app?: string }) => {
+      setSum((s) => (s ? { ...s, current: { ...s.current, ...l, running: true } as Summary["current"] } : s));
+      if (Date.now() - lastReload.current > 10_000 && document.visibilityState !== "hidden") {
+        lastReload.current = Date.now();
+        void load();
+      }
+    };
+    const off = subscribe({ "nook://timelens-live": (p: Partial<Summary["current"]>) => p && apply(p) });
+    const stop = everyActive(() => {
+      void j<Summary["current"] & { paused: boolean }>("/api/timelens/live").then((l) => l && setSum((s) => (s ? { ...s, paused: l.paused, current: { ...s.current, ...l } } : s))).catch(() => {});
+    }, 15_000);
+    return () => {
+      off();
+      stop();
+    };
+  }, [isToday, load]);
+
   useEffect(() => {
     void claim(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,7 +124,7 @@ export default function TimelensView() {
             <h1 className="tl-title">Timelens</h1>
             <div className="tl-sub">
               <span className="tl-dot" data-state={sum?.paused ? "paused" : live?.running ? (live.afk ? "away" : "on") : "off"} />
-              {sum?.paused ? "Paused — nothing is being recorded" : live?.running ? (live.afk ? "Away from keyboard" : <>Tracking <b className="text-ink">{live.app}</b> · since {clock(live.since)}</>) : "Private, on-device time tracking"}
+              {sum?.paused ? "Paused — nothing is being recorded" : live?.running ? (live.afk ? "Away from keyboard" : <span data-testid="tl-live">Tracking <b className="text-ink">{live.app}</b>{live.domain ? <> · <b className="text-ink">{live.domain}</b></> : null} · since {clock(live.since)}</span>) : "Private, on-device time tracking"}
             </div>
           </div>
           <div className="tl-daynav" role="group" aria-label="Day">
@@ -128,7 +152,7 @@ export default function TimelensView() {
             {tab === "dashboard" && <Dashboard sum={sum} isToday={isToday} onSeed={seed} onClaim={() => void claim(false)} openTab={setTab} />}
             {tab === "timeline" && <TimelineTab sum={sum} day={day} />}
             {tab === "apps" && <AppsTab day={day} onChange={load} />}
-            {tab === "websites" && <WebsitesTab sum={sum} />}
+            {tab === "websites" && <WebsitesTab sum={sum} onChange={load} />}
             <Suspense fallback={<Spinner />}>
               {tab === "analytics" && <Analytics />}
               {tab === "goals" && <Goals />}
@@ -492,39 +516,114 @@ function AppsTab({ day, onChange }: { day: number; onChange: () => void }) {
 
 // ================================================================ websites
 
-function WebsitesTab({ sum }: { sum: Summary }) {
+function WebsitesTab({ sum, onChange }: { sum: Summary; onChange: () => void }) {
+  const st = useStore.getState;
   const [cfg, setCfg] = useState<{ favicons: boolean } | null>(null);
   const [q, setQ] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+  const [catFilter, setCatFilter] = useState<Cat | "all">("all");
   useEffect(() => {
     void j<{ favicons: boolean }>("/api/timelens/config").then(setCfg).catch(() => setCfg({ favicons: false }));
   }, []);
+  const domains = useMemo(() => sum.sites.map((s) => s.domain ?? "").filter(Boolean).sort().join(","), [sum.sites]);
   useEffect(() => {
-    if (!cfg) return;
-    loadFavicons(sum.sites.map((s) => s.domain ?? "").filter(Boolean), cfg.favicons);
-  }, [cfg, sum.sites]);
-  const list = sum.sites.filter((s) => s.site.toLowerCase().includes(q.trim().toLowerCase()) || (s.domain ?? "").includes(q.trim().toLowerCase()));
+    if (!cfg || !domains) return;
+    loadFavicons(domains.split(","), cfg.favicons);
+  }, [cfg, domains]);
+  const setCat = async (s: SiteRow, category: Cat | null) => {
+    if (!s.domain) return;
+    const r = await send(`/api/timelens/sites/${encodeURIComponent(s.domain)}`, "PATCH", { category });
+    if (!r.ok) {
+      st().toast(`Couldn't change ${s.site}: ${(await r.json().catch(() => ({}))).error ?? r.status}`, "alert");
+      return;
+    }
+    st().toast(category ? `${s.site} → ${CAT_LABEL[category]} (history updated)` : `${s.site} category reset`, "globe");
+    onChange();
+  };
+  const needle = q.trim().toLowerCase();
+  const list = sum.sites.filter(
+    (s) =>
+      (catFilter === "all" || s.cat === catFilter) &&
+      (!needle || s.site.toLowerCase().includes(needle) || (s.domain ?? "").includes(needle) || (s.titles ?? []).some((t) => t.title.toLowerCase().includes(needle))),
+  );
   const max = Math.max(1, ...list.map((s) => s.secs));
+  const total = sum.sites.reduce((a, s) => a + s.secs, 0);
+  const live = sum.current?.domain ?? null;
   return (
     <div className="tl-card">
       <div className="tl-toolbar">
         <div className="tl-search">
           <Icon name="search" size={14} />
-          <input className="input" placeholder="Search websites…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search websites" />
+          <input className="input" placeholder="Search websites or pages…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search websites" data-testid="tl-site-search" />
         </div>
-        <span className="text-[12px] text-faint">{cfg?.favicons === false ? "Favicons off (Privacy)" : "Favicons are fetched once per site and cached"}</span>
+        <div className="seg seg-compact" role="group" aria-label="Category filter">
+          {(["all", "productive", "neutral", "distracting"] as const).map((c) => (
+            <button key={c} data-on={catFilter === c} onClick={() => setCatFilter(c)}>{c === "all" ? "All" : CAT_LABEL[c]}</button>
+          ))}
+        </div>
+        <span className="ml-auto text-[12px] text-faint">{fmt(total)} on {sum.sites.length} site{sum.sites.length === 1 ? "" : "s"}{cfg?.favicons === false ? " · favicons off (Privacy)" : ""}</span>
       </div>
+      <div className="tl-sitehead"><span>Website</span><span>Time</span><span>Category</span></div>
       <div className="grid gap-0.5" data-testid="tl-sites">
-        {list.length === 0 && <div className="py-6 text-center text-[13px] text-faint">No websites yet — Timelens reads the site from browser tab titles.</div>}
-        {list.map((s) => (
-          <div key={s.site} className="tl-row" data-testid="tl-site-row">
-            <SiteIcon site={s.site} domain={s.domain} size={22} />
-            <span className="tl-row-name">{s.site}<span className="ml-2 text-faint">{s.domain ?? ""}</span></span>
-            <span className="text-[11.5px] text-faint">{s.browser}</span>
-            <CatChip cat={s.cat} />
-            <span className="tl-row-bar"><i style={{ width: `${Math.max(3, (s.secs / max) * 100)}%`, background: CAT_COLOR[s.cat] }} /></span>
-            <span className="tl-row-time">{fmt(s.secs)}</span>
+        {list.length === 0 && (
+          <div className="py-6 text-center text-[13px] text-faint">
+            {q || catFilter !== "all" ? "No website matches." : "No websites yet — Timelens reads the site from the browser's address bar (Chrome, Edge, Firefox, Brave, Opera, Vivaldi)."}
           </div>
-        ))}
+        )}
+        {list.map((s) => {
+          const key = s.domain ?? s.site;
+          const isOpen = open === key;
+          const pages = s.titles ?? [];
+          return (
+            <div key={key} className="tl-siteblock" data-open={isOpen}>
+              <div className="tl-siterow" data-testid="tl-site-row" data-domain={s.domain ?? ""}>
+                <button className="tl-siteopen" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} pages on ${s.site}`} onClick={() => setOpen(isOpen ? null : key)} disabled={!pages.length}>
+                  <Icon name={isOpen ? "chevron-down" : "chevron-right"} size={13} />
+                </button>
+                <SiteIcon site={s.site} domain={s.domain} size={24} />
+                <div className="min-w-0">
+                  <div className="truncate text-[13.5px] font-medium">
+                    {s.site}
+                    {live && live === s.domain && <span className="tl-livebadge" title="Open in the foreground right now">live</span>}
+                  </div>
+                  <div className="truncate text-[11.5px] text-faint">{s.domain ?? "unknown domain"}{s.browser ? ` · ${s.browser}` : ""}{pages.length ? ` · ${pages.length} page${pages.length === 1 ? "" : "s"}` : ""}{s.override ? " · custom category" : ""}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="tl-row-bar"><i style={{ width: `${Math.max(2, (s.secs / max) * 100)}%`, background: CAT_COLOR[s.cat] }} /></span>
+                  <span className="tl-row-time">{fmt(s.secs)}</span>
+                </div>
+                <div className="flex items-center justify-end gap-1">
+                  <select
+                    className="tl-catsel"
+                    value={s.cat}
+                    style={{ color: CAT_COLOR[s.cat] }}
+                    aria-label={`Category for ${s.site}`}
+                    data-testid="tl-site-cat"
+                    disabled={!s.domain}
+                    onChange={(e) => void setCat(s, e.target.value as Cat)}
+                  >
+                    {(["productive", "neutral", "distracting"] as Cat[]).map((c) => <option key={c} value={c}>{CAT_LABEL[c]}</option>)}
+                  </select>
+                  {s.override ? (
+                    <button className="icon-btn" title="Reset to the default category" aria-label={`Reset category for ${s.site}`} onClick={() => void setCat(s, null)}><Icon name="reload" size={13} /></button>
+                  ) : (
+                    <span className="inline-block w-7" />
+                  )}
+                </div>
+              </div>
+              {isOpen && (
+                <div className="tl-pages" data-testid="tl-site-pages">
+                  {pages.map((p) => (
+                    <div key={p.title} className="tl-page">
+                      <span className="truncate" title={p.title}>{p.title || "(untitled tab)"}</span>
+                      <span className="tl-row-time">{fmt(p.secs)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -267,6 +267,24 @@ html[data-active="false"] *, html[data-active="false"] *::before, html[data-acti
 .tl-approw { min-height: 46px; padding: 4px 8px; border-radius: 9px; }
 .tl-approw:hover { background: var(--hover); }
 .tl-catsel { height: 28px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-solid); padding: 0 6px; font-size: 12.5px; font-weight: 600; }
+/* v1.4 Websites tab: domain rows, favicon, category picker, page list per domain */
+.tl-sitehead, .tl-siterow { display: grid; grid-template-columns: 22px 24px minmax(0, 1fr) 210px 168px; align-items: center; gap: 10px; }
+.tl-sitehead { padding: 0 8px 6px 64px; font-size: 11.5px; font-weight: 600; color: var(--faint); grid-template-columns: minmax(0, 1fr) 210px 168px; }
+.tl-siterow { min-height: 46px; padding: 4px 8px; border-radius: 9px; }
+.tl-siteblock[data-open="true"] { background: color-mix(in srgb, var(--ink) 3%, transparent); border-radius: 10px; }
+.tl-siterow:hover { background: var(--hover); }
+.tl-siteopen { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--dim); }
+.tl-siteopen:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.tl-siteopen:disabled { opacity: .25; }
+.tl-pages { display: grid; gap: 1px; padding: 0 12px 8px 64px; }
+.tl-page { display: flex; align-items: center; gap: 12px; min-height: 26px; font-size: 12.5px; color: var(--dim); border-left: 2px solid var(--line); padding-left: 10px; }
+.tl-page > span:first-child { flex: 1; min-width: 0; }
+.tl-livebadge { margin-left: 8px; padding: 1px 6px; border-radius: 99px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #2fa36b; background: color-mix(in srgb, #2fa36b 14%, transparent); }
+@media (max-width: 1100px) {
+  .tl-sitehead, .tl-siterow { grid-template-columns: 22px 24px minmax(0, 1fr) 140px 150px; }
+  .tl-sitehead { grid-template-columns: minmax(0, 1fr) 140px 150px; }
+  .tl-siterow .tl-row-bar { width: 60px; }
+}
 /* analytics */
 .tl-bars { display: flex; align-items: flex-end; gap: 6px; height: 170px; }
 .tl-bar { flex: 1; min-width: 0; height: 100%; display: grid; grid-template-rows: 1fr 18px; }

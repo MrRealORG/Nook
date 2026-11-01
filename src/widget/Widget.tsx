@@ -12,6 +12,7 @@ import { TILE_FEATURE, featuresFromPrefs } from "@/lib/features";
 import { createElement, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { invoke, isTauri } from "@/lib/platform";
+import { subscribe } from "@/lib/events";
 import { drawPet, makePalette, SH, SW, type Mood, type Species } from "@/lib/sprite";
 import { THEMES, THEME_IDS, type ThemeId } from "@/lib/themes";
 import type { AiResult, Pet } from "@/lib/types";
@@ -147,18 +148,30 @@ export function Widget() {
     };
     document.addEventListener("visibilitychange", onVis);
     const iv = setInterval(() => document.visibilityState !== "hidden" && void load(), 60_000);
-    const offs: (() => void)[] = [];
-    if (isTauri) {
-      void import("@tauri-apps/api/event").then(async ({ listen }) => {
-        offs.push(await listen<{ source?: string }>("nook://data-changed", (e) => e.payload?.source !== "widget" && void load(true)));
-        offs.push(await listen("nook://capture", () => capRef.current?.focus()));
-      });
-      void invoke<{ settings?: { widgetOnTop?: boolean } }>("app_info").then((i) => setOnTop(!!i.settings?.widgetOnTop)).catch(() => {});
-    }
-    return () => {
+    // v1.4: race-free listeners, dropped on unmount *and* when Rust says the window is closing
+    // (a destroyed WebView2 with live listeners was one cause of the widget-close crash)
+    let tlAt = 0;
+    const off = subscribe({
+      "nook://data-changed": (p: { source?: string } | null) => p?.source !== "widget" && void load(true),
+      "nook://capture": () => capRef.current?.focus(),
+      // the tracker pushes foreground changes; refresh the Timelens tile at most every 20 s
+      "nook://timelens-live": () => {
+        if (document.visibilityState === "hidden" || Date.now() - tlAt < 20_000) return;
+        tlAt = Date.now();
+        void load(true);
+      },
+      "nook://widget-closing": () => cleanup(),
+    });
+    if (isTauri) void invoke<{ settings?: { widgetOnTop?: boolean } }>("app_info").then((i) => setOnTop(!!i.settings?.widgetOnTop)).catch(() => {});
+    const cleanup = () => {
       document.removeEventListener("visibilitychange", onVis);
       clearInterval(iv);
-      offs.forEach((f) => f());
+      off();
+    };
+    window.addEventListener("pagehide", cleanup);
+    return () => {
+      window.removeEventListener("pagehide", cleanup);
+      cleanup();
     };
   }, [load]);
 
