@@ -77,7 +77,6 @@ export function NoteList({ embedded }: { embedded?: boolean } = {}) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [showTags, setShowTags] = useState(false);
   const [tree, setTree] = useState(loadTree);
-  const [sure, setSure] = useState<string | null>(null);
   const [shareId, setShareId] = useState<string | null>(null);
   const dq = useDeferredValue(q);
   const st = useStore.getState;
@@ -285,17 +284,10 @@ export function NoteList({ embedded }: { embedded?: boolean } = {}) {
     { sep: true },
     {
       icon: "trash",
-      label: sure === n.id ? "Really delete?" : "Delete",
+      label: "Delete",
       danger: true,
-      run: () => {
-        if (sure === n.id) {
-          st().deleteNote(n.id);
-          setSure(null);
-        } else {
-          setSure(n.id);
-          setTimeout(() => setSure((s) => (s === n.id ? null : s)), 2400);
-        }
-      },
+      // v1.4: one click — the note goes at once and a toast offers Undo for 6 s
+      run: () => st().deleteNote(n.id),
     },
   ];
 

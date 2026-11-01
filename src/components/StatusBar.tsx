@@ -81,11 +81,23 @@ export function StatusBar() {
 export function Toasts() {
   const toasts = useStore((s) => s.toasts);
   return (
-    <div className="pointer-events-none fixed right-5 top-[68px] z-[95] flex flex-col items-end gap-2">
+    <div className="pointer-events-none fixed right-5 top-[68px] z-[95] flex flex-col items-end gap-2" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className="toast panel panel-solid pixel-font flex items-center gap-2.5 rounded-[14px] px-3.5 py-2.5 text-[14px]" style={{ backdropFilter: "none" }}>
+        <div key={t.id} data-testid="toast" className={`toast panel panel-solid pixel-font flex items-center gap-2.5 rounded-[14px] px-3.5 py-2.5 text-[14px] ${t.action ? "pointer-events-auto" : ""}`} style={{ backdropFilter: "none" }}>
           <Icon name={t.icon} size={16} style={{ color: "var(--accent)" }} />
           {t.text}
+          {t.action && (
+            <button
+              className="btn !h-7 !px-2.5 !text-[13px]"
+              data-testid="toast-action"
+              onClick={() => {
+                t.action?.run();
+                useStore.getState().dismissToast(t.id);
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>

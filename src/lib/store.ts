@@ -56,7 +56,7 @@ export type Task = {
 export type AppUseMap = Record<string, number>;
 export type AppCat = "productive" | "neutral" | "distraction";
 
-type Toast = { id: number; text: string; icon: IconName };
+type Toast = { id: number; text: string; icon: IconName; action?: { label: string; run: () => void } };
 type Bubble = { id: number; text: string; action?: { label: string; noteId: string } } | null;
 type Act = { mood: Mood; n: number } | null;
 
@@ -92,13 +92,27 @@ export function pendingGiftDay(g: DailyGift): number | null {
 }
 
 // ---------- persistence queue ----------
+/** v1.4 one-click delete: notes waiting out their undo window before the vault DELETE */
+export const UNDO_MS = 6000;
+type PendingDelete = { note: Note; index: number; canvases: Canvas[]; wasActive: boolean; wasOpen: boolean; timer: ReturnType<typeof setTimeout> };
+const pendingDeletes = new Map<string, PendingDelete>();
+/** send every pending delete now (window closing / reload) — keepalive fetches survive unload */
+export function flushDeletes() {
+  for (const [id, p] of pendingDeletes) {
+    clearTimeout(p.timer);
+    void api("DELETE", `/api/notes/${id}`);
+  }
+  pendingDeletes.clear();
+}
+if (typeof window !== "undefined") window.addEventListener("pagehide", flushDeletes);
+
 function api(method: string, url: string, body?: unknown) {
   const json = body === undefined ? undefined : JSON.stringify(body);
   const p = fetch(url, {
     method,
     headers: { "content-type": "application/json" },
     body: json,
-    keepalive: !!json && json.length < 60_000,
+    keepalive: method === "DELETE" || (!!json && json.length < 60_000),
   }).catch(() => null);
   // keep the desktop widget in sync with task/note edits made here
   if (method !== "GET" && /^\/api\/(tasks|notes)/.test(url)) void p.then(() => import("@/lib/desktop").then((d) => d.broadcast("data-changed", { source: "main" })));
@@ -333,7 +347,10 @@ interface S {
   moveTab: (id: string, dir: -1 | 1) => void;
   /** create-or-open today's daily note (Obsidian signature feature) */
   openDailyNote: () => void;
-  toast: (text: string, icon?: IconName) => void;
+  toast: (text: string, icon?: IconName, action?: { label: string; run: () => void }, ms?: number) => void;
+  /** v1.4: undo a one-click note delete while its undo window (6 s) is open */
+  undoDelete: (id: string) => boolean;
+  dismissToast: (id: number) => void;
   say: (text: string, action?: { label: string; noteId: string }, ms?: number) => void;
   doAct: (mood: Mood, ms: number) => void;
   clearAct: () => void;
@@ -971,12 +988,30 @@ export const useStore = create<S>()((set, get) => {
       logEvent(`clean mode ${next ? "on" : "off"}`, "info", "ui");
     },
 
-    toast: (text, icon = "sparkle") => {
-      // do-not-disturb: the bell still records via notify(), but popups go quiet
-      if (get().dnd) return;
+    toast: (text, icon = "sparkle", action, ms) => {
+      // do-not-disturb: the bell still records via notify(), but popups go quiet —
+      // except toasts that carry an action (Undo), which must stay reachable
+      if (get().dnd && !action) return;
       const id = seq++;
-      set((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, icon }] }));
-      setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 3200);
+      set((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, icon, action }] }));
+      setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms ?? (action ? 6000 : 3200));
+    },
+
+    dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+    undoDelete: (id) => {
+      const p = pendingDeletes.get(id);
+      if (!p) return false;
+      clearTimeout(p.timer);
+      pendingDeletes.delete(id);
+      set((s) => {
+        const notes = s.notes.some((n) => n.id === id) ? s.notes : [...s.notes.slice(0, p.index), p.note, ...s.notes.slice(p.index)];
+        const canvases = s.canvases.map((c) => p.canvases.find((o) => o.id === c.id) ?? c);
+        return { notes, canvases, activeId: p.wasActive ? id : s.activeId, openTabs: p.wasOpen && !s.openTabs.includes(id) ? [...s.openTabs, id] : s.openTabs };
+      });
+      p.canvases.forEach((c) => saveCanvas(c.id));
+      get().toast(`Restored “${p.note.title || "Untitled"}”`, "note");
+      return true;
     },
 
     say: (text, action, ms) => {
@@ -1030,6 +1065,13 @@ export const useStore = create<S>()((set, get) => {
     },
 
     deleteNote: (id) => {
+      // v1.4: one click deletes. The note leaves the UI at once and the vault DELETE is sent
+      // after a 6 s undo window (or immediately when the window closes — see flushDeletes).
+      const s0 = get();
+      const index = s0.notes.findIndex((n) => n.id === id);
+      if (index < 0) return;
+      const note = s0.notes[index];
+      const before = s0.canvases.filter((c) => c.data.nodes.some((n) => n.noteId === id));
       const canv: string[] = [];
       set((s) => ({
         notes: s.notes.filter((n) => n.id !== id),
@@ -1044,9 +1086,15 @@ export const useStore = create<S>()((set, get) => {
         }),
       }));
       canv.forEach((c) => saveCanvas(c));
-      void api("DELETE", `/api/notes/${id}`);
+      const prev = pendingDeletes.get(id);
+      if (prev) clearTimeout(prev.timer);
+      const timer = setTimeout(() => {
+        pendingDeletes.delete(id);
+        void api("DELETE", `/api/notes/${id}`);
+      }, UNDO_MS);
+      pendingDeletes.set(id, { note, index, canvases: before, wasActive: s0.activeId === id, wasOpen: s0.openTabs.includes(id), timer });
       sfx("sad");
-      get().toast("Note deleted", "trash");
+      get().toast(`Deleted “${note.title || "Untitled"}”`, "trash", { label: "Undo", run: () => void get().undoDelete(id) }, UNDO_MS);
     },
 
     openNote: (id) =>

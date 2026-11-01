@@ -285,7 +285,6 @@ export function Editor({ id }: { id: string }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [title, setTitle] = useState(note?.title ?? "");
   const [pop, setPop] = useState<Pop | null>(null);
-  const [sure, setSure] = useState(false);
   const [noteMenu, setNoteMenu] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -768,9 +767,9 @@ export function Editor({ id }: { id: string }) {
             </div>
             <button
               className="icon-btn !h-7 !w-7"
-              style={sure ? { background: "#a5594f", color: "#fff" } : undefined}
-              title={sure ? "Click again to delete" : "Delete note"}
-              onClick={() => (sure ? st().deleteNote(id) : (setSure(true), setTimeout(() => setSure(false), 2200)))}
+              title="Delete note (undo for 6 s)"
+              data-testid="note-delete"
+              onClick={() => st().deleteNote(id)}
             >
               <Icon name="trash" size={15} />
             </button>
