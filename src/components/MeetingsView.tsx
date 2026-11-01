@@ -19,6 +19,7 @@ export default function MeetingsView() {
   const [sel, setSel] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState<Record<string, string>>({});
+  const [runErr, setRunErr] = useState<Record<string, string>>({});
   const [startErr, setStartErr] = useState<{ title: string; hint: string } | null>(null);
   const [cfg, setCfg] = useState<MeetingConfig | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -80,6 +81,7 @@ export default function MeetingsView() {
 
   const run = async (id: string, summarize: boolean) => {
     setBusy((b) => ({ ...b, [id]: "Starting…" }));
+    setRunErr((e) => ({ ...e, [id]: "" }));
     const r = await processMeeting(id, { summarize, onStep: (s) => setBusy((b) => ({ ...b, [id]: s })) });
     setBusy((b) => {
       const n = { ...b };
@@ -90,7 +92,10 @@ export default function MeetingsView() {
     if (r.noteId) {
       await syncNotes();
       st().toast("Meeting summary saved as a note", "notes", { label: "Open", run: () => st().openNote(r.noteId!) });
-    } else if (r.error) st().toast(r.error, "alert", undefined, 7000);
+    } else if (r.error) {
+      setRunErr((e) => ({ ...e, [id]: r.error! }));
+      st().toast(r.error, "alert", undefined, 7000);
+    }
   };
 
   runRef.current = run;
@@ -218,7 +223,7 @@ export default function MeetingsView() {
             {!selected ? (
               <div className="mt-empty">Select a meeting to see its transcript and summary.</div>
             ) : (
-              <MeetingDetail m={selected} busy={busy[selected.id]} onRun={(s) => void run(selected.id, s)} onDelete={() => void remove(selected)} onRenamed={refresh} />
+              <MeetingDetail m={selected} busy={busy[selected.id]} error={runErr[selected.id] || selected.error} onRun={(s) => void run(selected.id, s)} onDelete={() => void remove(selected)} onRenamed={refresh} />
             )}
           </section>
         </div>
@@ -239,7 +244,7 @@ function Meter({ label, level, device, missing }: { label: string; level: number
   );
 }
 
-function MeetingDetail({ m, busy, onRun, onDelete, onRenamed }: { m: Meeting; busy?: string; onRun: (summarize: boolean) => void; onDelete: () => void; onRenamed: () => void }) {
+function MeetingDetail({ m, busy, error, onRun, onDelete, onRenamed }: { m: Meeting; busy?: string; error?: string | null; onRun: (summarize: boolean) => void; onDelete: () => void; onRenamed: () => void }) {
   const [tab, setTab] = useState<"summary" | "transcript">(m.summary ? "summary" : "transcript");
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(m.title);
@@ -291,7 +296,7 @@ function MeetingDetail({ m, busy, onRun, onDelete, onRenamed }: { m: Meeting; bu
         )}
         {busy && <span className="mt-chip" data-tone="busy" data-testid="meeting-busy">{busy}</span>}
       </div>
-      {m.error && !busy && <div className="mt-error" role="alert"><Icon name="alert" size={15} /><div className="min-w-0 text-dim">{m.error}</div></div>}
+      {error && !busy && <div className="mt-error" role="alert" data-testid="meeting-run-error"><Icon name="alert" size={15} /><div className="min-w-0 text-dim">{error}</div></div>}
 
       <div className="tl-tabs mt-tabs">
         <button data-on={tab === "summary"} onClick={() => setTab("summary")} data-testid="meeting-tab-summary"><Icon name="sparkles" size={14} /> Summary</button>
