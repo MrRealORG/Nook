@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.4.0 — Meetings, Timelens websites, Rules Shield
+
+### New
+- **Meetings.** Record any call from the new Meetings view, the tray, the widget or
+  **Ctrl+Alt+M** anywhere. Nook records two aligned tracks on Windows (WASAPI): your microphone
+  ("You") and what you hear through loopback ("Them"), as 16 kHz WAV chunks under the app data
+  folder. Live timer, You/Them level meters, pause/resume, stop. After you stop, the meeting is
+  transcribed with cloud speech-to-text (Groq / OpenAI-compatible / Gemini, using your AI keys), or
+  with the on-device Whisper model when no key is set. The two tracks are merged into one
+  speaker-labelled transcript; mic bleed and Whisper's silence hallucinations are dropped. Your AI
+  model (or a local Ollama) then writes a summary with key points, decisions, action items
+  (owner + due date) and open questions, saved as a `#meeting` note you can open from the view.
+  You can copy the transcript, replay either track, rename, re-summarise and delete.
+  A small **REC pill** on the desktop widget shows the timer with pause/stop while recording.
+  A missing or blocked microphone (or no output device) still records the other side and shows
+  a warning. When nothing can be opened you get a plain explanation and how to fix it
+  (Windows microphone privacy setting, no device, device busy).
+- **Timelens ▸ Websites.** Reads the site from the browser address bar (UI Automation: Chrome,
+  Edge, Firefox, Brave, Opera, Vivaldi). Shows time per domain with favicons, the pages under each
+  domain and a per-site category picker. Timelens and the widget now update live from tracker
+  events (foreground hook) instead of polling.
+- **Rules / Shield.** Shield is on by default, with a warning banner, per-app and per-site action
+  settings, an opt-in hosts-file mode and live engine status.
+
+### Improved
+- **Notes:** one-click delete (context menu and editor) with a 6 s **Undo** toast. Pending deletes
+  are flushed on exit.
+- **AI:** stronger system prompt (date, vault overview, open-note context) and conversation
+  memory within a character budget. Provider errors now show up as a toast and an inline notice
+  instead of a silent fallback.
+
+### Fixed
+- **Desktop widget crashes (Windows).** Event listeners can no longer race, and the widget
+  window is created and destroyed on a deferred, crash-safe path, so a WebView2 is never torn
+  down from inside its own call. Position saves are throttled and sane.
+- Windows build: UI Automation `VARIANT` needs `Win32_System_Ole` (`cargo test -p nook-core`
+  failed on its own without feature unification). `UrlReader` is `Send`.
+
+### Build
+- New CI workflow **Windows build (v1.4)**: runs typecheck, `cargo check` (all targets) and
+  `cargo test -p nook-core` on Windows, then builds the unsigned NSIS installer as an artifact.
+
 ## 1.3.1 — bug-fix release
 
 Fixes for "it gets stuck on the onboarding, crashes, opens the full app first and then the
