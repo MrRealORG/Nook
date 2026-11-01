@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mrrealorg.github.io/Nook/sitemap.xml

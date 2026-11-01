@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>NookNook — Cozy Offline Notes App for Windows | Notes, Tasks, Kanban, AI</title>
+<meta name="description" content="NookNook is a beautiful 100% offline notes app for Windows. Rich markdown notes, tasks with reminders, a kanban board, meeting recorder and AI chat with your own key — in a 2 MB app. No accounts, no cloud, no tracking."/>
+<meta name="keywords" content="offline notes app, windows notes app, kanban, markdown editor, journal app, private notes, local first, tauri app, ai notes, nooknook"/>
+<meta name="author" content="Mr Real"/>
+<meta name="robots" content="index, follow"/>
+<meta name="theme-color" content="#4f46e5"/>
+<link rel="canonical" href="https://mrrealorg.github.io/Nook/"/>
+<link rel="icon" type="image/svg+xml" href="favicon.svg"/>
+<link rel="apple-touch-icon" href="assets/icon.png"/>
+
+<!-- Open Graph -->
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="NookNook"/>
+<meta property="og:url" content="https://mrrealorg.github.io/Nook/"/>
+<meta property="og:title" content="NookNook — Your cozy corner for notes"/>
+<meta property="og:description" content="Rich markdown notes, tasks with reminders, a kanban board, meeting recorder and AI chat with your own key. 100% offline, 2 MB, zero accounts."/>
+<meta property="og:image" content="https://mrrealorg.github.io/Nook/assets/og.png"/>
+<meta property="og:image:width" content="1200"/>
+<meta property="og:image:height" content="630"/>
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="NookNook — Your cozy corner for notes"/>
+<meta name="twitter:description" content="A beautiful 100% offline notes desk for Windows. 2 MB. No accounts. Bring your own AI key."/>
+<meta name="twitter:image" content="https://mrrealorg.github.io/Nook/assets/og.png"/>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "NookNook",
+  "operatingSystem": "Windows 10, Windows 11",
+  "applicationCategory": "ProductivityApplication",
+  "softwareVersion": "0.18.0",
+  "description": "A cozy, 100% offline notes desk for Windows. Rich markdown notes, tasks with reminders, a kanban board, meeting recorder and AI chat with your own API key. Stored in a local SQLite database — no accounts, no cloud, no tracking.",
+  "url": "https://mrrealorg.github.io/Nook/",
+  "screenshot": "https://mrrealorg.github.io/Nook/assets/shot-board.png",
+  "downloadUrl": "https://github.com/MrRealORG/Nook/releases/latest",
+  "author": { "@type": "Person", "name": "Mr Real" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+
+<style>
+  :root{
+    --bg:#070b16; --bg2:#0b1226; --card:rgba(255,255,255,.045);
+    --line:rgba(255,255,255,.09); --txt:#e9edf8; --mut:#9aa6c3;
+    --acc:#5b8cff; --acc2:#8b5cf6;
+    --grad:linear-gradient(135deg,#4f46e5 0%,#3b6cf6 55%,#2f7bf0 100%);
+    --rad:18px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(79,70,229,.20), transparent 60%),
+      radial-gradient(700px 420px at -10% 30%, rgba(59,108,246,.12), transparent 60%),
+      var(--bg);
+    color:var(--txt);
+    font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+    -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  img{max-width:100%;display:block}
+  .wrap{max-width:1140px;margin:0 auto;padding:0 24px}
+
+  /* ---------- nav ---------- */
+  nav{
+    position:sticky;top:0;z-index:50;
+    backdrop-filter:blur(14px);background:rgba(7,11,22,.72);
+    border-bottom:1px solid var(--line);
+  }
+  .nav-in{display:flex;align-items:center;gap:28px;height:62px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;letter-spacing:.2px}
+  .brand img{width:28px;height:28px;border-radius:8px}
+  .brand b{color:var(--acc);font-weight:800}
+  .nav-links{display:flex;gap:22px;margin-left:auto;font-size:14.5px;color:var(--mut)}
+  .nav-links a:hover{color:var(--txt)}
+  .nav-cta{
+    margin-left:8px;padding:8px 16px;border-radius:11px;font-size:14px;font-weight:650;
+    background:var(--grad);color:#fff;box-shadow:0 6px 20px rgba(79,110,245,.35);
+    transition:transform .15s ease, box-shadow .15s ease;
+  }
+  .nav-cta:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(79,110,245,.45)}
+
+  /* ---------- hero ---------- */
+  header.hero{padding:84px 0 40px}
+  .hero-grid{display:grid;grid-template-columns:1.02fr .98fr;gap:48px;align-items:center}
+  .pill{
+    display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#bcd0ff;
+    background:rgba(91,140,255,.10);border:1px solid rgba(91,140,255,.28);
+    padding:6px 14px;border-radius:999px;margin-bottom:22px;
+  }
+  .pill i{width:7px;height:7px;border-radius:50%;background:#6ee7a0;box-shadow:0 0 10px #6ee7a0}
+  h1{font-size:clamp(34px,4.6vw,56px);line-height:1.08;letter-spacing:-1.4px;font-weight:850}
+  h1 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.sub{margin:20px 0 30px;font-size:18px;color:var(--mut);max-width:520px}
+  .cta-row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .btn{
+    display:inline-flex;align-items:center;gap:10px;padding:14px 26px;border-radius:14px;
+    font-weight:700;font-size:15.5px;transition:transform .16s ease, box-shadow .16s ease;
+  }
+  .btn-primary{background:var(--grad);color:#fff;box-shadow:0 10px 30px rgba(79,110,245,.4)}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px rgba(79,110,245,.5)}
+  .btn-ghost{background:var(--card);border:1px solid var(--line);color:var(--txt)}
+  .btn-ghost:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.22)}
+  .hero-meta{display:flex;gap:18px;margin-top:26px;font-size:13.5px;color:var(--mut);flex-wrap:wrap}
+  .hero-meta span{display:inline-flex;align-items:center;gap:7px}
+  .hero-meta b{color:#c6d4f5;font-weight:650}
+
+  .shot-frame{
+    position:relative;border-radius:22px;padding:10px;
+    background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+    border:1px solid var(--line);box-shadow:0 40px 90px rgba(2,6,23,.6);
+  }
+  .shot-frame img{border-radius:14px}
+  .shot-glow{position:absolute;inset:-40px;background:radial-gradient(60% 60% at 50% 40%,rgba(79,110,245,.30),transparent 70%);z-index:-1;filter:blur(10px)}
+  .chip{
+    position:absolute;display:flex;align-items:center;gap:9px;font-size:13px;font-weight:650;color:#dfe8ff;
+    background:rgba(13,19,38,.86);border:1px solid var(--line);border-radius:13px;padding:10px 15px;
+    backdrop-filter:blur(10px);box-shadow:0 14px 34px rgba(2,6,23,.55);
+    animation:float 5.2s ease-in-out infinite;
+  }
+  .chip svg{width:17px;height:17px;color:#6ee7a0}
+  .chip.c1{top:-18px;left:-26px}
+  .chip.c2{bottom:-16px;right:-20px;animation-delay:-2.6s}
+  .chip.c2 svg{color:var(--acc)}
+  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+
+  /* ---------- stats strip ---------- */
+  .stats{border-block:1px solid var(--line);background:rgba(255,255,255,.02);margin-top:56px}
+  .stats-in{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:26px 0}
+  .stat{text-align:center}
+  .stat b{display:block;font-size:26px;font-weight:800;letter-spacing:-.5px;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat span{font-size:13px;color:var(--mut)}
+
+  /* ---------- sections ---------- */
+  section{padding:88px 0}
+  .sec-head{max-width:640px;margin-bottom:46px}
+  .kicker{font-size:12.5px;font-weight:750;letter-spacing:2.2px;color:var(--acc);text-transform:uppercase;margin-bottom:12px}
+  h2{font-size:clamp(26px,3.2vw,38px);letter-spacing:-.8px;line-height:1.15;font-weight:800}
+  .sec-head p{margin-top:14px;color:var(--mut);font-size:16.5px}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:var(--rad);padding:26px 24px;
+    transition:transform .18s ease, border-color .18s ease, background .18s ease;
+  }
+  .card:hover{transform:translateY(-4px);border-color:rgba(91,140,255,.35);background:rgba(91,140,255,.06)}
+  .f-ico{
+    width:44px;height:44px;border-radius:12px;display:grid;place-items:center;margin-bottom:16px;
+    background:linear-gradient(135deg,rgba(79,70,229,.25),rgba(47,123,240,.25));
+    border:1px solid rgba(91,140,255,.30);color:#9dbcff;
+  }
+  .f-ico svg{width:21px;height:21px}
+  .card h3{font-size:16.5px;font-weight:700;margin-bottom:8px}
+  .card p{font-size:14px;color:var(--mut);line-height:1.6}
+
+  /* gallery */
+  .gallery{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+  .gallery figure{position:relative;border-radius:var(--rad);overflow:hidden;border:1px solid var(--line)}
+  .gallery img{transition:transform .35s ease}
+  .gallery figure:hover img{transform:scale(1.025)}
+  .gallery figcaption{
+    position:absolute;left:12px;bottom:12px;font-size:12.5px;font-weight:650;color:#dfe8ff;
+    background:rgba(7,11,22,.78);border:1px solid var(--line);padding:6px 12px;border-radius:9px;backdrop-filter:blur(8px);
+  }
+
+  /* privacy */
+  .privacy-box{
+    display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;
+    background:linear-gradient(160deg,rgba(79,70,229,.12),rgba(47,123,240,.05));
+    border:1px solid rgba(91,140,255,.22);border-radius:24px;padding:46px;
+  }
+  .privacy-box ul{list-style:none;display:grid;gap:14px;margin-top:8px}
+  .privacy-box li{display:flex;gap:12px;font-size:15px;color:#cdd8f2}
+  .privacy-box li svg{width:19px;height:19px;color:#6ee7a0;flex-shrink:0;margin-top:3px}
+  .lock-art{display:grid;place-items:center}
+  .lock-art img{width:200px;height:200px;border-radius:44px;box-shadow:0 30px 70px rgba(79,110,245,.4)}
+
+  /* download */
+  .dl-card{
+    text-align:center;border-radius:26px;padding:64px 34px;position:relative;overflow:hidden;
+    background:linear-gradient(160deg,rgba(79,70,229,.16),rgba(47,123,240,.07));
+    border:1px solid rgba(91,140,255,.25);
+  }
+  .dl-card::before{content:"";position:absolute;inset:-60px;background:radial-gradient(50% 45% at 50% 0%,rgba(91,140,255,.22),transparent 70%)}
+  .dl-card h2{position:relative}
+  .dl-card p{position:relative;color:var(--mut);margin:14px auto 30px;max-width:520px}
+  .dl-btns{position:relative;display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .steps{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:760px;margin:44px auto 0;text-align:left}
+  .step{background:rgba(7,11,22,.5);border:1px solid var(--line);border-radius:14px;padding:16px 18px;font-size:13.5px;color:var(--mut)}
+  .step b{display:block;color:var(--txt);font-size:14px;margin-bottom:4px}
+  .step i{font-style:normal;color:var(--acc);font-weight:800;margin-right:8px}
+
+  .road{
+    margin-top:26px;text-align:center;font-size:14.5px;color:var(--mut);
+    border:1px dashed rgba(91,140,255,.35);border-radius:16px;padding:18px 22px;
+    background:rgba(91,140,255,.05);position:relative;
+  }
+  .road b{color:#c6d4f5}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 44px;color:var(--mut);font-size:13.5px}
+  .foot-in{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .foot-in .brand{font-size:15px}
+  .foot-in .right{margin-left:auto;display:flex;gap:20px}
+  .foot-in a:hover{color:var(--txt)}
+
+  /* reveal */
+  .rv{opacity:0;transform:translateY(22px);transition:opacity .6s ease, transform .6s ease}
+  .rv.on{opacity:1;transform:none}
+
+  @media (max-width:960px){
+    .hero-grid{grid-template-columns:1fr;gap:40px}
+    .grid{grid-template-columns:1fr 1fr}
+    .privacy-box{grid-template-columns:1fr;padding:34px}
+    .steps{grid-template-columns:1fr}
+    .nav-links{display:none}
+    .stats-in{grid-template-columns:1fr 1fr;gap:20px}
+    .gallery{grid-template-columns:1fr}
+    .chip.c1{left:-8px}.chip.c2{right:-6px}
+  }
+  @media (max-width:600px){ .grid{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="NookNook home">
+      <img src="assets/icon.png" alt="NookNook app icon"/> Nook<b>Nook</b>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#gallery">Screens</a>
+      <a href="#privacy">Privacy</a>
+      <a href="https://github.com/MrRealORG/Nook" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <a class="nav-cta" href="#download">Download</a>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="pill"><i></i> v0.18 &mdash; now called NookNook</span>
+      <h1>Your <span>cozy corner</span><br/>for notes &amp; ideas</h1>
+      <p class="sub">NookNook keeps your notes, tasks and plans on <b>your own PC</b> &mdash; beautiful, feather-light and 100% offline. Bring your own AI key when you want superpowers.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#download">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          Download for Windows
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/MrRealORG/Nook" target="_blank" rel="noopener">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.17c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.72.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12v3.14c0 .3.21.67.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
+          View source
+        </a>
+      </div>
+      <div class="hero-meta">
+        <span><b>2.1 MB</b> installer</span>
+        <span><b>Windows</b> 10 &amp; 11</span>
+        <span><b>No account</b> needed</span>
+        <span><b>Works offline</b>, always</span>
+      </div>
+    </div>
+    <div class="shot-frame">
+      <div class="shot-glow"></div>
+      <img src="assets/shot-board.png" alt="NookNook kanban board with labeled cards, priorities and progress bars" width="720" height="450" fetchpriority="high"/>
+      <div class="chip c1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 100% offline &mdash; nothing leaves your PC</div>
+      <div class="chip c2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 7.2H22l-6 4.6 2.3 7.2-6.3-4.5-6.3 4.5L8 13.8 2 9.2h7.6z"/></svg> AI ready &mdash; bring your own key</div>
+    </div>
+  </div>
+
+  <div class="wrap"><div class="stats rv">
+    <div class="stats-in">
+      <div class="stat"><b>2.1 MB</b><span>installer, feather light</span></div>
+      <div class="stat"><b>24</b><span>handcrafted themes</span></div>
+      <div class="stat"><b>8+</b><span>AI providers supported</span></div>
+      <div class="stat"><b>0</b><span>accounts, clouds or trackers</span></div>
+    </div>
+  </div></div>
+</header>
+
+<main>
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="kicker">Everything on board</div>
+      <h2>A whole notes desk, not just a notepad</h2>
+      <p>NookNook bundles the tools you actually reach for &mdash; without shipping your life to a server.</p>
+    </div>
+    <div class="grid">
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg></div>
+        <h3>Rich markdown notes</h3>
+        <p>Folders, tabs, tags, favorites, find &amp; replace, wiki-links, tables, highlights, checklists &mdash; with live preview.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M9 16l2 2 4-4"/></svg></div>
+        <h3>Tasks with reminders</h3>
+        <p>Due dates, priorities, repeat rules and subtasks. NookNook fires a real Windows notification at reminder time.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="5.5" height="18" rx="2"/><rect x="9.5" y="3" width="5.5" height="12" rx="2"/><rect x="16" y="3" width="5.5" height="8" rx="2"/></svg></div>
+        <h3>Kanban board</h3>
+        <p>Drag cards across To Do / In Progress / Done with buttery-smooth pointer dragging, labels and live progress.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c2.2.6 4 2.5 4 5a5 5 0 0 1-2 4v3a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-3a5 5 0 0 1-2-4c0-2.5 1.8-4.4 4-5a4 4 0 0 1 4-4z"/><path d="M9 14l2 2 4-4"/></svg></div>
+        <h3>AI, your key &mdash; your rules</h3>
+        <p>Chat, summarize notes or turn them into tasks via OpenRouter, Z.ai (GLM), OpenAI, Groq, Gemini, DeepSeek, Ollama &amp; more.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/></svg></div>
+        <h3>Meeting recorder</h3>
+        <p>Record meetings as .wav straight to your disk &mdash; no upload, no account, never freezes the app. Play, rename, export.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 20h18"/><path d="M6 20V10M12 20V4M18 20v-7"/></svg></div>
+        <h3>Insights &amp; streaks</h3>
+        <p>Words written, day streaks, tasks done and a 14-day activity chart &mdash; computed locally from your own data.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+        <h3>24 themes &amp; sound design</h3>
+        <p>Dark and light looks for every mood, soft taps and chimes as you work, plus generative lofi that never repeats.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 9l5-5 5 5"/><path d="M12 4v12"/></svg></div>
+        <h3>Backups &amp; export</h3>
+        <p>One-click JSON backups you can restore anywhere, plus export any note as clean Markdown or a pretty web page.</p>
+      </div>
+      <div class="card rv">
+        <div class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.6"/></svg></div>
+        <h3>Private by design</h3>
+        <p>Everything lives in a local SQLite database on your PC. No servers, no telemetry, no accounts &mdash; ever.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="gallery" style="padding-top:20px">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="kicker">Take a look</div>
+      <h2>Made to feel good, every day</h2>
+    </div>
+    <div class="gallery">
+      <figure class="rv"><img loading="lazy" src="assets/shot-notes.png" alt="NookNook markdown editor with folders, tabs and tags" /><figcaption>Editor &mdash; markdown, tabs, tags</figcaption></figure>
+      <figure class="rv"><img loading="lazy" src="assets/shot-chat.png" alt="NookNook AI chat with suggestion cards" /><figcaption>AI chat &mdash; your own key</figcaption></figure>
+      <figure class="rv"><img loading="lazy" src="assets/shot-insights.png" alt="NookNook insights view with activity chart and streaks" /><figcaption>Insights &mdash; streaks &amp; activity</figcaption></figure>
+      <figure class="rv"><img loading="lazy" src="assets/shot-board.png" alt="NookNook kanban board" /><figcaption>Board &mdash; drag, label, done</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="wrap">
+    <div class="privacy-box rv">
+      <div>
+        <div class="kicker">Privacy first</div>
+        <h2>Your notes never leave this PC</h2>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> Stored in a local SQLite database &mdash; open the folder anytime, it is yours</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> No account, no sync service, no telemetry &mdash; the app works fully airborne</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> AI only talks to the provider you choose, with the key you paste &mdash; keys stay local</li>
+        </ul>
+      </div>
+      <div class="lock-art"><img src="assets/icon.png" alt="NookNook icon" /></div>
+    </div>
+  </div>
+</section>
+
+<section id="download" style="padding-top:10px">
+  <div class="wrap">
+    <div class="dl-card rv">
+      <h2>Get NookNook for Windows</h2>
+      <p>Free, tiny and ready in under a minute. Your notes stay yours &mdash; forever.</p>
+      <div class="dl-btns">
+        <a class="btn btn-primary" href="https://github.com/MrRealORG/Nook/releases/latest" target="_blank" rel="noopener">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          Download installer (.exe)
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/MrRealORG/Nook/releases/latest" target="_blank" rel="noopener">MSI package</a>
+      </div>
+      <div class="steps">
+        <div class="step"><b><i>1</i>Download</b>Grab the latest <b>NookNook_*.exe</b> from Releases.</div>
+        <div class="step"><b><i>2</i>Install</b>Run it &mdash; installs just for you, no admin needed.</div>
+        <div class="step"><b><i>3</i>Cozy up</b>Pick your name &amp; theme, start writing. That's it.</div>
+      </div>
+      <div class="road">Shipping tempo: <b>5 fresh features &amp; improvements every day</b> &mdash; NookNook is in active daily development. Watch the repo to follow along.</div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <a class="brand" href="#top"><img src="assets/icon.png" alt=""/> Nook<b>Nook</b></a>
+    <span>Made cozy for Mr Real</span>
+    <div class="right">
+      <a href="https://github.com/MrRealORG/Nook" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/MrRealORG/Nook/releases/latest" target="_blank" rel="noopener">Releases</a>
+      <a href="#privacy">Privacy</a>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:14px;color:#5d6a89">&copy; 2026 Mr Real &mdash; NookNook, your cozy corner for notes.</div>
+</footer>
+
+<script>
+  // reveal on scroll
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('on'); io.unobserve(e.target); } });
+  }, { threshold: .12 });
+  document.querySelectorAll('.rv').forEach(function(el){ io.observe(el); });
+</script>
+</body>
+</html>
