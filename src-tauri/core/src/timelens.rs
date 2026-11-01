@@ -36,6 +36,8 @@ pub struct Sample {
     pub pid: u32,
     /// the foreground window handle as an integer (0 when unknown)
     pub hwnd: usize,
+    /// v1.4: the browser's address-bar text (Windows UI Automation), "" when unknown / not a browser
+    pub url: String,
 }
 
 /// Anything that can look at the desktop. Mocked in tests.
@@ -51,6 +53,8 @@ pub struct Span {
     pub start: i64,
     pub end: i64,
     pub afk: bool,
+    /// v1.4: browser site domain ("" for apps / unknown)
+    pub domain: String,
 }
 
 /// Folds consecutive samples into spans. Each sample stands for `interval_ms` of time; a gap
@@ -63,7 +67,9 @@ pub struct Merger {
 
 impl Merger {
     pub fn new(interval_ms: i64) -> Self {
-        Merger { cur: None, interval_ms, gap_ms: interval_ms * 3 }
+        // 1.4 samples every second: tolerate a few seconds of scheduling jitter (the sampler runs at
+        // the lowest priority / EcoQoS) before treating a pause as a gap
+        Merger { cur: None, interval_ms, gap_ms: (interval_ms * 3).max(15_000) }
     }
     /// Feed one sample at `ts`; returns the span that just closed, if any.
     pub fn push(&mut self, app: &str, title: &str, afk: bool, ts: i64) -> Option<Span> {
@@ -72,14 +78,24 @@ impl Merger {
     /// Like `push`, but the sample stands for `dur_ms` (the tracker sleeps longer while AFK, so
     /// one AFK sample covers the whole back-off sleep).
     pub fn push_for(&mut self, app: &str, title: &str, afk: bool, ts: i64, dur_ms: i64) -> Option<Span> {
+        self.push_site(app, title, "", afk, ts, dur_ms)
+    }
+    /// Like `push_for`, with the browser site's domain (a domain change splits the span).
+    pub fn push_site(&mut self, app: &str, title: &str, domain: &str, afk: bool, ts: i64, dur_ms: i64) -> Option<Span> {
         if let Some(c) = self.cur.as_mut() {
-            if c.app == app && c.title == title && c.afk == afk && ts - c.end <= self.gap_ms - self.interval_ms && ts >= c.start {
+            if c.app == app && c.title == title && c.domain == domain && c.afk == afk && ts - c.end <= self.gap_ms - self.interval_ms && ts >= c.start {
                 c.end = c.end.max(ts + dur_ms);
                 return None;
             }
         }
-        let closed = self.cur.take();
-        self.cur = Some(Span { app: app.into(), title: title.into(), start: ts, end: ts + dur_ms, afk });
+        let mut closed = self.cur.take();
+        if let Some(c) = closed.as_mut() {
+            // woken early by a foreground change: the old activity ends now, not a tick later
+            if ts > c.start && ts < c.end {
+                c.end = ts;
+            }
+        }
+        self.cur = Some(Span { app: app.into(), title: title.into(), start: ts, end: ts + dur_ms, afk, domain: domain.into() });
         closed
     }
     /// Close the open span (pause, exclusion, shutdown).
@@ -116,11 +132,13 @@ pub struct Config {
     pub all_rules: Vec<Value>,
 }
 
-/// Default sampling interval. 5 s keeps the tracker far below 0.1 % CPU; the minimum is 5.
-pub const DEFAULT_INTERVAL_SECS: u64 = 5;
-pub const MIN_INTERVAL_SECS: u64 = 5;
+/// v1.4: a light 1 s tick (two cheap Win32 calls: GetForegroundWindow + GetWindowTextW) so the
+/// dashboard and the Shield react in real time; foreground switches wake the thread instantly
+/// (SetWinEventHook). Still far below 0.1 % CPU.
+pub const DEFAULT_INTERVAL_SECS: u64 = 1;
+pub const MIN_INTERVAL_SECS: u64 = 1;
 /// While AFK / locked / paused the tracker sleeps this long between looks.
-pub const IDLE_SLEEP_SECS: u64 = 30;
+pub const IDLE_SLEEP_SECS: u64 = 10;
 /// Spans are written to SQLite in one batch at most this often.
 pub const FLUSH_SECS: u64 = 60;
 
@@ -155,15 +173,17 @@ pub fn load_config(c: &Connection) -> Config {
     let raw = setting_get(c, CONFIG_KEY).and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or(Value::Null);
     let d = Config::default();
     let rules = raw["rules"].as_array().cloned().unwrap_or_default();
-    let mut all_rules = crate::tlapps::override_rules(c);
+    let mut all_rules = crate::sites::site_rules(c);
+    all_rules.extend(crate::tlapps::override_rules(c));
     all_rules.extend(rules.iter().cloned());
     let strs = |v: &Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect::<Vec<_>>());
     Config {
         enabled: raw["enabled"].as_bool().unwrap_or(d.enabled),
         paused: raw["paused"].as_bool().unwrap_or(d.paused),
         afk_secs: raw["afkSecs"].as_u64().map(|v| v.clamp(30, 3600)).unwrap_or(d.afk_secs),
-        // 1.1 sampled every 2 s; 1.2 never goes below 5 s (old configs are lifted on load)
-        interval_secs: raw["intervalSecs"].as_u64().map(|v| v.clamp(MIN_INTERVAL_SECS, 60)).unwrap_or(d.interval_secs),
+        // 1.4: the live tick lives under "tickSecs" (1–10 s); 1.2/1.3's stored "intervalSecs" (5 s)
+        // is ignored so upgraded installs get real-time tracking too
+        interval_secs: raw["tickSecs"].as_u64().map(|v| v.clamp(MIN_INTERVAL_SECS, 10)).unwrap_or(d.interval_secs),
         exclude: strs(&raw["exclude"]).unwrap_or_default(),
         redact_titles: raw["redactTitles"].as_bool().unwrap_or(false),
         retention_days: raw["retentionDays"].as_i64().map(|v| v.clamp(1, 3650)).unwrap_or(d.retention_days),
@@ -193,10 +213,15 @@ pub fn patch_config(c: &Connection, patch: &Map<String, Value>) -> Result<Config
         m.remove("defaultRules");
         m.remove("excludeApps");
         m.remove("minIntervalSecs");
-        for k in ["enabled", "paused", "afkSecs", "intervalSecs", "exclude", "redactTitles", "retentionDays", "rules", "goals", "autoJournal", "favicons"] {
+        m.remove("intervalSecs");
+        m.insert("tickSecs".into(), json!(load_config(c).interval_secs));
+        for k in ["enabled", "paused", "afkSecs", "exclude", "redactTitles", "retentionDays", "rules", "goals", "autoJournal", "favicons"] {
             if let Some(v) = patch.get(k) {
                 m.insert(k.into(), v.clone());
             }
+        }
+        if let Some(v) = patch.get("tickSecs").or_else(|| patch.get("intervalSecs")) {
+            m.insert("tickSecs".into(), v.clone());
         }
     }
     setting_put(c, CONFIG_KEY, &cur.to_string())?;
@@ -304,9 +329,17 @@ pub fn default_rules() -> Vec<Value> {
 
 /// Category for one span: user rules first, then defaults. `productive` | `neutral` | `distracting`.
 pub fn categorize(app: &str, title: &str, user_rules: &[Value]) -> &'static str {
+    let domain = if is_browser(app) { crate::sites::domain_from_title(title) } else { None };
+    categorize_site(app, title, domain.as_deref(), user_rules)
+}
+
+/// v1.4: like `categorize`, with the browser site's domain (site overrides are `field: "domain"`
+/// rules; `title` rules also look at the domain, so `x.com` / `youtube` rules keep working).
+pub fn categorize_site(app: &str, title: &str, domain: Option<&str>, user_rules: &[Value]) -> &'static str {
     let a = app.to_lowercase();
     let t = title.to_lowercase();
-    let site = if is_browser(app) { parse_browser_title(title).1.to_lowercase() } else { String::new() };
+    let d = domain.unwrap_or("").to_lowercase();
+    let site = if is_browser(app) { format!("{} {}", parse_browser_title(title).1.to_lowercase(), d) } else { String::new() };
     static DEFAULTS: OnceLock<Vec<Value>> = OnceLock::new();
     let defaults = DEFAULTS.get_or_init(default_rules);
     for r in user_rules.iter().chain(defaults.iter()) {
@@ -315,10 +348,11 @@ pub fn categorize(app: &str, title: &str, user_rules: &[Value]) -> &'static str 
             continue;
         }
         let hit = match r["field"].as_str().unwrap_or("any") {
+            "domain" => crate::sites::domain_matches(&d, &m),
             "appexact" => a == m,
             "app" => a.contains(&m),
             "title" => t.contains(&m) || site.contains(&m),
-            _ => a.contains(&m) || t.contains(&m),
+            _ => a.contains(&m) || t.contains(&m) || site.contains(&m),
         };
         if hit {
             return match r["cat"].as_str().unwrap_or("neutral") {
@@ -329,6 +363,16 @@ pub fn categorize(app: &str, title: &str, user_rules: &[Value]) -> &'static str 
         }
     }
     "neutral"
+}
+
+/// Category of a stored row (browser rows use their site's domain).
+pub fn row_cat(r: &Row, rules: &[Value]) -> &'static str {
+    if is_browser(&r.app) {
+        let d = crate::sites::span_domain(&r.domain, &r.title);
+        categorize_site(&r.app, &r.title, d.as_deref(), rules)
+    } else {
+        categorize(&r.app, &r.title, rules)
+    }
 }
 
 pub fn excluded(cfg: &Config, app: &str, title: &str) -> bool {
@@ -377,16 +421,16 @@ pub fn write_spans(c: &Connection, spans: &[Span]) -> Result<(), String> {
         if s.end <= s.start {
             continue;
         }
-        let last: Option<(i64, String, String, i64, i64)> = tx
-            .query_row(r#"SELECT "id","app","title","end","afk" FROM "TimeSpan" WHERE "focus"=0 ORDER BY "end" DESC LIMIT 1"#, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        let last: Option<(i64, String, String, i64, i64, String)> = tx
+            .query_row(r#"SELECT "id","app","title","end","afk","domain" FROM "TimeSpan" WHERE "focus"=0 ORDER BY "end" DESC LIMIT 1"#, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
             .optional()
             .map_err(|e| e.to_string())?;
         match last {
-            Some((id, app, title, end, afk)) if app == s.app && title == s.title && (afk != 0) == s.afk && s.start >= end - 1 && s.start - end <= 10_000 => {
+            Some((id, app, title, end, afk, domain)) if app == s.app && title == s.title && domain == s.domain && (afk != 0) == s.afk && s.start >= end - 1 && s.start - end <= 10_000 => {
                 tx.execute(r#"UPDATE "TimeSpan" SET "end"=?1 WHERE "id"=?2"#, params![s.end.max(end), id]).map_err(|e| e.to_string())?;
             }
             _ => {
-                tx.execute(r#"INSERT INTO "TimeSpan" ("app","title","start","end","afk","focus") VALUES (?1,?2,?3,?4,?5,0)"#, params![s.app, s.title, s.start, s.end, s.afk as i64])
+                tx.execute(r#"INSERT INTO "TimeSpan" ("app","title","start","end","afk","focus","domain") VALUES (?1,?2,?3,?4,?5,0,?6)"#, params![s.app, s.title, s.start, s.end, s.afk as i64, s.domain])
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -415,14 +459,14 @@ pub fn delete_range(c: &Connection, from: i64, to: i64) -> Result<usize, String>
     }
     let n = c.execute(r#"DELETE FROM "TimeSpan" WHERE "start" >= ?1 AND "end" <= ?2"#, params![from, to]).map_err(|e| e.to_string())?;
     // span covering the whole range → split in two
-    let covering: Vec<(i64, String, String, i64, i64, i64)> = {
-        let mut st = c.prepare(r#"SELECT "id","app","title","end","afk","focus" FROM "TimeSpan" WHERE "start" < ?1 AND "end" > ?2"#).map_err(|e| e.to_string())?;
-        let rows = st.query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).map_err(|e| e.to_string())?;
+    let covering: Vec<(i64, String, String, i64, i64, i64, String)> = {
+        let mut st = c.prepare(r#"SELECT "id","app","title","end","afk","focus","domain" FROM "TimeSpan" WHERE "start" < ?1 AND "end" > ?2"#).map_err(|e| e.to_string())?;
+        let rows = st.query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))).map_err(|e| e.to_string())?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    for (id, app, title, end, afk, focus) in covering {
+    for (id, app, title, end, afk, focus, domain) in covering {
         c.execute(r#"UPDATE "TimeSpan" SET "end"=?1 WHERE "id"=?2"#, params![from, id]).map_err(|e| e.to_string())?;
-        c.execute(r#"INSERT INTO "TimeSpan" ("app","title","start","end","afk","focus") VALUES (?1,?2,?3,?4,?5,?6)"#, params![app, title, to, end, afk, focus]).map_err(|e| e.to_string())?;
+        c.execute(r#"INSERT INTO "TimeSpan" ("app","title","start","end","afk","focus","domain") VALUES (?1,?2,?3,?4,?5,?6,?7)"#, params![app, title, to, end, afk, focus, domain]).map_err(|e| e.to_string())?;
     }
     c.execute(r#"UPDATE "TimeSpan" SET "end"=?1 WHERE "start" < ?1 AND "end" > ?1 AND "end" <= ?2"#, params![from, to]).map_err(|e| e.to_string())?;
     c.execute(r#"UPDATE "TimeSpan" SET "start"=?2 WHERE "start" >= ?1 AND "start" < ?2 AND "end" > ?2"#, params![from, to]).map_err(|e| e.to_string())?;
@@ -437,24 +481,29 @@ pub struct Row {
     pub end: i64,
     pub afk: bool,
     pub focus: bool,
+    pub domain: String,
 }
 
-/// Spans overlapping [from, to), clipped to it. Includes the live (unflushed) span.
+/// Spans overlapping [from, to), clipped to it. Includes what the tracker has not written yet:
+/// 1.3 only added the open span, so every span closed in the last minute (a tab switch, an app
+/// switch) was missing from the dashboard until the batch write — tracking looked frozen.
 pub fn spans_in(c: &Connection, from: i64, to: i64) -> Vec<Row> {
     let mut out: Vec<Row> = vec![];
-    if let Ok(mut st) = c.prepare(r#"SELECT "app","title","start","end","afk","focus" FROM "TimeSpan" WHERE "end" > ?1 AND "start" < ?2 ORDER BY "start" ASC"#) {
+    if let Ok(mut st) = c.prepare(r#"SELECT "app","title","start","end","afk","focus","domain" FROM "TimeSpan" WHERE "end" > ?1 AND "start" < ?2 ORDER BY "start" ASC"#) {
         if let Ok(rows) = st.query_map(params![from, to], |r| {
-            Ok(Row { app: r.get(0)?, title: r.get(1)?, start: r.get(2)?, end: r.get(3)?, afk: r.get::<_, i64>(4)? != 0, focus: r.get::<_, i64>(5)? != 0 })
+            Ok(Row { app: r.get(0)?, title: r.get(1)?, start: r.get(2)?, end: r.get(3)?, afk: r.get::<_, i64>(4)? != 0, focus: r.get::<_, i64>(5)? != 0, domain: r.get(6)? })
         }) {
             out = rows.filter_map(|r| r.ok()).collect();
         }
     }
-    if let Some(l) = live().lock().ok().and_then(|g| g.pending.clone()) {
-        let last_end = out.iter().filter(|r| !r.focus).map(|r| r.end).max().unwrap_or(i64::MIN);
+    let unwritten: Vec<Span> = live().lock().ok().map(|g| g.unflushed.iter().cloned().chain(g.pending.clone()).collect()).unwrap_or_default();
+    let mut last_end = out.iter().filter(|r| !r.focus).map(|r| r.end).max().unwrap_or(i64::MIN);
+    for l in unwritten {
         if l.end > from && l.start < to {
             let start = l.start.max(last_end);
             if l.end > start {
-                out.push(Row { app: l.app, title: l.title, start, end: l.end, afk: l.afk, focus: false });
+                last_end = l.end;
+                out.push(Row { app: l.app, title: l.title, start, end: l.end, afk: l.afk, focus: false, domain: l.domain });
             }
         }
     }
@@ -477,7 +526,38 @@ pub struct Live {
     pub running: bool,
     /// the open span not yet written to SQLite
     pub pending: Option<Span>,
+    /// v1.4: closed spans waiting for the batch write (so the dashboard is live)
+    pub unflushed: Vec<Span>,
+    /// v1.4: browser site of the foreground tab
+    pub domain: String,
 }
+
+// ------------------------------------------------------------------ v1.4: live events
+
+type Listener = Box<dyn Fn(&str, Value) + Send + Sync>;
+static LISTENER: OnceLock<Listener> = OnceLock::new();
+
+/// The desktop shell registers this to forward tracker events to the UI (`timelens-live` on a
+/// foreground change, `shield-bounce` / `shield-nudge` when a rule fires). Set once.
+pub fn set_listener(f: impl Fn(&str, Value) + Send + Sync + 'static) {
+    let _ = LISTENER.set(Box::new(f));
+}
+
+fn emit(kind: &str, v: Value) {
+    if let Some(f) = LISTENER.get() {
+        // a panicking listener must never take the tracker thread down
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(kind, v)));
+    }
+}
+
+/// Wake the tracker now (the Windows foreground hook calls this on every window switch).
+pub fn wake() {
+    WAKE.store(true, Ordering::SeqCst);
+    if let Some(t) = TRACKER_THREAD.get() {
+        t.unpark();
+    }
+}
+static WAKE: AtomicBool = AtomicBool::new(false);
 
 pub fn live() -> &'static Mutex<Live> {
     static L: OnceLock<Mutex<Live>> = OnceLock::new();
@@ -563,7 +643,9 @@ pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
     let rows: Vec<Row> = spans_in(c, from, to).into_iter().filter(|r| r.focus || r.afk || !excluded(&cfg, &r.app, &r.title)).collect();
     let mut per_app: HashMap<String, (i64, &'static str)> = HashMap::new();
     let mut per_title: HashMap<(String, String), i64> = HashMap::new();
-    let mut per_site: HashMap<String, (i64, &'static str, String)> = HashMap::new();
+    // v1.4: websites are grouped by DOMAIN (key = domain, or the title's site label when unknown)
+    let mut per_site: HashMap<String, (i64, &'static str, String, Option<String>, HashMap<String, i64>)> = HashMap::new();
+    let site_over = crate::sites::site_cats(c);
     let mut cats: HashMap<&'static str, i64> = HashMap::from([("productive", 0), ("neutral", 0), ("distracting", 0)]);
     let mut hourly = [0i64; 24];
     let mut hourly_prod = [0i64; 24];
@@ -588,17 +670,27 @@ pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
         }
         first = first.min(r.start);
         last = last.max(r.end);
-        let cat = categorize(&r.app, &r.title, &cfg.all_rules);
+        let browser = is_browser(&r.app);
+        let domain = if browser { crate::sites::span_domain(&r.domain, &r.title) } else { None };
+        let cat = categorize_site(&r.app, &r.title, domain.as_deref(), &cfg.all_rules);
         cat_rows.push((r.start, r.end, cat));
         active += secs;
         *cats.entry(cat).or_default() += secs;
-        let e = per_app.entry(r.app.clone()).or_insert((0, cat));
+        // an app's own category (the Apps tab) ignores which site a browser showed
+        let app_cat = if browser { categorize(&r.app, "", &cfg.all_rules) } else { cat };
+        let e = per_app.entry(r.app.clone()).or_insert((0, app_cat));
         e.0 += secs;
-        let browser = is_browser(&r.app);
         let label = if browser { parse_browser_title(&r.title).1 } else { crate::util::take(&r.title, 80) };
-        if browser && !label.is_empty() {
-            let e = per_site.entry(label.clone()).or_insert((0, cat, r.app.clone()));
+        if browser && (domain.is_some() || !label.is_empty()) {
+            let key = domain.clone().unwrap_or_else(|| label.clone());
+            let e = per_site.entry(key).or_insert_with(|| (0, cat, r.app.clone(), domain.clone(), HashMap::new()));
             e.0 += secs;
+            if !cfg.redact_titles {
+                let page = parse_browser_title(&r.title).0;
+                if !page.is_empty() {
+                    *e.4.entry(crate::util::take(&page, 120)).or_default() += secs;
+                }
+            }
         }
         *per_title.entry((r.app.clone(), label)).or_default() += secs;
         // hourly buckets (split across hour edges)
@@ -629,7 +721,17 @@ pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
     titles.truncate(15);
     let mut sites: Vec<Value> = per_site
         .into_iter()
-        .map(|(site, (secs, cat, browser))| json!({ "site": site, "domain": crate::tlapps::domain_for_site(&site), "secs": secs, "cat": cat, "browser": browser }))
+        .map(|(key, (secs, cat, browser, domain, titles))| {
+            let mut t: Vec<(String, i64)> = titles.into_iter().collect();
+            t.sort_by(|a, b| b.1.cmp(&a.1));
+            t.truncate(12);
+            let name = domain.as_deref().map(crate::sites::site_name).unwrap_or_else(|| key.clone());
+            let over = domain.as_deref().and_then(|d| site_over.get(d)).and_then(|v| v.as_str()).map(String::from);
+            json!({
+                "site": name, "domain": domain, "secs": secs, "cat": cat, "browser": browser, "override": over,
+                "titles": t.into_iter().map(|(title, secs)| json!({ "title": title, "secs": secs })).collect::<Vec<_>>(),
+            })
+        })
         .collect();
     sites.sort_by(|a, b| b["secs"].as_i64().cmp(&a["secs"].as_i64()));
     let score = score_of(cats["productive"], cats["neutral"], active);
@@ -648,7 +750,7 @@ pub fn summary(c: &Connection, from: i64, to: i64) -> Value {
         "categories": { "productive": cats["productive"], "neutral": cats["neutral"], "distracting": cats["distracting"] },
         "score": score, "apps": apps, "titles": titles, "sites": sites, "hourly": hourly.to_vec(), "hourlyProductive": hourly_prod.to_vec(),
         "timeline": timeline, "topApp": apps.first().map(|a| a["app"].clone()).unwrap_or(Value::Null), "peakHour": peak,
-        "current": { "app": l.app, "title": if cfg.redact_titles { String::new() } else { l.title }, "afk": l.afk, "since": l.since, "running": l.running },
+        "current": { "app": l.app, "title": if cfg.redact_titles { String::new() } else { l.title }, "domain": if l.domain.is_empty() { Value::Null } else { json!(l.domain) }, "afk": l.afk, "since": l.since, "running": l.running },
         "paused": cfg.paused, "enabled": cfg.enabled, "intervalSecs": cfg.interval_secs,
     })
 }
@@ -678,7 +780,7 @@ pub fn history(c: &Connection, days: i64, now: i64) -> Value {
     }
     let mut heat = vec![vec![0i64; 24]; 7];
     for r in rows.iter().filter(|r| !r.afk && !r.focus && !excluded(&cfg, &r.app, &r.title)) {
-        let cat = categorize(&r.app, &r.title, &cfg.all_rules);
+        let cat = row_cat(r, &cfg.all_rules);
         let secs = (r.end - r.start) / 1000;
         if let Some(i) = idx.get(&local_day_key(r.start)) {
             let e = &mut by_day[*i];
@@ -840,14 +942,14 @@ pub fn export(c: &Connection, from: i64, to: i64, format: &str) -> (String, Stri
     if format == "json" {
         let v: Vec<Value> = rows
             .iter()
-            .map(|r| json!({ "app": r.app, "title": r.title, "start": r.start, "end": r.end, "secs": (r.end - r.start) / 1000, "afk": r.afk, "focus": r.focus, "category": if r.afk { "afk" } else { categorize(&r.app, &r.title, &cfg.all_rules) } }))
+            .map(|r| json!({ "app": r.app, "title": r.title, "start": r.start, "end": r.end, "secs": (r.end - r.start) / 1000, "afk": r.afk, "focus": r.focus, "category": if r.afk { "afk" } else { row_cat(r, &cfg.all_rules) } }))
             .collect();
         return ("application/json".into(), serde_json::to_string_pretty(&v).unwrap_or_default());
     }
     let esc = |x: &str| format!("\"{}\"", x.replace('"', "\"\""));
     let mut out = String::from("app,title,start,end,secs,afk,focus,category\n");
     for r in rows {
-        let cat = if r.afk { "afk" } else { categorize(&r.app, &r.title, &cfg.all_rules) };
+        let cat = if r.afk { "afk" } else { row_cat(r, &cfg.all_rules) };
         out.push_str(&format!("{},{},{},{},{},{},{},{}\n", esc(&r.app), esc(&r.title), crate::db::iso(r.start), crate::db::iso(r.end), (r.end - r.start) / 1000, r.afk, r.focus, cat));
     }
     ("text/csv".into(), out)
@@ -883,7 +985,7 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
         if start >= now || end <= start {
             continue;
         }
-        spans.push(Span { app: app.to_string(), title: title.to_string(), start, end: end.min(now), afk: *app == "AFK" });
+        spans.push(Span { app: app.to_string(), title: title.to_string(), start, end: end.min(now), afk: *app == "AFK", domain: String::new() });
     }
     let n = spans.len();
     // idempotent: seeding again (tests, the "load demo" button) replaces the earlier demo rows
@@ -915,7 +1017,7 @@ pub fn seed_demo(c: &Connection, now: i64) -> Result<usize, String> {
     let _ = c.execute(r#"INSERT OR IGNORE INTO "TimelensApp" ("app","firstSeen","lastSeen") VALUES ('Nook',?1,?1)"#, params![now]);
     // a focus session + a productive yesterday for the streak
     let _ = add_focus(c, at(9 * 60), at(9 * 60 + 25), "Pomodoro");
-    write_spans(c, &[Span { app: "VS Code".into(), title: "yesterday — nook".into(), start: y + 10 * 3_600_000, end: y + 13 * 3_600_000, afk: false }])?;
+    write_spans(c, &[Span { app: "VS Code".into(), title: "yesterday — nook".into(), start: y + 10 * 3_600_000, end: y + 13 * 3_600_000, afk: false, domain: String::new() }])?;
     Ok(n)
 }
 
@@ -946,12 +1048,23 @@ pub struct Tracker {
     known: HashMap<String, String>,
     /// how long the last step asked to sleep (ms)
     pub next_sleep_ms: i64,
+    /// v1.4: the rules engine + today's per-app/site usage (for limits)
+    pub shield: crate::shield::Engine,
+    pub usage: crate::shield::Usage,
+    /// set when `usage` must be (re)loaded from the vault (start, new day, rules changed)
+    pub needs_usage: bool,
+    pub enforcer: Option<Box<dyn crate::shield::Enforcer>>,
+    /// last (app, domain, afk) announced to the UI, and when a title change was last announced
+    announced: (String, String, bool),
+    announced_title_at: i64,
+    /// when usage was last counted (ms) — early wake-ups must not double count
+    usage_at: i64,
 }
 
 impl Tracker {
     pub fn new(cfg: Config) -> Self {
         Tracker {
-            merger: Merger::new(cfg.interval_secs as i64 * 1000),
+            merger: Merger::new(cfg.interval_secs.max(MIN_INTERVAL_SECS) as i64 * 1000),
             buffer: vec![],
             last_flush: Instant::now(),
             cfg,
@@ -959,6 +1072,13 @@ impl Tracker {
             seen: vec![],
             known: HashMap::new(),
             next_sleep_ms: DEFAULT_INTERVAL_SECS as i64 * 1000,
+            shield: crate::shield::Engine::default(),
+            usage: crate::shield::Usage::default(),
+            needs_usage: true,
+            enforcer: None,
+            announced: (String::new(), String::new(), false),
+            announced_title_at: 0,
+            usage_at: 0,
         }
     }
 
@@ -966,15 +1086,23 @@ impl Tracker {
         self.cfg.interval_secs.max(MIN_INTERVAL_SECS) as i64 * 1000
     }
 
-    /// One sampling step at time `ts`. Pure apart from the sampler — unit-tested with a mock.
-    /// Sets `next_sleep_ms`: the normal interval while active, a long back-off while AFK,
-    /// locked, paused or disabled.
+    /// A span closed: queue it for the batch write and show it on the dashboard right away.
+    fn closed(&mut self, s: Span) {
+        if let Ok(mut l) = live().lock() {
+            l.unflushed.push(s.clone());
+        }
+        self.buffer.push(s);
+    }
+
+    /// One sampling step at time `ts`. Pure apart from the sampler (and the enforcer, when set) —
+    /// unit-tested with mocks. Sets `next_sleep_ms`: the 1 s tick while active, a long back-off
+    /// while AFK, locked, paused or disabled.
     pub fn step(&mut self, sampler: &mut dyn Sampler, ts: i64) {
         self.ticks += 1;
         let interval = self.interval_ms();
         if !self.cfg.enabled || self.cfg.paused {
             if let Some(s) = self.merger.close() {
-                self.buffer.push(s);
+                self.closed(s);
             }
             if let Ok(mut l) = live().lock() {
                 l.running = false;
@@ -995,32 +1123,98 @@ impl Tracker {
                 self.seen.push((app, s.exe.clone(), ts));
             }
         }
-        let classified = raw.and_then(|s| classify_sample(&self.cfg, &s));
+        let classified = raw.as_ref().and_then(|s| classify_sample(&self.cfg, s).map(|(a, t, afk)| {
+            // v1.4: the site's domain — the address bar when the sampler could read it, else the title
+            let domain = if !afk && is_browser(&a) { crate::sites::host_of(&s.url).or_else(|| crate::sites::domain_from_title(&s.title)).unwrap_or_default() } else { String::new() };
+            (a, t, afk, domain)
+        }));
         match classified {
-            Some((app, title, afk)) => {
-                if let Some(s) = self.merger.push_for(&app, &title, afk, ts, dur) {
-                    self.buffer.push(s);
+            Some((app, title, afk, domain)) => {
+                if let Some(s) = self.merger.push_site(&app, &title, &domain, afk, ts, dur) {
+                    self.closed(s);
                 }
+                let mut since = ts;
                 if let Ok(mut l) = live().lock() {
-                    if l.app != app || l.afk != afk {
+                    if l.app != app || l.afk != afk || l.domain != domain {
                         l.since = ts;
                     }
-                    l.app = app;
-                    l.title = title;
+                    since = l.since;
+                    l.app = app.clone();
+                    l.title = title.clone();
+                    l.domain = domain.clone();
                     l.afk = afk;
                     l.running = true;
                     l.pending = self.merger.current().cloned();
                 }
+                self.announce(&app, &title, &domain, afk, since, ts);
+                if !afk {
+                    self.enforce(raw.as_ref(), &app, &title, &domain, ts, dur);
+                }
             }
             None => {
                 if let Some(s) = self.merger.close() {
-                    self.buffer.push(s);
+                    self.closed(s);
                 }
                 if let Ok(mut l) = live().lock() {
                     l.pending = None;
                 }
             }
         }
+    }
+
+    /// Tell the UI about a foreground change (app / site / AFK at once; title changes at most
+    /// every 5 s — Discord & co. rewrite their titles constantly).
+    fn announce(&mut self, app: &str, title: &str, domain: &str, afk: bool, since: i64, ts: i64) {
+        let key = (app.to_string(), domain.to_string(), afk);
+        let changed = key != self.announced;
+        if !changed && ts - self.announced_title_at < 5_000 {
+            return;
+        }
+        self.announced = key;
+        self.announced_title_at = ts;
+        if changed || self.ticks % 5 == 0 {
+            let title = if self.cfg.redact_titles { "" } else { title };
+            emit("timelens-live", json!({ "app": app, "title": title, "domain": if domain.is_empty() { Value::Null } else { json!(domain) }, "afk": afk, "since": since, "changed": changed }));
+        }
+    }
+
+    /// Shield: judge the foreground sample against the rules and bounce it when needed.
+    fn enforce(&mut self, raw: Option<&Sample>, app: &str, title: &str, domain: &str, ts: i64, dur: i64) {
+        if !self.shield.rules.active() {
+            return;
+        }
+        let day = local_day_key(ts);
+        if self.usage.day != day {
+            self.usage = crate::shield::Usage { day, ..Default::default() };
+            self.needs_usage = true;
+        }
+        let d = (!domain.is_empty()).then_some(domain);
+        // count real elapsed time (a foreground wake-up between ticks must not add a whole tick)
+        let elapsed = if self.usage_at == 0 { dur } else { (ts - self.usage_at).clamp(0, dur) };
+        let whole = (elapsed + 500) / 1000;
+        if whole > 0 {
+            self.usage.add(app, d, whole);
+            self.usage_at = ts;
+        } else if self.usage_at == 0 {
+            self.usage_at = ts;
+        }
+        let Some(s) = raw else { return };
+        let fg = crate::shield::Fg { app: app.to_string(), exe: s.exe.clone(), domain: d.map(String::from), browser: is_browser(app), cat: categorize_site(app, title, d, &self.cfg.all_rules) };
+        let Some(enforcer) = self.enforcer.as_mut() else { return };
+        if let Some(ev) = self.shield.step(&fg, s.hwnd, s.pid, &self.usage, local_hour(ts) as u32, ts, enforcer.as_mut()) {
+            let kind = if ev["type"] == "bounce" { "shield-bounce" } else { "shield-nudge" };
+            if let Ok(mut st) = shield_state().lock() {
+                st.bounced_today = self.shield.bounced_today;
+                st.last_event = self.shield.last_event.clone();
+            }
+            emit(kind, ev);
+        }
+    }
+
+    /// (Re)load today's usage for the Shield's daily limits.
+    pub fn prime_usage(&mut self, c: &Connection, now: i64) {
+        self.usage = usage_today(c, now);
+        self.needs_usage = false;
     }
 
     /// Batch writes: once a minute (or when a lot piled up). Never per sample.
@@ -1049,15 +1243,62 @@ impl Tracker {
         if write_spans(&c, &spans).is_err() {
             log::warn!("timelens: write failed, dropping {} spans", spans.len());
         }
+        // written (or dropped): no longer "unflushed" for the dashboard
+        if let Ok(mut l) = live().lock() {
+            l.unflushed.clear();
+        }
         self.last_flush = Instant::now();
     }
+}
+
+/// Today's tracked seconds per app / site (Shield limits, the Rules page bars).
+pub fn usage_today(c: &Connection, now: i64) -> crate::shield::Usage {
+    let mut u = crate::shield::Usage { day: local_day_key(now), ..Default::default() };
+    for r in spans_in(c, local_day_start(now), now + 1).into_iter().filter(|r| !r.afk && !r.focus) {
+        let d = if is_browser(&r.app) { crate::sites::span_domain(&r.domain, &r.title) } else { None };
+        u.add(&r.app, d.as_deref(), (r.end - r.start) / 1000);
+    }
+    u
+}
+
+/// What the Rules page shows about the engine.
+#[derive(Debug, Clone, Default)]
+pub struct ShieldState {
+    pub running: bool,
+    pub bounced_today: i64,
+    pub last_event: Option<Value>,
+    pub hosts: String,
+}
+
+pub fn shield_state() -> &'static Mutex<ShieldState> {
+    static S: OnceLock<Mutex<ShieldState>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(ShieldState::default()))
+}
+
+/// `/api/shield` — engine status + today's usage for every limit / block rule.
+pub fn shield_status(c: &Connection) -> Value {
+    let rules = crate::shield::load(c);
+    let now = now_ms();
+    let u = usage_today(c, now);
+    let st = shield_state().lock().map(|g| g.clone()).unwrap_or_default();
+    let usage: Map<String, Value> = rules.limits.iter().map(|(k, _)| k.clone()).chain(rules.blocks.iter().cloned()).map(|k| { let v = u.used_for(&k); (k, json!(v)) }).collect();
+    json!({
+        "on": rules.on, "active": rules.active(), "hasRules": rules.has_rules(), "running": st.running, "enforces": cfg!(windows),
+        "bouncedToday": st.bounced_today, "lastEvent": st.last_event, "hosts": st.hosts, "usage": usage,
+        "trackerPaused": load_config(c).paused,
+    })
 }
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Start the background tracker (once per process). The thread runs at the lowest priority
-/// (and EcoQoS on Windows 11) and parks between samples; `mark_config_dirty` wakes it.
-pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
+/// (and EcoQoS on Windows 11) and parks between samples; `mark_config_dirty` and the Windows
+/// foreground hook (`wake`) wake it.
+pub fn start(db: Db, sampler: Box<dyn Sampler>) {
+    start_with(db, sampler, crate::shield::platform_enforcer());
+}
+
+pub fn start_with(db: Db, mut sampler: Box<dyn Sampler>, enforcer: Box<dyn crate::shield::Enforcer>) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -1066,26 +1307,46 @@ pub fn start(db: Db, mut sampler: Box<dyn Sampler>) {
         .spawn(move || {
             let _ = TRACKER_THREAD.set(std::thread::current());
             lower_this_thread();
+            #[cfg(windows)]
+            win::start_foreground_hook(wake);
             let mut tracker = Tracker::new(load_config(&db.conn()));
+            tracker.enforcer = Some(enforcer);
             crate::tlapps::purge_demo_icons(&db.conn());
+            if let Ok(mut st) = shield_state().lock() {
+                st.running = true;
+            }
             loop {
-                if CONFIG_DIRTY.swap(false, Ordering::SeqCst) {
-                    let cfg = load_config(&db.conn());
-                    if cfg.interval_secs != tracker.cfg.interval_secs {
-                        if let Some(s) = tracker.merger.close() {
-                            tracker.buffer.push(s);
+                // a panic in one step (a weird window title, a poisoned lock) must not stop tracking
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if CONFIG_DIRTY.swap(false, Ordering::SeqCst) {
+                        let c = db.conn();
+                        let cfg = load_config(&c);
+                        if cfg.interval_secs != tracker.cfg.interval_secs {
+                            if let Some(s) = tracker.merger.close() {
+                                tracker.closed(s);
+                            }
+                            tracker.merger = Merger::new(cfg.interval_secs.max(MIN_INTERVAL_SECS) as i64 * 1000);
                         }
-                        tracker.merger = Merger::new(cfg.interval_secs.max(MIN_INTERVAL_SECS) as i64 * 1000);
+                        tracker.cfg = cfg;
+                        tracker.shield.rules = crate::shield::load(&c);
+                        tracker.needs_usage = true;
                     }
-                    tracker.cfg = cfg;
+                    if tracker.needs_usage && tracker.shield.rules.active() {
+                        let c = db.conn();
+                        tracker.prime_usage(&c, now_ms());
+                    }
+                    tracker.step(sampler.as_mut(), now_ms());
+                    if tracker.should_flush() || (tracker.cfg.paused && !tracker.buffer.is_empty()) {
+                        tracker.flush(&db);
+                    }
+                }));
+                if r.is_err() {
+                    log::error!("timelens: a tracker step panicked; continuing");
+                    tracker.next_sleep_ms = 5_000;
                 }
-                tracker.step(sampler.as_mut(), now_ms());
-                if tracker.should_flush() || (tracker.cfg.paused && !tracker.buffer.is_empty()) {
-                    tracker.flush(&db);
-                }
-                // park (not sleep) so a config change / resume wakes us immediately
-                let deadline = Instant::now() + Duration::from_millis(tracker.next_sleep_ms.max(1000) as u64);
-                while !CONFIG_DIRTY.load(Ordering::SeqCst) {
+                // park (not sleep) so a config change / foreground switch wakes us immediately
+                let deadline = Instant::now() + Duration::from_millis(tracker.next_sleep_ms.max(250) as u64);
+                while !CONFIG_DIRTY.load(Ordering::SeqCst) && !WAKE.swap(false, Ordering::SeqCst) {
                     let now = Instant::now();
                     if now >= deadline {
                         break;
@@ -1176,7 +1437,7 @@ mod x11 {
             let pid = run("xdotool", &["getactivewindow", "getwindowpid"]).unwrap_or_default();
             let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             let idle_ms = run("xprintidle", &[]).and_then(|s| s.parse().ok()).unwrap_or(0);
-            Some(Sample { exe, title, idle_ms, locked: false, pid: pid.parse().unwrap_or(0), hwnd: 0 })
+            Some(Sample { exe, title, idle_ms, locked: false, pid: pid.parse().unwrap_or(0), hwnd: 0, url: String::new() })
         }
     }
 }
@@ -1237,7 +1498,7 @@ pub fn route(c: &Connection, m: &str, rest: &[&str], b: &Map<String, Value>, q: 
                 .and_then(|v| v.as_array())
                 .map(|a| {
                     a.iter()
-                        .filter_map(|x| Some(Span { app: x["app"].as_str()?.to_string(), title: x["title"].as_str().unwrap_or("").to_string(), start: x["start"].as_i64()?, end: x["end"].as_i64()?, afk: x["afk"].as_bool().unwrap_or(false) }))
+                        .filter_map(|x| Some(Span { app: x["app"].as_str()?.to_string(), title: x["title"].as_str().unwrap_or("").to_string(), start: x["start"].as_i64()?, end: x["end"].as_i64()?, afk: x["afk"].as_bool().unwrap_or(false), domain: x["domain"].as_str().unwrap_or("").to_string() }))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1281,6 +1542,16 @@ pub fn route(c: &Connection, m: &str, rest: &[&str], b: &Map<String, Value>, q: 
             Ok(v) => R::json(v),
             Err(e) => R::err(400, &e),
         },
+        // v1.4: per-website category (productive / neutral / distracting / null = default)
+        ("PATCH", ["sites", domain]) | ("PUT", ["sites", domain]) => match crate::sites::set_site_cat(c, domain, b.get("category").and_then(|v| v.as_str())) {
+            Ok(v) => R::json(v),
+            Err(e) => R::err(400, &e),
+        },
+        ("GET", ["live"]) => {
+            let l = live().lock().map(|g| g.clone()).unwrap_or_default();
+            let cfg = load_config(c);
+            R::json(json!({ "app": l.app, "title": if cfg.redact_titles { String::new() } else { l.title }, "domain": if l.domain.is_empty() { Value::Null } else { json!(l.domain) }, "afk": l.afk, "since": l.since, "running": l.running, "paused": cfg.paused }))
+        }
         ("GET", ["icons"]) => R::json(crate::tlapps::icons_map(c)),
         ("GET", ["favicons"]) => R::json(crate::tlapps::favicons_map(c)),
         ("GET", ["sites"]) => {
@@ -1349,7 +1620,7 @@ mod tests {
         setting_put(&c, CONFIG_KEY, r#"{"intervalSecs":2}"#).unwrap();
         assert_eq!(load_config(&c).interval_secs, MIN_INTERVAL_SECS);
         let base = local_day_start(now_ms()) + 3_600_000;
-        write_spans(&c, &[Span { app: "VS Code".into(), title: "x".into(), start: base, end: base + 600_000, afk: false }]).unwrap();
+        write_spans(&c, &[Span { app: "VS Code".into(), title: "x".into(), start: base, end: base + 600_000, afk: false, domain: String::new() }]).unwrap();
         assert_eq!(summary(&c, base, base + 700_000)["categories"]["productive"], 600);
         let mut b = Map::new();
         b.insert("category".into(), json!("distracting"));
@@ -1381,7 +1652,7 @@ mod tests {
     }
 
     fn smp(exe: &str, title: &str, idle: u64) -> Sample {
-        Sample { exe: exe.into(), title: title.into(), idle_ms: idle, locked: false, pid: 1, hwnd: 1 }
+        Sample { exe: exe.into(), title: title.into(), idle_ms: idle, locked: false, pid: 1, hwnd: 1, url: String::new() }
     }
 
     #[test]
@@ -1470,7 +1741,7 @@ mod tests {
     fn write_spans_extends_continuing_rows() {
         let db = Db::open_in_memory().unwrap();
         let c = db.conn();
-        let s = |a: &str, st: i64, en: i64| Span { app: a.into(), title: String::new(), start: st, end: en, afk: false };
+        let s = |a: &str, st: i64, en: i64| Span { app: a.into(), title: String::new(), start: st, end: en, afk: false, domain: String::new() };
         write_spans(&c, &[s("A", 1000, 2000)]).unwrap();
         write_spans(&c, &[s("A", 2000, 5000), s("B", 5000, 6000)]).unwrap();
         let n: i64 = c.query_row(r#"SELECT COUNT(*) FROM "TimeSpan""#, [], |r| r.get(0)).unwrap();
@@ -1484,7 +1755,7 @@ mod tests {
         let now = now_ms();
         let day = local_day_start(now);
         let start = (now - 3 * 3_600_000).max(day);
-        let dist = Span { app: "Chrome".into(), title: "x - YouTube - Google Chrome".into(), start, end: (start + 70 * 60_000).min(now), afk: false };
+        let dist = Span { app: "Chrome".into(), title: "x - YouTube - Google Chrome".into(), start, end: (start + 70 * 60_000).min(now), afk: false, domain: String::new() };
         write_spans(&c, std::slice::from_ref(&dist)).unwrap();
         let goals = goals_status(&c, now);
         let lim = goals.iter().find(|g| g["target"] == "distracting").unwrap();
@@ -1494,7 +1765,7 @@ mod tests {
             assert_eq!(new_goal_alerts(&c, now).len(), 0, "alert fires once per day");
         }
         // retention
-        write_spans(&c, &[Span { app: "Old".into(), title: String::new(), start: now - 100 * 86_400_000, end: now - 100 * 86_400_000 + 1000, afk: false }]).unwrap();
+        write_spans(&c, &[Span { app: "Old".into(), title: String::new(), start: now - 100 * 86_400_000, end: now - 100 * 86_400_000 + 1000, afk: false, domain: String::new() }]).unwrap();
         assert_eq!(prune(&c, 90, now), 1);
         // delete range clips
         delete_range(&c, dist.start + 60_000, dist.start + 120_000).unwrap();
@@ -1502,7 +1773,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         // rewards: a productive yesterday → XP once
         let y = local_day_start(day - 3_600_000);
-        write_spans(&c, &[Span { app: "VS Code".into(), title: String::new(), start: y + 3_600_000, end: y + 4 * 3_600_000, afk: false }]).unwrap();
+        write_spans(&c, &[Span { app: "VS Code".into(), title: String::new(), start: y + 3_600_000, end: y + 4 * 3_600_000, afk: false, domain: String::new() }]).unwrap();
         let xp0: i64 = c.query_row(r#"SELECT "xp" FROM "Pet""#, [], |r| r.get(0)).unwrap();
         let r = claim_rewards(&c, now);
         assert!(r["xp"].as_i64().unwrap() >= 30);
@@ -1525,7 +1796,7 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let c = db.conn();
         let now = local_day_start(crate::db::now_ms()) + 20 * 3_600_000; // 20:00 local
-        write_spans(&c, &[Span { app: "Word".into(), title: "real work".into(), start: now - 7_200_000, end: now - 3_600_000, afk: false }]).unwrap();
+        write_spans(&c, &[Span { app: "Word".into(), title: "real work".into(), start: now - 7_200_000, end: now - 3_600_000, afk: false, domain: String::new() }]).unwrap();
         let count = |c: &Connection| c.query_row(r#"SELECT COUNT(*) FROM "TimeSpan""#, [], |r| r.get::<_, i64>(0)).unwrap();
         seed_demo(&c, now).unwrap();
         let once = count(&c);

@@ -10,6 +10,8 @@ pub mod db;
 pub mod ext;
 pub mod timelens;
 pub mod tlapps;
+pub mod sites;
+pub mod shield;
 pub mod mcp;
 pub mod server;
 pub mod team;

@@ -122,7 +122,10 @@ fn body_obj(req: &ApiRequest) -> Map<String, Value> {
 }
 
 /// Main entry: route a request to its handler.
-/// Fetch `https://<domain>/favicon.ico` once per domain (Privacy can turn this off) and cache it.
+/// Fetch each website's favicon once per domain and cache it in the vault (Privacy can turn this
+/// off). v1.4: 1.3 only tried `https://<domain>/favicon.ico`, which fails for many sites (x.com,
+/// discord.com redirect or serve HTML, subdomains have none) — now: Google's favicon service
+/// (64 px), DuckDuckGo's, then the site itself; the first real image wins.
 async fn favicons_fetch(ctx: &Ctx, b: &Map<String, Value>) -> ApiResponse {
     let now = crate::db::now_ms();
     let domains: Vec<String> = b.get("domains").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
@@ -137,15 +140,20 @@ async fn favicons_fetch(ctx: &Ctx, b: &Map<String, Value>) -> ApiResponse {
     let jobs = want.into_iter().map(|d| {
         let client = client.clone();
         async move {
-            let url = format!("https://{d}/favicon.ico");
-            let res = client.get(&url).timeout(std::time::Duration::from_secs(6)).send().await;
-            let data = match res {
-                Ok(r) if r.status().is_success() => match r.bytes().await {
-                    Ok(bytes) => crate::tlapps::favicon_mime(&bytes).map(|m| crate::tlapps::data_url(m, &bytes)).unwrap_or_default(),
-                    Err(_) => String::new(),
-                },
-                _ => String::new(),
-            };
+            let mut data = String::new();
+            for url in crate::tlapps::favicon_urls(&d) {
+                let res = client.get(&url).header("accept", "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8").timeout(std::time::Duration::from_secs(6)).send().await;
+                if let Ok(r) = res {
+                    if r.status().is_success() {
+                        if let Ok(bytes) = r.bytes().await {
+                            if let Some(m) = crate::tlapps::favicon_mime(&bytes) {
+                                data = crate::tlapps::data_url(m, &bytes);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             (d, data)
         }
     });
@@ -283,11 +291,22 @@ pub async fn handle(ctx: &Ctx, req: ApiRequest) -> ApiResponse {
         },
         ("PUT", ["rules"]) => match b.get("rules") {
             Some(r @ Value::Object(_)) => match setting_put(&c, "activity-rules", &r.to_string()) {
-                Ok(_) => R::ok(),
+                Ok(_) => {
+                    // v1.4: the Rust tracker enforces the rules — reload them now, and keep the
+                    // optional hosts-file block in sync (opt-in, needs admin; never fatal)
+                    crate::timelens::mark_config_dirty();
+                    let rules = crate::shield::parse(r);
+                    let hosts = crate::shield::sync_hosts(&rules, &crate::shield::hosts_path());
+                    if let Ok(mut st) = crate::timelens::shield_state().lock() {
+                        st.hosts = hosts.clone();
+                    }
+                    R::json(json!({ "ok": true, "hosts": hosts }))
+                }
                 Err(e) => R::err(500, &e),
             },
             _ => R::err(400, "rules object required"),
         },
+        ("GET", ["shield"]) => R::json(crate::timelens::shield_status(&c)),
         ("GET", ["games"]) => {
             let v = setting_get(&c, "custom-games").and_then(|x| serde_json::from_str::<Value>(&x).ok());
             R::json(match v {

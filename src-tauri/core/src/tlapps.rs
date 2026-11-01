@@ -476,6 +476,9 @@ pub fn valid_domain(d: &str) -> bool {
 
 /// Best-effort domain for a browser "site" label (the last part of a tab title).
 pub fn domain_for_site(site: &str) -> Option<String> {
+    if let Some(d) = crate::sites::domain_from_title(site) {
+        return Some(d);
+    }
     let l = site.trim().to_lowercase();
     if l.is_empty() {
         return None;
@@ -485,6 +488,15 @@ pub fn domain_for_site(site: &str) -> Option<String> {
     }
     let cand = l.trim_start_matches("www.").split(['/', ' ']).next().unwrap_or("");
     valid_domain(cand).then(|| cand.to_string())
+}
+
+/// Where to look for a domain's icon, best first.
+pub fn favicon_urls(domain: &str) -> Vec<String> {
+    vec![
+        format!("https://www.google.com/s2/favicons?domain={domain}&sz=64"),
+        format!("https://icons.duckduckgo.com/ip3/{domain}.ico"),
+        format!("https://{domain}/favicon.ico"),
+    ]
 }
 
 pub fn favicons_map(c: &Connection) -> Value {

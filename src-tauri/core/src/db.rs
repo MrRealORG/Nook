@@ -275,6 +275,12 @@ CREATE INDEX IF NOT EXISTS "TimeSpan_app_idx" ON "TimeSpan"("app");
 ALTER TABLE "Folder" ADD COLUMN "parentId" TEXT;
 ALTER TABLE "Folder" ADD COLUMN "pinned" INTEGER NOT NULL DEFAULT 0;
 "#,
+    // v1.4: Timelens stores the browser site's domain per span (address bar / title mapping), and
+    // favicon lookups that failed under 1.3's /favicon.ico-only fetch get one fresh try
+    r#"
+ALTER TABLE "TimeSpan" ADD COLUMN "domain" TEXT NOT NULL DEFAULT '';
+DELETE FROM "TimelensFavicon" WHERE "data" = '';
+"#,
 ];
 
 impl Db {
