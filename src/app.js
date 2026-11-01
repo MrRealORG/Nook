@@ -840,6 +840,7 @@ function renderEditorToolbar() {
   $('#btn-fav').innerHTML = ico(n && n.favorite ? 'starFill' : 'star');
   $('#btn-fav').classList.toggle('on-fav', !!(n && n.favorite));
   $('#btn-duplicate').innerHTML = ico('copy');
+  $('#btn-copymd').innerHTML = ico('md'); // v0.20 — copy the note as Markdown to the clipboard
   $('#btn-ai').innerHTML = ico('sparkle');
   $('#btn-image').innerHTML = ico('image');
   $('#btn-preview').innerHTML = ico('eye');
@@ -849,7 +850,7 @@ function renderEditorToolbar() {
   $('#btn-export').innerHTML = ico('export');
   $('#btn-trash').innerHTML = ico('trash');
 
-  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-ai', '#btn-image', '#btn-preview', '#btn-zen', '#btn-export', '#btn-trash'].forEach((s) => {
+  ['#btn-pin', '#btn-fav', '#btn-duplicate', '#btn-copymd', '#btn-ai', '#btn-image', '#btn-preview', '#btn-zen', '#btn-export', '#btn-trash'].forEach((s) => {
     $(s).style.display = editable ? '' : 'none';
   });
   $('.ed-folder-wrap').style.display = editable ? '' : 'none';
@@ -1016,6 +1017,10 @@ function mdAction(kind) {
   } else if (kind === 'code') {
     const t = sel || 'code';
     replace(`\`${t}\``, s + 1, s + 1 + t.length);
+  } else if (kind === 'mark') {
+    // v0.20 — ==highlight== wraps the selection
+    const t = sel || 'highlight';
+    replace(`==${t}==`, s + 2, s + 2 + t.length);
   } else if (kind === 'link') {
     const t = sel || 'link text';
     replace(`[${t}](https://)`, s + 1, s + 1 + t.length);
@@ -1544,6 +1549,7 @@ function setView(view, opts = {}) {
 
 async function selectNote(id) {
   if (state.currentNoteId === id) return;
+  localStorage.setItem('nook.lastNote', id); // v0.20 — remember for reopen-on-launch
   // coming from Tasks / Board / Recordings / Chat / Insights — bring the library back
   if (state.view.type === 'tasks' || state.view.type === 'board' || state.view.type === 'recordings' || state.view.type === 'chat' || state.view.type === 'insights') {
     setView({ type: 'all' });
@@ -2003,6 +2009,7 @@ function exportMenu(anchor) {
   const r = anchor.getBoundingClientRect();
   showMenu(r.right, r.bottom + 6, [
     { header: true, label: 'Export this note as…' },
+    { label: 'Copy as Markdown', icon: 'copy', fn: copyNoteMarkdown },
     { label: 'Markdown (.md)', icon: 'download', fn: exportCurrent },
     { label: 'Web page (.html)', icon: 'external', fn: exportCurrentHtml }
   ]);
@@ -2037,6 +2044,7 @@ async function openSettings(section) {
   const ctt = state.settings.closeToTray === '1';
   const asv = state.settings.autosave === '1';
   const spc = state.settings.spellcheck === '1';
+  const rlv = state.settings.reopenLast === '1'; // v0.20
   const den = state.settings.density || 'cozy';
   const auto = state.settings.autostart === '1';
   const dline = state.settings.edLine || '1.6';
@@ -2205,6 +2213,16 @@ async function openSettings(section) {
             </div>
             <label class="switch">
               <input type="checkbox" id="set-spellcheck"${spc ? ' checked' : ''} />
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-label">Reopen last note</div>
+              <div class="set-sub">Start with the note you had open when you closed the app.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-reopenlast"${rlv ? ' checked' : ''} />
               <span class="track"></span>
             </label>
           </div>
@@ -2380,7 +2398,7 @@ async function openSettings(section) {
           </div>
           <div class="about-box">
             ${frogSvg}
-            <div class="ab-text"><b>NookNook v0.19.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
+            <div class="ab-text"><b>NookNook v0.20.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
           </div>
         </div>
         </div>
@@ -2565,7 +2583,14 @@ async function openSettings(section) {
   root.querySelector('#set-spellcheck').addEventListener('change', async (e) => {
     state.settings.spellcheck = e.target.checked ? '1' : '0';
     await setSetting('spellcheck', state.settings.spellcheck);
-    applySettings();
+    toast(e.target.checked ? 'Spell check on' : 'Spell check off');
+  });
+
+  // v0.20 — reopen last note on launch
+  root.querySelector('#set-reopenlast').addEventListener('change', async (e) => {
+    state.settings.reopenLast = e.target.checked ? '1' : '0';
+    await setSetting('reopenLast', state.settings.reopenLast);
+    toast(e.target.checked ? 'Will reopen your last note on launch' : 'Launches on the most recent note');
   });
 
   root.querySelector('#set-deffolder').addEventListener('change', async (e) => {
@@ -2835,6 +2860,61 @@ async function openSettings(section) {
   });
 }
 
+// ---- v0.20 quick tools — date insert, copy as markdown, list collapse, font nudge ----
+
+function insertTodayDate() {
+  const ta = $('#ed-text');
+  if (!ta || ta.readOnly) return;
+  const s = ta.selectionStart;
+  const e = ta.selectionEnd;
+  const stamp = new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  ta.value = ta.value.slice(0, s) + stamp + ta.value.slice(e);
+  ta.focus();
+  const pos = s + stamp.length;
+  ta.setSelectionRange(pos, pos);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  toast(`Inserted ${stamp}`);
+}
+
+async function copyNoteMarkdown() {
+  const n = state.openNote;
+  if (!n || n.trashed) return;
+  const text = `# ${n.title || 'Untitled'}\n\n${n.content}`;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      toast('Note copied as Markdown', { icon: 'copy' });
+    } else {
+      throw new Error('no clipboard api');
+    }
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('Note copied as Markdown', { icon: 'copy' }); }
+    catch { toast('Copy failed'); }
+    document.body.removeChild(ta);
+  }
+}
+
+function toggleListPane() {
+  const hidden = document.body.classList.toggle('list-collapsed');
+  localStorage.setItem('nook.listHidden', hidden ? '1' : '0');
+  toast(hidden ? 'List pane hidden — Ctrl+Shift+B brings it back' : 'List pane back');
+}
+
+async function cycleEditorFont(dir) {
+  const steps = ['13', '15', '17', '19'];
+  const cur = Math.max(0, steps.indexOf(String(state.settings.fontSize)));
+  const next = steps[Math.min(steps.length - 1, Math.max(0, cur + dir))];
+  if (String(state.settings.fontSize) === next) { toast(`Editor text stays ${next}px`); return; }
+  state.settings.fontSize = next;
+  await setSetting('fontSize', next);
+  applySettings();
+  toast(`Editor text ${next}px`);
+}
+
 function openShortcuts() {
   const rows = [
     ['New note', 'Ctrl + N'],
@@ -2846,6 +2926,11 @@ function openShortcuts() {
     ['Preview markdown', 'Ctrl + E'],
     ['Find & replace', 'Ctrl + H'],
     ['Bold / Italic', 'Ctrl + B / I'],
+    ['Highlight selection', 'Toolbar ab button'],
+    ['Insert today\'s date', 'Ctrl + ;'],
+    ['Copy note as Markdown', 'Toolbar md icon'],
+    ['Bigger / smaller editor text', 'Ctrl + + / -'],
+    ['Collapse the list pane', 'Ctrl + Shift + B'],
     ['Duplicate note', 'Ctrl + D'],
     ['Zen mode (nothing but your words)', 'Ctrl + Shift + F'],
     ['Open settings', 'Ctrl + ,'],
@@ -2890,6 +2975,8 @@ async function loadSettings() {
   state.settings.defaultView = (await call('get_setting', { key: 'defaultView' })) || 'all';
   state.settings.zoom = (await call('get_setting', { key: 'zoom' })) || '100';
   state.settings.trashDays = (await call('get_setting', { key: 'trashDays' })) || '0';
+  // v0.20 — reopen the note you had open when you closed the app
+  state.settings.reopenLast = (await call('get_setting', { key: 'reopenLast' })) || '0';
   // v0.11 — accent color override ('' = theme default)
   state.settings.accent = (await call('get_setting', { key: 'accent' })) || '';
   // v0.15 — sound effects & ambient music
@@ -3008,6 +3095,7 @@ function wireShortcuts() {
         break;
       case 'b':
         e.preventDefault();
+        if (e.shiftKey) { toggleListPane(); break; } // Ctrl+Shift+B = collapse the list pane (v0.20)
         if (state.openNote && !state.preview && !state.openNote.trashed) mdAction('bold');
         break;
       case 'i':
@@ -3017,6 +3105,23 @@ function wireShortcuts() {
       case 'd':
         e.preventDefault();
         duplicateCurrent();
+        break;
+      case ';':
+        // v0.20 — Ctrl+; inserts today's date right at the cursor
+        e.preventDefault();
+        insertTodayDate();
+        break;
+      case '=':
+      case '+':
+        // v0.20 — Ctrl+= nudges editor text bigger
+        e.preventDefault();
+        cycleEditorFont(1);
+        break;
+      case '-':
+      case '_':
+        // v0.20 — Ctrl+- nudges editor text smaller
+        e.preventDefault();
+        cycleEditorFont(-1);
         break;
       case 's':
         e.preventDefault();
@@ -3150,6 +3255,7 @@ function wireEditor() {
   $('#btn-pin').addEventListener('click', togglePin);
   $('#btn-fav').addEventListener('click', toggleFavorite);
   $('#btn-duplicate').addEventListener('click', duplicateCurrent);
+  $('#btn-copymd').addEventListener('click', copyNoteMarkdown); // v0.20
   $('#btn-trash').addEventListener('click', trashCurrent);
   $('#btn-restore').addEventListener('click', restoreCurrent);
   $('#btn-purge').addEventListener('click', purgeCurrent);
@@ -6285,6 +6391,9 @@ async function boot() {
   await loadSettings();
   applySettings();
 
+  // v0.20 — restore the collapsed list pane from the last session
+  if (localStorage.getItem('nook.listHidden') === '1') document.body.classList.add('list-collapsed');
+
   await ensureWelcome();
   await refreshTasks();
   await refreshAll();
@@ -6306,7 +6415,10 @@ async function boot() {
 
   // land on the most recent note so the app never feels empty
   if (state.notes.length && state.view.type === 'all') {
-    selectNote(state.notes[0].id);
+    // v0.20 — reopen the exact note you had open last, if the setting allows
+    const lastId = state.settings.reopenLast === '1' ? localStorage.getItem('nook.lastNote') : null;
+    const target = (lastId && state.notes.some((n) => n.id === lastId)) ? lastId : state.notes[0].id;
+    selectNote(target);
   }
 
   // v0.15 — launch moment: let the splash breathe, then lift the curtain
