@@ -949,7 +949,7 @@ pub fn export(c: &Connection, from: i64, to: i64, format: &str) -> (String, Stri
     let esc = |x: &str| format!("\"{}\"", x.replace('"', "\"\""));
     let mut out = String::from("app,title,start,end,secs,afk,focus,category\n");
     for r in rows {
-        let cat = if r.afk { "afk" } else { row_cat(r, &cfg.all_rules) };
+        let cat = if r.afk { "afk" } else { row_cat(&r, &cfg.all_rules) };
         out.push_str(&format!("{},{},{},{},{},{},{},{}\n", esc(&r.app), esc(&r.title), crate::db::iso(r.start), crate::db::iso(r.end), (r.end - r.start) / 1000, r.afk, r.focus, cat));
     }
     ("text/csv".into(), out)
@@ -1703,14 +1703,17 @@ mod tests {
         let samples = vec![smp("Code.exe", "a", 0), smp("Code.exe", "a", 0), smp("Code.exe", "a", 0), smp("chrome.exe", "YouTube - Google Chrome", 0), smp("Code.exe", "a", 999_999)];
         let mut mock = Mock(samples, 0);
         let mut t = Tracker::new(Config::default());
-        assert_eq!(t.interval_ms(), 5000, "1.2 samples every 5 s by default");
+        assert_eq!(t.interval_ms(), 1000, "1.4 ticks every second (real-time dashboard + Shield)");
         let base = local_day_start(now_ms()) + 3_600_000;
         for i in 0..5 {
-            t.step(&mut mock, base + i * 5000);
+            t.step(&mut mock, base + i * 1000);
         }
         assert_eq!(t.next_sleep_ms, IDLE_SLEEP_SECS as i64 * 1000, "AFK backs off to a long sleep");
+        // v1.4: closed spans are visible before the batch write (the dashboard is live)
+        let live_rows = spans_in(&db.conn(), base - 1, base + 120_000);
+        assert!(live_rows.iter().any(|r| r.app == "Chrome" && r.domain == "youtube.com"), "unflushed spans show up right away");
         if let Some(s) = t.merger.close() {
-            t.buffer.push(s);
+            t.closed(s);
         }
         assert_eq!(t.seen.len(), 2, "two distinct apps registered once each");
         t.flush_with(&db, &NoIcons);
@@ -1718,12 +1721,13 @@ mod tests {
         let rows = spans_in(&c, base - 1, base + 120_000);
         assert_eq!(rows.iter().filter(|r| !r.focus).count(), 3);
         assert_eq!(rows[0].app, "VS Code");
-        assert_eq!(rows[0].end - rows[0].start, 15_000);
+        assert_eq!(rows[0].end - rows[0].start, 3_000);
+        assert_eq!(rows[1].domain, "youtube.com", "the site's domain is stored with the span");
         assert!(rows[2].afk);
-        assert_eq!(rows[2].end - rows[2].start, 30_000, "one AFK sample covers the whole back-off sleep");
+        assert_eq!(rows[2].end - rows[2].start, IDLE_SLEEP_SECS as i64 * 1000, "one AFK sample covers the whole back-off sleep");
         let s = summary(&c, base - 1, base + 120_000);
-        assert_eq!(s["activeSecs"], 20);
-        assert_eq!(s["categories"]["distracting"], 5);
+        assert_eq!(s["activeSecs"], 4);
+        assert_eq!(s["categories"]["distracting"], 1);
         assert_eq!(s["topApp"], "VS Code");
         assert_eq!(s["sites"][0]["site"], "YouTube");
         assert_eq!(s["sites"][0]["domain"], "youtube.com");
@@ -1735,6 +1739,61 @@ mod tests {
         assert_eq!(t.next_sleep_ms, IDLE_SLEEP_SECS as i64 * 1000);
         t.flush_with(&db, &NoIcons);
         assert_eq!(spans_in(&c, base - 1, base + 120_000).len(), 3);
+    }
+
+    #[test]
+    fn websites_grouped_by_domain_with_titles_and_site_categories() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn();
+        let base = local_day_start(now_ms()) + 3_600_000;
+        let sp = |title: &str, domain: &str, st: i64, mins: i64| Span { app: "Chrome".into(), title: title.into(), start: base + st * 60_000, end: base + (st + mins) * 60_000, afk: false, domain: domain.into() };
+        write_spans(&c, &[
+            sp("(1463) Discord | #general | Danger Zone - Google Chrome", "", 0, 10),
+            sp("(1461) Discord | #tommy | Danger Zone - Google Chrome", "", 10, 5),
+            sp("Chat · Hark - Google Chrome", "hark.com", 15, 4),
+            sp("Home / X - Google Chrome", "", 19, 6),
+        ]).unwrap();
+        let s = summary(&c, base, base + 3_600_000);
+        let sites = s["sites"].as_array().unwrap();
+        assert_eq!(sites.len(), 3, "one row per site, not per title: {sites:?}");
+        let discord = sites.iter().find(|x| x["domain"] == "discord.com").unwrap();
+        assert_eq!((discord["site"].as_str(), discord["secs"].as_i64()), (Some("Discord"), Some(900)));
+        assert_eq!(discord["titles"].as_array().unwrap().len(), 2, "page titles kept for the expander");
+        assert!(sites.iter().any(|x| x["domain"] == "hark.com" && x["site"] == "Hark"), "the address-bar domain wins over the title");
+        let x = sites.iter().find(|x| x["domain"] == "x.com").unwrap();
+        assert_eq!(x["cat"], "distracting");
+        // change a site's category: persisted, history recomputed
+        let mut b = Map::new();
+        b.insert("category".into(), json!("productive"));
+        let r = route(&c, "PATCH", &["sites", "x.com"], &b, &HashMap::new()).unwrap();
+        assert_eq!(r.status, 200);
+        let s = summary(&c, base, base + 3_600_000);
+        let x = s["sites"].as_array().unwrap().iter().find(|x| x["domain"] == "x.com").unwrap().clone();
+        assert_eq!((x["cat"].as_str(), x["override"].as_str()), (Some("productive"), Some("productive")));
+        assert_eq!(s["categories"]["distracting"], 0);
+    }
+
+    #[test]
+    fn tracker_enforces_shield_rules() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(Config::default());
+        t.shield.rules = crate::shield::parse(&json!({ "shieldOn": true, "blocklist": [{ "match": "reddit.com", "enabled": true }], "limits": { "steam": 1 } }));
+        t.enforcer = Some(Box::new(crate::shield::NoopEnforcer::default()));
+        t.prime_usage(&db.conn(), now_ms());
+        let base = local_day_start(now_ms()) + 3_600_000;
+        let mut s1 = smp("chrome.exe", "r/rust - Reddit - Google Chrome", 0);
+        s1.url = "https://www.reddit.com/r/rust/".into();
+        s1.hwnd = 77;
+        t.step(&mut Mock(vec![s1], 0), base);
+        assert_eq!(t.shield.bounced_today, 1, "a blocked site in the foreground is bounced by the tracker itself");
+        assert_eq!(t.shield.last_event.as_ref().unwrap()["action"], "close-tab");
+        // a daily limit trips after its budget
+        let mut m = Mock((0..70).map(|_| smp("steam.exe", "Store", 0)).collect(), 0);
+        for i in 0..70 {
+            t.step(&mut m, base + 10_000 + i * 1000);
+        }
+        let ev = t.shield.last_event.clone().unwrap();
+        assert_eq!((ev["reason"].as_str(), ev["app"].as_str()), (Some("limit"), Some("Steam")));
     }
 
     #[test]

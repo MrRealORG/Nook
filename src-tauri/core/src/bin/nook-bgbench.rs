@@ -16,7 +16,7 @@ impl Sampler for Synthetic {
         self.0 += 1;
         let apps = [("C:\\Program Files\\Microsoft VS Code\\Code.exe", "main.rs — nook"), ("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "Rust docs - Google Chrome"), ("C:\\Windows\\explorer.exe", "Downloads")];
         let (exe, title) = apps[(self.0 / 7) as usize % apps.len()];
-        Some(Sample { exe: exe.into(), title: title.into(), idle_ms: 500, locked: false, pid: 4242, hwnd: 0x1234 })
+        Some(Sample { exe: exe.into(), title: title.into(), idle_ms: 500, locked: false, pid: 4242, hwnd: 0x1234, url: String::new() })
     }
 }
 

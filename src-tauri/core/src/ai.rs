@@ -62,7 +62,8 @@ pub const PRESETS: &[Preset] = &[
     Preset { id: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-4o-mini", needs_key: true, key_url: "https://platform.openai.com/api-keys", models: &["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"] },
     Preset { id: "openrouter", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini", needs_key: true, key_url: "https://openrouter.ai/keys", models: &["openai/gpt-4o-mini", "meta-llama/llama-3.3-70b-instruct:free", "google/gemini-2.0-flash-exp:free", "deepseek/deepseek-chat-v3-0324:free"] },
     Preset { id: "groq", name: "Groq", base_url: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", needs_key: true, key_url: "https://console.groq.com/keys", models: &["llama-3.1-8b-instant", "llama-3.3-70b-versatile"] },
-    Preset { id: "gemini", name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.0-flash", needs_key: true, key_url: "https://aistudio.google.com/apikey", models: &["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash"] },
+    // v1.4: Gemini 1.5 models are retired (404 "model not found") — 2.5 Flash is the default
+    Preset { id: "gemini", name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash", needs_key: true, key_url: "https://aistudio.google.com/apikey", models: &["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-pro"] },
     Preset { id: "glm", name: "GLM / Zhipu (bigmodel.cn)", base_url: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", needs_key: true, key_url: "https://open.bigmodel.cn/usercenter/apikeys", models: &["glm-4-flash", "glm-4-flash-250414", "glm-4.5-flash", "glm-4-air", "glm-4-plus"] },
     Preset { id: "zai", name: "GLM / Z.ai (international)", base_url: "https://api.z.ai/api/paas/v4", model: "glm-4.5-flash", needs_key: true, key_url: "https://z.ai/manage-apikey/apikey-list", models: &["glm-4.5-flash", "glm-4-flash", "glm-4.5-air", "glm-4.5"] },
     Preset { id: "ollama", name: "Ollama (local)", base_url: "http://localhost:11434/v1", model: "llama3.2", needs_key: false, key_url: "https://ollama.com/download", models: &[] },
@@ -260,6 +261,11 @@ impl AiState {
         if let Some(t) = cfg.temperature {
             body["temperature"] = json!(t);
         }
+        // v1.4: GLM 4.5+ "think" for many seconds before the first token by default — for chat,
+        // notes and the agent's JSON tool calls that only adds latency
+        if matches!(cfg.provider.as_str(), "glm" | "zai") && (cfg.model.starts_with("glm-4.5") || cfg.model.starts_with("glm-4.6") || cfg.model.starts_with("glm-4.7")) {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
         let mut rq = if local { &self.local_client } else { &self.client }
             .post(cfg.endpoint())
             .timeout(Duration::from_secs(if local { 300 } else { 120 }))
@@ -273,14 +279,35 @@ impl AiState {
         rq
     }
 
+    /// Send with one retry on a transient failure (network, 429, 5xx) — free tiers rate-limit a lot.
+    async fn send_retry(&self, cfg: &AiConfig, msgs: &[ChatMsg], stream: bool) -> Result<reqwest::Response, String> {
+        let mut last = String::new();
+        for attempt in 0..2 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+            }
+            match self.request(cfg, msgs, stream).send().await {
+                Ok(r) if r.status().as_u16() == 429 || r.status().is_server_error() => {
+                    let code = r.status().as_u16();
+                    let body = r.text().await.unwrap_or_default();
+                    last = friendly_error(cfg, code, &error_message(&body));
+                }
+                Ok(r) if !r.status().is_success() => {
+                    let code = r.status().as_u16();
+                    let body = r.text().await.unwrap_or_default();
+                    return Err(friendly_error(cfg, code, &error_message(&body)));
+                }
+                Ok(r) => return Ok(r),
+                Err(e) => last = network_error(cfg, &e),
+            }
+        }
+        Err(last)
+    }
+
     /// One-shot completion → assistant text.
     pub async fn chat(&self, cfg: &AiConfig, msgs: &[ChatMsg]) -> Result<String, String> {
-        let res = self.request(cfg, msgs, false).send().await.map_err(|e| format!("network: {e}"))?;
-        let status = res.status();
+        let res = self.send_retry(cfg, msgs, false).await?;
         let text = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(format!("HTTP {}: {}", status.as_u16(), error_message(&text)));
-        }
         let v: Value = serde_json::from_str(&text).map_err(|e| format!("bad JSON from provider: {e}"))?;
         let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
         if content.is_empty() {
@@ -291,23 +318,20 @@ impl AiState {
 
     /// Streaming completion (SSE). Calls `on_delta` for every token chunk, returns the full text.
     pub async fn chat_stream<F: FnMut(&str) + Send>(&self, cfg: &AiConfig, msgs: &[ChatMsg], mut on_delta: F) -> Result<String, String> {
-        let res = self.request(cfg, msgs, true).send().await.map_err(|e| format!("network: {e}"))?;
-        let status = res.status();
-        if !status.is_success() {
-            let text = res.text().await.unwrap_or_default();
-            return Err(format!("HTTP {}: {}", status.as_u16(), error_message(&text)));
-        }
+        let res = self.send_retry(cfg, msgs, true).await?;
         let mut full = String::new();
-        let mut buf = String::new();
+        // v1.4: a BYTE buffer split on '\n' — 1.3 decoded every network chunk on its own, so a
+        // multi-byte character (Urdu, emoji) cut across two chunks turned into "\u{FFFD}" garbage
+        let mut buf: Vec<u8> = Vec::new();
         let mut stream = res.bytes_stream();
         let mut done = false;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| e.to_string())?;
-            buf.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(nl) = buf.find('\n') {
-                let line = buf[..nl].trim_end_matches('\r').to_string();
-                buf.drain(..=nl);
-                if let Some(delta) = parse_sse_line(&line, &mut done) {
+            let chunk = chunk.map_err(|e| if full.is_empty() { format!("network: {e}") } else { format!("the stream was cut off: {e}") })?;
+            buf.extend_from_slice(&chunk);
+            while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=nl).collect();
+                let line = String::from_utf8_lossy(&line);
+                if let Some(delta) = parse_sse_line(line.trim_end_matches(['\r', '\n']), &mut done) {
                     full.push_str(&delta);
                     on_delta(&delta);
                 }
@@ -316,8 +340,9 @@ impl AiState {
                 break;
             }
         }
-        if !done && !buf.trim().is_empty() {
-            if let Some(delta) = parse_sse_line(buf.trim(), &mut done) {
+        if !done && !buf.is_empty() {
+            let rest = String::from_utf8_lossy(&buf).to_string();
+            if let Some(delta) = parse_sse_line(rest.trim(), &mut done) {
                 full.push_str(&delta);
                 on_delta(&delta);
             }
@@ -347,6 +372,34 @@ pub fn parse_sse_line(line: &str, done: &mut bool) -> Option<String> {
         None
     } else {
         Some(d.to_string())
+    }
+}
+
+/// A provider error the user can act on.
+pub fn friendly_error(cfg: &AiConfig, code: u16, msg: &str) -> String {
+    let who = preset(&cfg.provider).map(|p| p.name).unwrap_or("the AI provider");
+    let hint = match code {
+        400 if msg.to_lowercase().contains("api key") => format!("{who} rejected the API key — check it in Settings → AI."),
+        401 | 403 => format!("{who} rejected the API key — check it in Settings → AI."),
+        404 => format!("{who} doesn't know the model \"{}\" — pick another model in Settings → AI.", cfg.model),
+        429 => format!("{who} is rate-limiting or the free quota is used up — wait a minute or switch model."),
+        500..=599 => format!("{who} is having trouble right now (HTTP {code}) — try again shortly."),
+        _ => format!("{who} answered HTTP {code}."),
+    };
+    if msg.is_empty() {
+        hint
+    } else {
+        format!("{hint} ({})", crate::util::take(msg, 180))
+    }
+}
+
+fn network_error(cfg: &AiConfig, e: &reqwest::Error) -> String {
+    if is_loopback_url(&cfg.base_url) {
+        format!("Can't reach {} at {} — is it running?", preset(&cfg.provider).map(|p| p.name).unwrap_or("the local model server"), cfg.base_url)
+    } else if e.is_timeout() {
+        "The AI provider took too long to answer — try again.".into()
+    } else {
+        format!("Can't reach the AI provider — check your internet connection. ({e})")
     }
 }
 
@@ -426,7 +479,31 @@ mod tests {
         // wrong key → readable error
         ai.save_config(&db, &json!({ "provider": "custom", "baseUrl": base, "model": "mock-1", "apiKey": "nope" })).unwrap();
         let err = ai.chat(&ai.config(&db), &msgs).await.unwrap_err();
-        assert!(err.contains("401") && err.contains("bad key"), "{err}");
+        assert!(err.contains("rejected the API key") && err.contains("bad key"), "{err}");
+    }
+
+    #[test]
+    fn friendly_errors_and_utf8_safe_streams() {
+        let cfg = AiConfig { provider: "gemini".into(), base_url: "https://x".into(), model: "gemini-1.5-flash".into(), ..Default::default() };
+        assert!(friendly_error(&cfg, 404, "models/gemini-1.5-flash is not found").contains("doesn't know the model \"gemini-1.5-flash\""));
+        assert!(friendly_error(&cfg, 429, "").contains("rate-limiting"));
+        assert!(friendly_error(&cfg, 401, "").starts_with("Google Gemini rejected the API key"));
+        // an Urdu delta split across two network chunks must come out whole
+        let line = "data: {\"choices\":[{\"delta\":{\"content\":\"سلام\"}}]}\n".as_bytes().to_vec();
+        let (a, b) = line.split_at(45);
+        let mut buf: Vec<u8> = vec![];
+        let mut out = String::new();
+        let mut done = false;
+        for chunk in [a, b] {
+            buf.extend_from_slice(chunk);
+            while let Some(nl) = buf.iter().position(|x| *x == b'\n') {
+                let l: Vec<u8> = buf.drain(..=nl).collect();
+                if let Some(d) = parse_sse_line(String::from_utf8_lossy(&l).trim_end(), &mut done) {
+                    out.push_str(&d);
+                }
+            }
+        }
+        assert_eq!(out, "سلام");
     }
 
     #[test]
@@ -480,7 +557,7 @@ mod tests {
         assert!(ai.list_models(&down).await.unwrap_err().contains("is it running"));
         // drafts: presets fill gaps, a stored key is reused, nothing is saved
         let g = ai.draft_config(&db, &json!({ "provider": "gemini" })).unwrap();
-        assert_eq!(g.model, "gemini-2.0-flash");
+        assert_eq!(g.model, "gemini-2.5-flash");
         assert!(g.base_url.contains("generativelanguage.googleapis.com"));
         assert!(!g.is_usable(), "gemini needs a key");
         ai.save_config(&db, &json!({ "provider": "glm", "apiKey": "zk-1" })).unwrap();
@@ -490,7 +567,7 @@ mod tests {
         assert!(ai.draft_config(&db, &json!({ "provider": "evil" })).is_err());
         let pc = ai.public_config(&db);
         let gem = pc["presets"].as_array().unwrap().iter().find(|p| p["id"] == "gemini").unwrap();
-        assert!(gem["models"].as_array().unwrap().iter().any(|m| m == "gemini-1.5-flash"));
+        assert!(gem["models"].as_array().unwrap().iter().any(|m| m == "gemini-2.5-flash-lite"));
         assert!(!pc.to_string().contains("zk-1"), "keys never leave the key store");
         assert_eq!(parse_ollama_tags(&json!({})), Vec::<String>::new());
     }
