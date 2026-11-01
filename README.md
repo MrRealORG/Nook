@@ -1,57 +1,84 @@
-# Nook 🐸
+<div align="center">
 
-A cozy little notes desk for your PC — **a real, native desktop app**.
+<img src="docs/icon.png" width="120" alt="NookNook icon"/>
 
-No servers. No accounts. No internet. No loading screens.
-Nook is built with **Rust + Tauri 2** and stores everything in a local **SQLite** database on your machine.
+# NookNook
 
-![Nook](public/favicon.svg)
+**Your cozy corner for notes — a 100% offline notes desk for Windows.**
 
-## Features
+[![Version](https://img.shields.io/badge/version-0.19.0-4f46e5?style=flat-square)](https://github.com/MrRealORG/Nook/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-2f7bf0?style=flat-square)](#)
+[![Size](https://img.shields.io/badge/installer-2.1%20MB-22c55e?style=flat-square)](#)
+[![License](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)](LICENSE)
+[![Website](https://img.shields.io/badge/website-mrrealorg.github.io%2FNookNook-5b8cff?style=flat-square)](https://mrrealorg.github.io/NookNook/)
 
-- **Notes** — write in Markdown with live preview, auto-save as you type
-- **Pin & favorite** — keep important notes on top
-- **Folders** — keep your nook tidy
-- **Tasks** — a simple to-do desk with a progress bar
-- **Search** — instant search across every note (Ctrl+F)
-- **Trash** — deleted notes rest here until you empty it
-- **Export** — save any note as a `.md` file
-- **Two themes** — Cozy Midnight & Paper Light
-- **Instant start** — native window, opens in under a second
-- **100% offline** — your notes never leave this PC
+</div>
 
-## Keyboard shortcuts
+![NookNook board](docs/screenshots/board.png)
 
-| Shortcut | Action |
+NookNook (formerly **Nook**) is a real native desktop app — notes, tasks, a kanban
+board, a meeting recorder and AI chat, all living in a local SQLite database on
+your own PC. No servers, no accounts, no telemetry, no internet required.
+The whole installer is **~2.1 MB**.
+
+## Highlights
+
+| | |
 | --- | --- |
-| `Ctrl+N` | New note |
-| `Ctrl+F` | Search notes |
-| `Ctrl+E` | Toggle Markdown preview |
-| `Ctrl+S` | Save now |
+| **Rich markdown notes** | Folders, tabs, tags, favorites, find & replace, wiki-links, tables, checklists, live preview, image paste & drop |
+| **Tasks that nag politely** | Due dates, priorities, repeat rules, subtasks with progress, real Windows notifications |
+| **Kanban board** | Buttery pointer-driven drag & drop, labels, card details, live progress |
+| **AI — bring your own key** | OpenRouter, Z.ai (GLM), OpenAI, Groq, Gemini, DeepSeek, Ollama, LM Studio or any OpenAI-compatible endpoint. Keys never leave the PC |
+| **Meeting recorder** | One-click .wav recording, fully offline, never freezes the UI |
+| **Insights** | Words written, day streaks, tasks done, 14-day activity chart, top tags |
+| **24 themes** | Dark & light looks, plus a synthesized sound design and generative lofi that never repeats |
+| **Backups & export** | One-click JSON backup & restore, export notes as Markdown or pretty HTML |
 
-## Download
+## Screenshots
 
-Grab the latest installer from the [Releases](../../releases) page.
-Run the setup, install, open — that's it. Nothing else is required.
+| Editor | AI Chat |
+| --- | --- |
+| ![Editor](docs/screenshots/editor.png) | ![AI chat](docs/screenshots/ai-chat.png) |
+| **Insights** | **Board** |
+| ![Insights](docs/screenshots/insights.png) | ![Board](docs/screenshots/board.png) |
+
+## Install
+
+1. Grab the latest **`NookNook_*_x64-setup.exe`** from
+   [Releases](https://github.com/MrRealORG/Nook/releases/latest).
+2. Run it — installs per-user, no admin rights needed.
+3. Pick your name and theme, start writing.
+
+Your data lives in `%APPDATA%\com.mrreal.nook` — open it from
+**Settings → Data → Open folder** anytime. It is yours.
 
 ## Build from source
 
+Prerequisites: **Node.js 18+**, **Rust** (stable, with the MSVC toolchain), **npm**.
+
 ```bash
+git clone https://github.com/MrRealORG/Nook.git
+cd Nook
 npm install
-npm run tauri build
+npm run tauri dev      # run in dev mode
+npm run tauri build    # produce installers in src-tauri/target/release/bundle
 ```
 
-Requires Node.js 18+ and the Rust toolchain. Installers land in
-`src-tauri/target/release/bundle/`.
+## Tech stack
 
-## Tech
+Tauri 2 (Rust) · vanilla JavaScript + Vite · SQLite (rusqlite) · Web Audio API ·
+zero external UI dependencies — the entire interface is hand-built.
 
-- **Rust** (Tauri 2) — window, storage, native dialogs, OS integration
-- **SQLite** (rusqlite, bundled) — notes, folders, tasks, settings
-- **Vanilla JS + Vite** — a small, fast UI with zero frameworks
+## Roadmap
 
-## Privacy
+NookNook is in **active daily development — 5 new features & improvements every
+day**. Watch the repo to follow along. Recent additions:
 
-Nook is offline-first. The only network-like call it ever makes is opening
-a link from a note in your browser, when *you* click it. Everything else —
-your notes, tasks, folders — stays in `%APPDATA%\Nook\nook.db`.
+- Card detail modal on the board — notes, checklists, priority, due quick-sets, labels
+- Command palette (**Ctrl+K**) — actions, navigation, instant theme switching
+- Insights view with activity chart, streaks and top tags
+- Full rebrand to NookNook with a fresh two-tone identity and a brand-new icon
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Mr Real. Made cozy for Mr Real.

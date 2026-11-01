@@ -2380,7 +2380,7 @@ async function openSettings(section) {
           </div>
           <div class="about-box">
             ${frogSvg}
-            <div class="ab-text"><b>NookNook v0.18.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
+            <div class="ab-text"><b>NookNook v0.19.0</b> — a real native desktop app.<br>Rust + Tauri · SQLite · AI chat · 100% offline by default. Made cozy for Mr Real</div>
           </div>
         </div>
         </div>

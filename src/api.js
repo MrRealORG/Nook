@@ -29,9 +29,9 @@ function seedMock() {
     ],
     notes: [
       {
-        id: 'note-1', folderId: 'fol-2', title: 'Nook v0.4 — release notes',
+        id: 'note-1', folderId: 'fol-2', title: 'NookNook v0.18 — release notes',
         content:
-`# Nook v0.4
+`# NookNook v0.18
 
 The whole app is now **native Rust** — no servers, no waiting.
 
@@ -464,7 +464,7 @@ function mockCall(cmd, args) {
       });
     }
     case 'data_dir':
-      return Promise.resolve('C:\\Users\\demo\\AppData\\Roaming\\Nook');
+      return Promise.resolve('C:\\Users\\demo\\AppData\\Roaming\\NookNook');
     case 'export_note':
       return Promise.resolve('C:\\Users\\demo\\Documents\\note.md');
     case 'export_note_html':
